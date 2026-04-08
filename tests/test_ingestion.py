@@ -1,3 +1,4 @@
+import os
 import unittest
 
 from research_engine.ingestion import (
@@ -80,6 +81,24 @@ class IngestionProviderTests(unittest.TestCase):
             "2022-11-28",
         )
 
+    def test_github_provider_uses_auth_token_when_available(self) -> None:
+        client = FakeHttpClient()
+        provider = GitHubRepositorySourceProvider(client=client, max_results=1)
+        previous = os.environ.get("GITHUB_TOKEN")
+        os.environ["GITHUB_TOKEN"] = "test-token"
+        try:
+            provider.collect(ResearchTopic(name="memory", objective="discover"))
+        finally:
+            if previous is None:
+                os.environ.pop("GITHUB_TOKEN", None)
+            else:
+                os.environ["GITHUB_TOKEN"] = previous
+
+        self.assertEqual(
+            client.calls[0][1]["Authorization"],
+            "Bearer test-token",
+        )
+
     def test_composite_provider_deduplicates_by_identifier(self) -> None:
         topic = ResearchTopic(name="memory", objective="discover sources")
 
@@ -104,6 +123,21 @@ class IngestionProviderTests(unittest.TestCase):
         composite = CompositeSourceProvider(
             providers=[StaticProvider(), DuplicateProvider()]
         )
+
+        sources = composite.collect(topic)
+        self.assertEqual(len(sources), 1)
+
+    def test_composite_provider_continues_when_one_provider_fails(self) -> None:
+        topic = ResearchTopic(name="memory", objective="discover sources")
+
+        class BrokenProvider:
+            def collect(self, topic: ResearchTopic):
+                del topic
+                raise RuntimeError("boom")
+
+        client = FakeHttpClient()
+        good_provider = GitHubRepositorySourceProvider(client=client, max_results=1)
+        composite = CompositeSourceProvider(providers=[BrokenProvider(), good_provider])
 
         sources = composite.collect(topic)
         self.assertEqual(len(sources), 1)

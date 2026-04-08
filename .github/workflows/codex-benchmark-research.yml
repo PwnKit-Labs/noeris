@@ -52,6 +52,8 @@ jobs:
 
       - name: Gather sources
         run: python -m research_engine.cli sources --topic "${NOERIS_BENCHMARK_ID}" --max-results "${NOERIS_MAX_RESULTS}" > codex-sources.json
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Run Codex research pass
         uses: openai/codex-action@v1

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+import os
 from typing import Protocol
 from urllib.parse import quote_plus
 from urllib.request import Request, urlopen
@@ -110,13 +111,15 @@ class GitHubRepositorySourceProvider(SourceProvider):
             "https://api.github.com/search/repositories"
             f"?q={query}&sort=updated&order=desc&per_page={self.max_results}"
         )
-        payload = self.client.get_json(
-            url,
-            headers={
-                "Accept": "application/vnd.github+json",
-                "X-GitHub-Api-Version": "2022-11-28",
-            },
-        )
+        headers = {
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+        token = os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN")
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+
+        payload = self.client.get_json(url, headers=headers)
         items = payload.get("items", [])
         sources: list[ResearchSource] = []
         for item in items:
@@ -144,7 +147,11 @@ class CompositeSourceProvider(SourceProvider):
         sources: list[ResearchSource] = []
         seen: set[str] = set()
         for provider in self.providers:
-            for source in provider.collect(topic):
+            try:
+                provider_sources = provider.collect(topic)
+            except Exception:
+                continue
+            for source in provider_sources:
                 if source.identifier in seen:
                     continue
                 seen.add(source.identifier)
