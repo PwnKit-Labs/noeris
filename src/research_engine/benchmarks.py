@@ -82,17 +82,19 @@ DEFAULT_BENCHMARKS: list[BenchmarkGoal] = [
             "PwnKit that depend on reliable tool execution."
         ),
         baseline_guidance=(
-            "Compare against a simpler planner or current agent configuration on a "
-            "fixed task suite."
+            "Compare terminal-first / bash-first execution against a more structured "
+            "tool policy on a fixed task suite."
         ),
         required_artifacts=[
             "task-suite.json",
-            "run-traces.jsonl",
+            "terminal-transcript.jsonl",
+            "tool-selection-summary.json",
             "success-summary.json",
             "error-taxonomy.md",
         ],
         ci_lane="scheduled-benchmark",
         starter_topics=[
+            "bash-first vs structured tools",
             "planner/reviewer separation",
             "error recovery loops",
             "tool choice policies",

@@ -17,6 +17,11 @@ class BenchmarkRegistryTests(unittest.TestCase):
         self.assertEqual(benchmark.ci_lane, "scheduled-benchmark")
         self.assertIn("eval-manifest.json", benchmark.required_artifacts)
 
+    def test_tool_use_benchmark_tracks_terminal_first_comparison(self) -> None:
+        benchmark = get_benchmark("tool-use-reliability")
+        self.assertIn("terminal-first", benchmark.baseline_guidance)
+        self.assertIn("terminal-transcript.jsonl", benchmark.required_artifacts)
+
 
 if __name__ == "__main__":
     unittest.main()

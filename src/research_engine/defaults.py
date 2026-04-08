@@ -296,10 +296,10 @@ def _protocol(topic: ResearchTopic, benchmark) -> list[str]:
 
     if benchmark.benchmark_id == "tool-use-reliability":
         return [
-            "Fix the task suite and baseline agent configuration.",
-            "Implement the smallest planner, memory, or recovery intervention worth testing.",
-            "Run the candidate on the same task slice as the baseline.",
-            "Capture traces, success summaries, and an error taxonomy.",
+            "Fix the task suite and define a terminal-first baseline plus one structured-tool comparison policy.",
+            "Implement the smallest planner, memory, recovery, or interface intervention worth testing.",
+            "Run the candidate and the baseline on the same task slice.",
+            "Capture terminal transcripts, tool-selection summaries, success summaries, and an error taxonomy.",
             f"Check whether the result advances {topic.objective}.",
         ]
 

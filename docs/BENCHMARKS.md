@@ -65,10 +65,21 @@ Goal:
 
 - reduce unforced errors in multi-step tool-using agent tasks
 
+Tool-use baseline:
+
+- compare terminal-first / bash-first execution against a more structured tool policy
+
+Why:
+
+- `pwnkit`'s own benchmark notes favored shell access over richer structured HTTP tools for security-style tasks
+- the model already knows shell workflows, `curl`, pipes, and small scripts
+- the more useful additions were memory and targeted playbooks, not a larger structured tool surface
+
 Required artifacts:
 
 - `task-suite.json`
-- `run-traces.jsonl`
+- `terminal-transcript.jsonl`
+- `tool-selection-summary.json`
 - `success-summary.json`
 - `error-taxonomy.md`
 

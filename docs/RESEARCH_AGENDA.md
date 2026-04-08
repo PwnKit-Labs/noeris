@@ -32,6 +32,7 @@ Why:
 - directly useful for agent products
 - measurable through task success and error rates
 - benefits from both system design and post-training
+- likely benefits from terminal-first baselines and small tool surfaces before adding more structure
 
 Mode:
 
@@ -130,4 +131,3 @@ If a research area cannot be turned into:
 - a required artifact contract
 
 then it is not yet a good Noeris focus area.
-
