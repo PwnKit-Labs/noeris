@@ -3,6 +3,7 @@
 from .agenda import DEFAULT_RESEARCH_AGENDA
 from .benchmarks import DEFAULT_BENCHMARKS
 from .codex_config import CodexProviderConfig, load_codex_provider_config, render_github_env_setup
+from .executors import DefaultExperimentExecutor, LongContextOfflineExecutor
 from .export import export_run_bundle
 from .ingestion import (
     ArxivAtomSourceProvider,
@@ -31,12 +32,14 @@ __all__ = [
     "CompositeSourceProvider",
     "DEFAULT_RESEARCH_AGENDA",
     "DEFAULT_BENCHMARKS",
+    "DefaultExperimentExecutor",
     "ExperimentResult",
     "ExperimentSpec",
     "export_run_bundle",
     "GitHubRepositorySourceProvider",
     "Hypothesis",
     "load_codex_provider_config",
+    "LongContextOfflineExecutor",
     "ResearchContext",
     "ResearchMemo",
     "ResearchRunRecord",

@@ -28,6 +28,47 @@ class ExportBundleTests(unittest.TestCase):
             ["memo.json", "run.json", "summary.md", "verification.json"],
         )
 
+    def test_long_context_export_writes_required_artifacts(self) -> None:
+        record = ResearchPipeline().run_record_for(
+            topic=ResearchTopic(
+                name="long-context reasoning",
+                objective="improve long-context eval quality",
+                benchmark_id="long-context-reasoning",
+                constraints=["benchmark_id:long-context-reasoning"],
+            ),
+            benchmark_id="long-context-reasoning",
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            bundle_dir = export_run_bundle(record, Path(temp_dir))
+            files = sorted(path.name for path in bundle_dir.iterdir())
+
+        self.assertIn("eval-manifest.json", files)
+        self.assertIn("baseline-metrics.json", files)
+        self.assertIn("candidate-metrics.json", files)
+        self.assertIn("failure-analysis.md", files)
+
+    def test_tool_use_export_writes_required_artifacts(self) -> None:
+        record = ResearchPipeline().run_record_for(
+            topic=ResearchTopic(
+                name="tool-use reliability",
+                objective="improve task success",
+                benchmark_id="tool-use-reliability",
+                constraints=["benchmark_id:tool-use-reliability"],
+            ),
+            benchmark_id="tool-use-reliability",
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            bundle_dir = export_run_bundle(record, Path(temp_dir))
+            files = sorted(path.name for path in bundle_dir.iterdir())
+
+        self.assertIn("task-suite.json", files)
+        self.assertIn("terminal-transcript.jsonl", files)
+        self.assertIn("tool-selection-summary.json", files)
+        self.assertIn("success-summary.json", files)
+        self.assertIn("error-taxonomy.md", files)
+
 
 if __name__ == "__main__":
     unittest.main()

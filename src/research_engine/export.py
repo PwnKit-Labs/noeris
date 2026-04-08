@@ -25,6 +25,7 @@ def export_run_bundle(record: ResearchRunRecord, output_dir: str | Path) -> Path
         encoding="utf-8",
     )
     (base_dir / "summary.md").write_text(_render_summary(record), encoding="utf-8")
+    _write_result_artifacts(record, base_dir)
     return base_dir
 
 
@@ -50,3 +51,22 @@ def _render_summary(record: ResearchRunRecord) -> str:
         + "\n".join(f"- {item}" for item in record.memo.next_actions)
         + "\n"
     )
+
+
+def _write_result_artifacts(record: ResearchRunRecord, base_dir: Path) -> None:
+    for result in record.cycle.results:
+        for artifact_name, payload in result.artifact_payloads.items():
+            path = base_dir / artifact_name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if isinstance(payload, str) and artifact_name.endswith(".md"):
+                path.write_text(payload, encoding="utf-8")
+            elif artifact_name.endswith(".jsonl") and isinstance(payload, list):
+                path.write_text(
+                    "".join(json.dumps(item, sort_keys=True) + "\n" for item in payload),
+                    encoding="utf-8",
+                )
+            else:
+                path.write_text(
+                    json.dumps(payload, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )

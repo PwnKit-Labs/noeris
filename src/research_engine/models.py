@@ -73,6 +73,7 @@ class ExperimentResult:
     status: ExperimentStatus
     outcome_summary: str
     artifact_refs: list[str] = field(default_factory=list)
+    artifact_payloads: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(slots=True)

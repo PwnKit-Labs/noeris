@@ -75,6 +75,11 @@ This is a scaffold, not the finished product. The current package defines explic
 - persisted research runs
 - standing benchmark goals
 
+Current empirical lanes:
+
+- `long-context-reasoning`: deterministic offline executor with eval artifacts
+- `tool-use-reliability`: deterministic offline executor comparing terminal-first against structured-tool policy
+
 ## Current Recommendation
 
 - Keep this as a private repo for now.

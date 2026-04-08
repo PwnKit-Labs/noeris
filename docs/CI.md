@@ -27,6 +27,7 @@ These runs should stay deterministic and cheap. They prove that Noeris can still
 - build a benchmark-specific topic
 - persist the run
 - export artifact bundles
+- execute the current offline benchmark lanes for long-context and tool-use
 
 ## Layer 3: Codex Research Lanes
 

@@ -88,6 +88,7 @@ def _deserialize_result(payload: dict) -> ExperimentResult:
         status=ExperimentStatus(payload["status"]),
         outcome_summary=payload["outcome_summary"],
         artifact_refs=payload.get("artifact_refs", []),
+        artifact_payloads=payload.get("artifact_payloads", {}),
     )
 
 

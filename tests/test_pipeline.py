@@ -218,6 +218,45 @@ class ResearchPipelineTests(unittest.TestCase):
         self.assertIn("baseline kernel", experiment.baseline)
         self.assertIn("throughput and latency", " ".join(experiment.protocol))
 
+    def test_long_context_benchmark_run_produces_empirical_result(self) -> None:
+        pipeline = ResearchPipeline()
+        record = pipeline.run_record_for(
+            topic=ResearchTopic(
+                name="long-context reasoning",
+                objective="improve long-context eval quality",
+                benchmark_id="long-context-reasoning",
+                constraints=["benchmark_id:long-context-reasoning"],
+            ),
+            benchmark_id="long-context-reasoning",
+        )
+
+        self.assertTrue(record.verification.passed)
+        self.assertIn("execution_backends_attached", record.verification.checks)
+        self.assertEqual(record.cycle.results[0].status, ExperimentStatus.COMPLETED)
+        self.assertIn(
+            "eval-manifest.json",
+            record.cycle.results[0].artifact_refs,
+        )
+
+    def test_tool_use_benchmark_run_produces_empirical_result(self) -> None:
+        pipeline = ResearchPipeline()
+        record = pipeline.run_record_for(
+            topic=ResearchTopic(
+                name="tool-use reliability",
+                objective="increase correctness and recovery",
+                benchmark_id="tool-use-reliability",
+                constraints=["benchmark_id:tool-use-reliability"],
+            ),
+            benchmark_id="tool-use-reliability",
+        )
+
+        self.assertTrue(record.verification.passed)
+        self.assertEqual(record.cycle.results[0].status, ExperimentStatus.COMPLETED)
+        self.assertIn(
+            "tool-selection-summary.json",
+            record.cycle.results[0].artifact_refs,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

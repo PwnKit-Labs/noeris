@@ -15,13 +15,13 @@ from .components import (
 )
 from .defaults import (
     CycleVerifier,
-    SeedExperimentExecutor,
     SeedExperimentPlanner,
     SeedHypothesisPlanner,
     SeedMemoWriter,
     SeedResearchMemory,
     SeedSourceProvider,
 )
+from .executors import DefaultExperimentExecutor
 from .models import ResearchCycle, ResearchMemo, ResearchRunRecord, ResearchTopic
 
 
@@ -48,7 +48,7 @@ class ResearchPipeline:
         self.research_memory = research_memory or SeedResearchMemory()
         self.hypothesis_planner = hypothesis_planner or SeedHypothesisPlanner()
         self.experiment_planner = experiment_planner or SeedExperimentPlanner()
-        self.experiment_executor = experiment_executor or SeedExperimentExecutor()
+        self.experiment_executor = experiment_executor or DefaultExperimentExecutor()
         self.verifier = verifier or CycleVerifier()
         self.memo_writer = memo_writer or SeedMemoWriter()
 
