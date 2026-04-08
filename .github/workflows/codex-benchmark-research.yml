@@ -5,7 +5,7 @@ on:
     inputs:
       benchmark_id:
         description: "Benchmark id to research"
-        required: true
+        required: false
         default: "long-context-reasoning"
       max_results:
         description: "Source results per provider"
@@ -14,9 +14,13 @@ on:
   schedule:
     - cron: "0 8 * * 3"
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NOERIS_BENCHMARK_ID: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.benchmark_id || 'long-context-reasoning' }}
+  NOERIS_MAX_RESULTS: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.max_results || '3' }}
+
 jobs:
   codex-benchmark-research:
-    if: ${{ secrets.OPENAI_API_KEY != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -37,8 +41,17 @@ jobs:
       - name: Install package
         run: python -m pip install -e .
 
+      - name: Check required secret
+        run: |
+          if [ -z "${OPENAI_API_KEY}" ]; then
+            echo "OPENAI_API_KEY is not set for this repository."
+            exit 1
+          fi
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
       - name: Gather sources
-        run: python -m research_engine.cli sources --topic "${{ github.event.inputs.benchmark_id || 'long-context-reasoning' }}" --max-results "${{ github.event.inputs.max_results || '3' }}" > codex-sources.json
+        run: python -m research_engine.cli sources --topic "${NOERIS_BENCHMARK_ID}" --max-results "${NOERIS_MAX_RESULTS}" > codex-sources.json
 
       - name: Run Codex research pass
         uses: openai/codex-action@v1
@@ -47,7 +60,7 @@ jobs:
           prompt-file: .github/codex/prompts/benchmark-research.md
           write-output: codex-report.md
         env:
-          NOERIS_BENCHMARK_ID: ${{ github.event.inputs.benchmark_id || 'long-context-reasoning' }}
+          NOERIS_BENCHMARK_ID: ${{ env.NOERIS_BENCHMARK_ID }}
 
       - name: Upload research artifacts
         uses: actions/upload-artifact@v4

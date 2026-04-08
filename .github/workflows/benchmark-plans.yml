@@ -10,6 +10,9 @@ on:
   schedule:
     - cron: "0 7 * * 1"
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   benchmark-plans:
     runs-on: ubuntu-latest
