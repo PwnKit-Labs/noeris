@@ -196,9 +196,12 @@ def main(argv: list[str] | None = None) -> int:
         topic = ResearchTopic(
             name=benchmark.name.lower(),
             objective=benchmark.goal,
+            benchmark_id=benchmark.benchmark_id,
             constraints=[
+                f"benchmark_id:{benchmark.benchmark_id}",
                 f"success_metric:{benchmark.success_metric}",
                 f"category:{benchmark.category}",
+                f"ci_lane:{benchmark.ci_lane}",
             ],
         )
         record = pipeline.run_record_for(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .benchmarks import benchmark_from_topic_constraints, get_benchmark
 from .components import (
     ExperimentExecutor,
     ExperimentPlanner,
@@ -74,6 +75,16 @@ class SeedHypothesisPlanner(HypothesisPlanner):
         topic: ResearchTopic,
         context: ResearchContext,
     ) -> list[Hypothesis]:
+        benchmark = _topic_benchmark(topic)
+        novelty_reason = (
+            "The engine should eventually derive this from claim gaps and "
+            "contradictions, not from a static template."
+        )
+        if benchmark is not None:
+            novelty_reason = (
+                f"Tailor the search to the {benchmark.name} benchmark and avoid "
+                "broad speculative rewrites."
+            )
         return [
             Hypothesis(
                 title=f"Test a focused intervention for {topic.name}",
@@ -81,10 +92,7 @@ class SeedHypothesisPlanner(HypothesisPlanner):
                     "Start from a bounded, testable change rather than a broad "
                     "architectural rewrite."
                 ),
-                novelty_reason=(
-                    "The engine should eventually derive this from claim gaps and "
-                    "contradictions, not from a static template."
-                ),
+                novelty_reason=novelty_reason,
                 expected_signal=topic.objective,
                 supporting_claims=[claim.title for claim in context.claims],
             )
@@ -99,21 +107,24 @@ class SeedExperimentPlanner(ExperimentPlanner):
         hypotheses: list[Hypothesis],
     ) -> list[ExperimentSpec]:
         del context
+        benchmark = _topic_benchmark(topic)
         plans: list[ExperimentSpec] = []
         for index, hypothesis in enumerate(hypotheses, start=1):
             plans.append(
                 ExperimentSpec(
-                    name=f"exp-{index}",
+                    name=_experiment_name(index=index, topic=topic),
+                    benchmark_id=benchmark.benchmark_id if benchmark else None,
                     hypothesis_title=hypothesis.title,
-                    success_metric="task-specific benchmark improvement",
+                    success_metric=(
+                        benchmark.success_metric
+                        if benchmark is not None
+                        else "task-specific benchmark improvement"
+                    ),
                     budget="small",
-                    protocol=[
-                        "Define baseline and holdout evaluation.",
-                        "Implement the smallest viable intervention.",
-                        "Run a bounded experiment and compare against baseline.",
-                        "Record artifacts, traces, and regression risks.",
-                        f"Check whether the result advances {topic.objective}.",
-                    ],
+                    baseline=_baseline(topic=topic, benchmark=benchmark),
+                    required_artifacts=_required_artifacts(benchmark),
+                    evaluation_notes=_evaluation_notes(benchmark),
+                    protocol=_protocol(topic=topic, benchmark=benchmark),
                 )
             )
         return plans
@@ -213,3 +224,89 @@ class SeedMemoWriter(MemoWriter):
             next_actions=next_actions,
             risks=verification.blockers,
         )
+
+
+def _topic_benchmark(topic: ResearchTopic):
+    if topic.benchmark_id:
+        return get_benchmark(topic.benchmark_id)
+    return benchmark_from_topic_constraints(topic.constraints)
+
+
+def _experiment_name(index: int, topic: ResearchTopic) -> str:
+    if topic.benchmark_id:
+        return f"{topic.benchmark_id}-exp-{index}"
+    return f"exp-{index}"
+
+
+def _baseline(topic: ResearchTopic, benchmark) -> str:
+    if benchmark is None:
+        return "Establish a named baseline and holdout evaluation before implementation."
+    return benchmark.baseline_guidance
+
+
+def _required_artifacts(benchmark) -> list[str]:
+    if benchmark is None:
+        return [
+            "experiment-config.json",
+            "result-summary.json",
+            "comparison-notes.md",
+        ]
+    return benchmark.required_artifacts
+
+
+def _evaluation_notes(benchmark) -> list[str]:
+    if benchmark is None:
+        return [
+            "Record baseline and candidate outputs separately.",
+            "Keep evaluation deterministic enough to replay.",
+        ]
+    return [
+        f"CI lane: {benchmark.ci_lane}.",
+        "Do not treat the run as evidence-backed until the required artifacts exist.",
+    ]
+
+
+def _protocol(topic: ResearchTopic, benchmark) -> list[str]:
+    if benchmark is None:
+        return [
+            "Define baseline and holdout evaluation.",
+            "Implement the smallest viable intervention.",
+            "Run a bounded experiment and compare against baseline.",
+            "Record artifacts, traces, and regression risks.",
+            f"Check whether the result advances {topic.objective}.",
+        ]
+
+    if benchmark.benchmark_id == "matmul-speedup":
+        return [
+            "Fix hardware, tensor shapes, dtypes, and baseline kernel path.",
+            "Implement the smallest kernel or scheduling intervention worth testing.",
+            "Run bounded throughput and latency measurements against the baseline.",
+            "Capture raw timings, hardware profile, and comparison notes.",
+            f"Check whether the result advances {topic.objective}.",
+        ]
+
+    if benchmark.benchmark_id == "long-context-reasoning":
+        return [
+            "Fix the model, eval set, and long-context baseline configuration.",
+            "Implement the smallest retrieval, memory, or context intervention worth testing.",
+            "Run the candidate on the same eval slice as the baseline.",
+            "Capture eval manifests, metrics, and a short failure analysis.",
+            f"Check whether the result advances {topic.objective}.",
+        ]
+
+    if benchmark.benchmark_id == "tool-use-reliability":
+        return [
+            "Fix the task suite and baseline agent configuration.",
+            "Implement the smallest planner, memory, or recovery intervention worth testing.",
+            "Run the candidate on the same task slice as the baseline.",
+            "Capture traces, success summaries, and an error taxonomy.",
+            f"Check whether the result advances {topic.objective}.",
+        ]
+
+    return [
+        "Define baseline and holdout evaluation.",
+        "Implement the smallest viable intervention.",
+        "Run a bounded experiment and compare against baseline.",
+        "Record artifacts, traces, and regression risks.",
+        f"Check whether the result advances {topic.objective}.",
+    ]

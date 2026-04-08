@@ -20,6 +20,17 @@ DEFAULT_BENCHMARKS: list[BenchmarkGoal] = [
             "Forces Noeris to bridge literature review, low-level systems "
             "reasoning, experiment design, and empirical validation."
         ),
+        baseline_guidance=(
+            "Compare against a clearly named baseline kernel or library path for "
+            "specific tensor shapes, dtypes, and hardware."
+        ),
+        required_artifacts=[
+            "hardware-profile.json",
+            "benchmark-config.json",
+            "raw-timing-results.json",
+            "baseline-comparison.md",
+        ],
+        ci_lane="manual-expensive",
         starter_topics=[
             "kernel tiling strategies",
             "sparsity-aware kernels",
@@ -40,6 +51,17 @@ DEFAULT_BENCHMARKS: list[BenchmarkGoal] = [
             "Matches a visible LLM pain point and keeps the research loop grounded "
             "in post-training and evaluation work."
         ),
+        baseline_guidance=(
+            "Compare against a fixed base model or prompt/program baseline on a "
+            "known long-context evaluation set."
+        ),
+        required_artifacts=[
+            "eval-manifest.json",
+            "baseline-metrics.json",
+            "candidate-metrics.json",
+            "failure-analysis.md",
+        ],
+        ci_lane="scheduled-benchmark",
         starter_topics=[
             "memory routing",
             "retrieval structures",
@@ -59,6 +81,17 @@ DEFAULT_BENCHMARKS: list[BenchmarkGoal] = [
             "Links directly to the broader agent-system thesis and to products like "
             "PwnKit that depend on reliable tool execution."
         ),
+        baseline_guidance=(
+            "Compare against a simpler planner or current agent configuration on a "
+            "fixed task suite."
+        ),
+        required_artifacts=[
+            "task-suite.json",
+            "run-traces.jsonl",
+            "success-summary.json",
+            "error-taxonomy.md",
+        ],
+        ci_lane="scheduled-benchmark",
         starter_topics=[
             "planner/reviewer separation",
             "error recovery loops",
@@ -74,3 +107,10 @@ def get_benchmark(benchmark_id: str) -> BenchmarkGoal:
         if benchmark.benchmark_id == benchmark_id:
             return benchmark
     raise KeyError(f"Unknown benchmark_id: {benchmark_id}")
+
+
+def benchmark_from_topic_constraints(constraints: list[str]) -> BenchmarkGoal | None:
+    for constraint in constraints:
+        if constraint.startswith("benchmark_id:"):
+            return get_benchmark(constraint.split(":", 1)[1])
+    return None

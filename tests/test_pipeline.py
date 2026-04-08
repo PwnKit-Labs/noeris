@@ -89,9 +89,13 @@ class StubExperimentPlanner(ExperimentPlanner):
         return [
             ExperimentSpec(
                 name="exp-stub",
+                benchmark_id=None,
                 hypothesis_title=hypotheses[0].title,
                 success_metric="score",
                 budget="tiny",
+                baseline="stub baseline",
+                required_artifacts=["artifact.json"],
+                evaluation_notes=["note"],
                 protocol=["run"],
             )
         ]
@@ -170,6 +174,8 @@ class ResearchPipelineTests(unittest.TestCase):
         self.assertTrue(memo.results)
         self.assertTrue(memo.next_actions)
         self.assertTrue(memo.risks)
+        self.assertEqual(memo.experiments[0].benchmark_id, None)
+        self.assertTrue(memo.experiments[0].required_artifacts)
 
     def test_pipeline_accepts_component_overrides(self) -> None:
         pipeline = ResearchPipeline(
@@ -194,6 +200,23 @@ class ResearchPipelineTests(unittest.TestCase):
         self.assertEqual(memo.results[0].status, ExperimentStatus.COMPLETED)
         self.assertEqual(memo.next_actions, ["src-1", "stub claim"])
         self.assertEqual(memo.risks, [])
+
+    def test_benchmark_topic_changes_seed_experiment_shape(self) -> None:
+        pipeline = ResearchPipeline()
+        memo = pipeline.run_cycle(
+            ResearchTopic(
+                name="matrix multiplication speedup",
+                objective="discover validated kernel-level speedups",
+                benchmark_id="matmul-speedup",
+                constraints=["benchmark_id:matmul-speedup"],
+            )
+        )
+
+        experiment = memo.experiments[0]
+        self.assertEqual(experiment.benchmark_id, "matmul-speedup")
+        self.assertIn("hardware-profile.json", experiment.required_artifacts)
+        self.assertIn("baseline kernel", experiment.baseline)
+        self.assertIn("throughput and latency", " ".join(experiment.protocol))
 
 
 if __name__ == "__main__":

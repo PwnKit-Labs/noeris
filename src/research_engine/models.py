@@ -9,6 +9,7 @@ class ResearchTopic:
     name: str
     objective: str
     constraints: list[str] = field(default_factory=list)
+    benchmark_id: str | None = None
 
 
 @dataclass(slots=True)
@@ -56,10 +57,14 @@ class ExperimentStatus(StrEnum):
 @dataclass(slots=True)
 class ExperimentSpec:
     name: str
+    benchmark_id: str | None
     hypothesis_title: str
     success_metric: str
     budget: str
+    baseline: str
     protocol: list[str]
+    required_artifacts: list[str] = field(default_factory=list)
+    evaluation_notes: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -117,4 +122,7 @@ class BenchmarkGoal:
     goal: str
     success_metric: str
     why_it_matters: str
+    baseline_guidance: str = ""
+    required_artifacts: list[str] = field(default_factory=list)
+    ci_lane: str = "scheduled-benchmark"
     starter_topics: list[str] = field(default_factory=list)

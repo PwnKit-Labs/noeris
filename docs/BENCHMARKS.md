@@ -31,17 +31,50 @@ Success bar:
 - reproducible measurement
 - real speedup or a justified rejection
 
+Required artifacts:
+
+- `hardware-profile.json`
+- `benchmark-config.json`
+- `raw-timing-results.json`
+- `baseline-comparison.md`
+
+CI lane:
+
+- manual expensive lane
+
 ### Long-Context Reasoning
 
 Goal:
 
 - improve reasoning quality over long contexts under bounded cost
 
+Required artifacts:
+
+- `eval-manifest.json`
+- `baseline-metrics.json`
+- `candidate-metrics.json`
+- `failure-analysis.md`
+
+CI lane:
+
+- scheduled benchmark lane
+
 ### Tool-Use Reliability
 
 Goal:
 
 - reduce unforced errors in multi-step tool-using agent tasks
+
+Required artifacts:
+
+- `task-suite.json`
+- `run-traces.jsonl`
+- `success-summary.json`
+- `error-taxonomy.md`
+
+CI lane:
+
+- scheduled benchmark lane
 
 ## CI Role
 
@@ -56,4 +89,3 @@ These should eventually become part of CI in layers:
 Default CI should stay cheap and deterministic.
 
 Empirical benchmark runs should be scheduled separately so they do not turn the repo into a flaky infra mess.
-
