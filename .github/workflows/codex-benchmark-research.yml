@@ -58,7 +58,7 @@ jobs:
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           prompt-file: .github/codex/prompts/benchmark-research.md
-          write-output: codex-report.md
+          output-file: codex-report.md
         env:
           NOERIS_BENCHMARK_ID: ${{ env.NOERIS_BENCHMARK_ID }}
 
