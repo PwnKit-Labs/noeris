@@ -257,6 +257,25 @@ class ResearchPipelineTests(unittest.TestCase):
             record.cycle.results[0].artifact_refs,
         )
 
+    def test_matmul_benchmark_run_produces_empirical_result(self) -> None:
+        pipeline = ResearchPipeline()
+        record = pipeline.run_record_for(
+            topic=ResearchTopic(
+                name="matrix multiplication speedup",
+                objective="discover validated kernel-level speedups",
+                benchmark_id="matmul-speedup",
+                constraints=["benchmark_id:matmul-speedup"],
+            ),
+            benchmark_id="matmul-speedup",
+        )
+
+        self.assertTrue(record.verification.passed)
+        self.assertEqual(record.cycle.results[0].status, ExperimentStatus.COMPLETED)
+        self.assertIn(
+            "raw-timing-results.json",
+            record.cycle.results[0].artifact_refs,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

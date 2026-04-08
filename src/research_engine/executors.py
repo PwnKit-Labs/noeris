@@ -65,6 +65,36 @@ TOOL_USE_FIXTURES = [
     },
 ]
 
+MATMUL_FIXTURES = [
+    {
+        "id": "mm-1",
+        "hardware": "A100-80GB",
+        "shape": "4096x4096x4096",
+        "dtype": "bf16",
+        "baseline_tflops": 145.0,
+        "candidate_tflops": 161.2,
+        "strategy": "tile-128x128 with double buffering",
+    },
+    {
+        "id": "mm-2",
+        "hardware": "H100-80GB",
+        "shape": "8192x4096x8192",
+        "dtype": "fp8",
+        "baseline_tflops": 612.0,
+        "candidate_tflops": 659.4,
+        "strategy": "persistent CTA scheduling",
+    },
+    {
+        "id": "mm-3",
+        "hardware": "RTX-4090",
+        "shape": "2048x2048x8192",
+        "dtype": "fp16",
+        "baseline_tflops": 114.5,
+        "candidate_tflops": 121.9,
+        "strategy": "memory-coalesced epilogue fusion",
+    },
+]
+
 
 @dataclass(slots=True)
 class LongContextOfflineExecutor(ExperimentExecutor):
@@ -246,12 +276,86 @@ class ToolUseOfflineExecutor(ExperimentExecutor):
 
 
 @dataclass(slots=True)
+class MatmulOfflineExecutor(ExperimentExecutor):
+    """Deterministic offline executor for the systems / matmul benchmark."""
+
+    def run(
+        self,
+        topic: ResearchTopic,
+        experiments: list[ExperimentSpec],
+    ) -> list[ExperimentResult]:
+        del topic
+        return [self._run_experiment(experiment) for experiment in experiments]
+
+    def _run_experiment(self, experiment: ExperimentSpec) -> ExperimentResult:
+        rows = []
+        improvements = []
+        hardware_profiles = []
+
+        for item in MATMUL_FIXTURES:
+            uplift = (item["candidate_tflops"] - item["baseline_tflops"]) / item["baseline_tflops"]
+            improvements.append(uplift)
+            rows.append(
+                {
+                    "id": item["id"],
+                    "shape": item["shape"],
+                    "dtype": item["dtype"],
+                    "baseline_tflops": item["baseline_tflops"],
+                    "candidate_tflops": item["candidate_tflops"],
+                    "uplift_pct": round(uplift * 100, 2),
+                    "strategy": item["strategy"],
+                }
+            )
+            hardware_profiles.append(
+                {
+                    "id": item["id"],
+                    "hardware": item["hardware"],
+                    "shape": item["shape"],
+                    "dtype": item["dtype"],
+                }
+            )
+
+        mean_uplift = sum(improvements) / len(improvements)
+        summary = (
+            f"Offline matmul benchmark completed on {len(MATMUL_FIXTURES)} fixtures. "
+            f"Mean throughput uplift={mean_uplift * 100:.2f}%."
+        )
+        return ExperimentResult(
+            spec_name=experiment.name,
+            status=ExperimentStatus.COMPLETED,
+            outcome_summary=summary,
+            artifact_refs=[
+                "hardware-profile.json",
+                "benchmark-config.json",
+                "raw-timing-results.json",
+                "baseline-comparison.md",
+            ],
+            artifact_payloads={
+                "hardware-profile.json": {"fixtures": hardware_profiles},
+                "benchmark-config.json": {
+                    "benchmark": "matmul-speedup",
+                    "comparison": "baseline vs candidate kernel strategy",
+                    "required_baseline": experiment.baseline,
+                },
+                "raw-timing-results.json": {
+                    "mean_uplift_pct": round(mean_uplift * 100, 2),
+                    "rows": rows,
+                },
+                "baseline-comparison.md": _matmul_comparison(rows, mean_uplift),
+            },
+        )
+
+
+@dataclass(slots=True)
 class DefaultExperimentExecutor(ExperimentExecutor):
     long_context_executor: LongContextOfflineExecutor = field(
         default_factory=LongContextOfflineExecutor
     )
     tool_use_executor: ToolUseOfflineExecutor = field(
         default_factory=ToolUseOfflineExecutor
+    )
+    matmul_executor: MatmulOfflineExecutor = field(
+        default_factory=MatmulOfflineExecutor
     )
 
     def run(
@@ -263,6 +367,8 @@ class DefaultExperimentExecutor(ExperimentExecutor):
             return self.long_context_executor.run(topic, experiments)
         if topic.benchmark_id == "tool-use-reliability":
             return self.tool_use_executor.run(topic, experiments)
+        if topic.benchmark_id == "matmul-speedup":
+            return self.matmul_executor.run(topic, experiments)
 
         return [
             ExperimentResult(
@@ -318,3 +424,32 @@ def _tool_use_failure_analysis(
         "- Structured flows lose reliability when stateful multi-step shell composition would be simpler.\n"
         "- Terminal-first remains the default baseline until structured policies beat it on the same fixture set.\n"
     )
+
+
+def _matmul_comparison(rows: list[dict[str, object]], mean_uplift: float) -> str:
+    lines = [
+        "# Baseline Comparison",
+        "",
+        f"- Mean throughput uplift: `{mean_uplift * 100:.2f}%`",
+        "",
+        "## Fixture Summary",
+        "",
+    ]
+    for row in rows:
+        lines.append(
+            "- "
+            f"{row['id']} | {row['shape']} | {row['dtype']} | "
+            f"baseline={row['baseline_tflops']} TFLOPS | "
+            f"candidate={row['candidate_tflops']} TFLOPS | "
+            f"uplift={row['uplift_pct']}%"
+        )
+    lines.extend(
+        [
+            "",
+            "## Interpretation",
+            "",
+            "- Candidate strategies outperform the baseline across all offline fixtures.",
+            "- Real GPU executor should replace these synthetic fixture outputs before treating this as production-grade evidence.",
+        ]
+    )
+    return "\n".join(lines) + "\n"

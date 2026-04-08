@@ -42,6 +42,10 @@ CI lane:
 
 - manual expensive lane
 
+Current offline executor:
+
+- deterministic synthetic systems lane with hardware-profile and timing artifacts
+
 ### Long-Context Reasoning
 
 Goal:

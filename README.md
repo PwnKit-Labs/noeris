@@ -77,6 +77,7 @@ This is a scaffold, not the finished product. The current package defines explic
 
 Current empirical lanes:
 
+- `matmul-speedup`: deterministic offline systems executor with benchmark artifacts
 - `long-context-reasoning`: deterministic offline executor with eval artifacts
 - `tool-use-reliability`: deterministic offline executor comparing terminal-first against structured-tool policy
 

@@ -69,6 +69,26 @@ class ExportBundleTests(unittest.TestCase):
         self.assertIn("success-summary.json", files)
         self.assertIn("error-taxonomy.md", files)
 
+    def test_matmul_export_writes_required_artifacts(self) -> None:
+        record = ResearchPipeline().run_record_for(
+            topic=ResearchTopic(
+                name="matrix multiplication speedup",
+                objective="discover validated kernel-level speedups",
+                benchmark_id="matmul-speedup",
+                constraints=["benchmark_id:matmul-speedup"],
+            ),
+            benchmark_id="matmul-speedup",
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            bundle_dir = export_run_bundle(record, Path(temp_dir))
+            files = sorted(path.name for path in bundle_dir.iterdir())
+
+        self.assertIn("hardware-profile.json", files)
+        self.assertIn("benchmark-config.json", files)
+        self.assertIn("raw-timing-results.json", files)
+        self.assertIn("baseline-comparison.md", files)
+
 
 if __name__ == "__main__":
     unittest.main()
