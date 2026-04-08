@@ -1,0 +1,200 @@
+import unittest
+
+from research_engine.cli import ARCHITECTURE, THESIS
+from research_engine.components import (
+    ExperimentExecutor,
+    ExperimentPlanner,
+    HypothesisPlanner,
+    MemoWriter,
+    ResearchMemory,
+    SourceProvider,
+    Verifier,
+)
+from research_engine.models import (
+    Claim,
+    ExperimentResult,
+    ExperimentSpec,
+    ExperimentStatus,
+    Hypothesis,
+    ResearchContext,
+    ResearchCycle,
+    ResearchMemo,
+    ResearchSource,
+    ResearchTopic,
+    VerificationReport,
+)
+from research_engine.pipeline import ResearchPipeline
+
+
+class StubSourceProvider(SourceProvider):
+    def collect(self, topic: ResearchTopic) -> list[ResearchSource]:
+        return [
+            ResearchSource(
+                identifier="src-1",
+                kind="paper",
+                title=f"{topic.name} source",
+                locator="memory://src-1",
+                excerpt="stub source",
+            )
+        ]
+
+
+class StubResearchMemory(ResearchMemory):
+    def build_context(
+        self,
+        topic: ResearchTopic,
+        sources: list[ResearchSource],
+    ) -> ResearchContext:
+        return ResearchContext(
+            topic=topic.name,
+            sources=sources,
+            claims=[
+                Claim(
+                    title="stub claim",
+                    source=sources[0].identifier,
+                    summary="stub summary",
+                    evidence_refs=[sources[0].identifier],
+                )
+            ],
+            open_questions=["what next?"],
+        )
+
+
+class StubHypothesisPlanner(HypothesisPlanner):
+    def plan(
+        self,
+        topic: ResearchTopic,
+        context: ResearchContext,
+    ) -> list[Hypothesis]:
+        return [
+            Hypothesis(
+                title=f"hypothesis for {topic.name}",
+                rationale="because",
+                novelty_reason="gap",
+                expected_signal=topic.objective,
+                supporting_claims=[claim.title for claim in context.claims],
+            )
+        ]
+
+
+class StubExperimentPlanner(ExperimentPlanner):
+    def plan(
+        self,
+        topic: ResearchTopic,
+        context: ResearchContext,
+        hypotheses: list[Hypothesis],
+    ) -> list[ExperimentSpec]:
+        del topic
+        del context
+        return [
+            ExperimentSpec(
+                name="exp-stub",
+                hypothesis_title=hypotheses[0].title,
+                success_metric="score",
+                budget="tiny",
+                protocol=["run"],
+            )
+        ]
+
+
+class StubExperimentExecutor(ExperimentExecutor):
+    def run(
+        self,
+        topic: ResearchTopic,
+        experiments: list[ExperimentSpec],
+    ) -> list[ExperimentResult]:
+        del topic
+        return [
+            ExperimentResult(
+                spec_name=experiments[0].name,
+                status=ExperimentStatus.COMPLETED,
+                outcome_summary="improved",
+                artifact_refs=["artifact://result"],
+            )
+        ]
+
+
+class StubVerifier(Verifier):
+    def verify(self, cycle: ResearchCycle) -> VerificationReport:
+        return VerificationReport(
+            passed=True,
+            checks=[
+                cycle.context.sources[0].identifier,
+                cycle.hypotheses[0].supporting_claims[0],
+            ],
+            blockers=[],
+        )
+
+
+class StubMemoWriter(MemoWriter):
+    def render(
+        self,
+        cycle: ResearchCycle,
+        verification: VerificationReport,
+    ) -> ResearchMemo:
+        return ResearchMemo(
+            topic=cycle.topic.name,
+            summary="custom memo",
+            sources=cycle.context.sources,
+            claims=cycle.context.claims,
+            hypotheses=cycle.hypotheses,
+            experiments=cycle.experiments,
+            results=cycle.results,
+            next_actions=verification.checks,
+            risks=verification.blockers,
+        )
+
+
+class ResearchPipelineTests(unittest.TestCase):
+    def test_thesis_mentions_research_engine(self) -> None:
+        self.assertIn("autonomous R&D engine", THESIS)
+
+    def test_architecture_mentions_stateful_components(self) -> None:
+        self.assertIn("Stateful research loop", ARCHITECTURE)
+
+    def test_run_cycle_returns_expected_sections(self) -> None:
+        pipeline = ResearchPipeline()
+        memo = pipeline.run_cycle(
+            ResearchTopic(
+                name="long-context reasoning",
+                objective="improve benchmark performance",
+                constraints=["small compute budget"],
+            )
+        )
+
+        self.assertEqual(memo.topic, "long-context reasoning")
+        self.assertTrue(memo.sources)
+        self.assertTrue(memo.claims)
+        self.assertTrue(memo.hypotheses)
+        self.assertTrue(memo.experiments)
+        self.assertTrue(memo.results)
+        self.assertTrue(memo.next_actions)
+        self.assertTrue(memo.risks)
+
+    def test_pipeline_accepts_component_overrides(self) -> None:
+        pipeline = ResearchPipeline(
+            source_provider=StubSourceProvider(),
+            research_memory=StubResearchMemory(),
+            hypothesis_planner=StubHypothesisPlanner(),
+            experiment_planner=StubExperimentPlanner(),
+            experiment_executor=StubExperimentExecutor(),
+            verifier=StubVerifier(),
+            memo_writer=StubMemoWriter(),
+        )
+
+        memo = pipeline.run_cycle(
+            ResearchTopic(
+                name="agentic memory",
+                objective="improve factual retention",
+            )
+        )
+
+        self.assertEqual(memo.sources[0].identifier, "src-1")
+        self.assertEqual(memo.hypotheses[0].supporting_claims, ["stub claim"])
+        self.assertEqual(memo.results[0].status, ExperimentStatus.COMPLETED)
+        self.assertEqual(memo.next_actions, ["src-1", "stub claim"])
+        self.assertEqual(memo.risks, [])
+
+
+if __name__ == "__main__":
+    unittest.main()

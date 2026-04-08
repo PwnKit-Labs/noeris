@@ -1,0 +1,81 @@
+name: Benchmark Plans
+
+on:
+  workflow_dispatch:
+    inputs:
+      benchmark_id:
+        description: "Optional benchmark id to run; leave empty to run all"
+        required: false
+        default: ""
+  schedule:
+    - cron: "0 7 * * 1"
+
+jobs:
+  benchmark-plans:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+      AZURE_OPENAI_BASE_URL: ${{ vars.AZURE_OPENAI_BASE_URL }}
+      AZURE_OPENAI_MODEL: ${{ vars.AZURE_OPENAI_MODEL }}
+      AZURE_OPENAI_WIRE_API: ${{ vars.AZURE_OPENAI_WIRE_API }}
+    strategy:
+      fail-fast: false
+      matrix:
+        benchmark_id:
+          - matmul-speedup
+          - long-context-reasoning
+          - tool-use-reliability
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package
+        run: python -m pip install -e .
+
+      - name: Filter matrix if workflow input is set
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.benchmark_id != '' && github.event.inputs.benchmark_id != matrix.benchmark_id }}
+        run: |
+          echo "Skipping ${{ matrix.benchmark_id }} because a different benchmark_id was requested."
+          exit 0
+
+      - name: Run benchmark planning cycle
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.benchmark_id == '' || github.event.inputs.benchmark_id == matrix.benchmark_id }}
+        run: python -m research_engine.cli benchmark-run ${{ matrix.benchmark_id }}
+
+      - name: Upload benchmark run artifacts
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.benchmark_id == '' || github.event.inputs.benchmark_id == matrix.benchmark_id }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-run-${{ matrix.benchmark_id }}
+          path: |
+            .noeris/runs/*.json
+            .noeris/artifacts/**
+
+      - name: Post benchmark summary
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.benchmark_id == '' || github.event.inputs.benchmark_id == matrix.benchmark_id }}
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          runs_dir = Path(".noeris/runs")
+          files = sorted(runs_dir.glob("*.json"))
+          if not files:
+              raise SystemExit(0)
+
+          latest = json.loads(files[-1].read_text())
+          verification = latest["verification"]
+          with open(Path("${GITHUB_STEP_SUMMARY}"), "a", encoding="utf-8") as summary:
+              summary.write(f"### Benchmark plan: {latest.get('benchmark_id') or latest['cycle']['topic']['name']}\n\n")
+              summary.write(f"- Run ID: `{latest['run_id']}`\n")
+              summary.write(f"- Topic: `{latest['cycle']['topic']['name']}`\n")
+              summary.write(f"- Verification passed: `{verification['passed']}`\n")
+              summary.write(f"- Checks: `{', '.join(verification['checks'])}`\n")
+              blockers = verification.get("blockers") or []
+              summary.write(f"- Blockers: `{', '.join(blockers) if blockers else 'none'}`\n")
+          PY

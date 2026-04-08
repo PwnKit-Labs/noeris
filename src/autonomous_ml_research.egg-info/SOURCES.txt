@@ -1,0 +1,11 @@
+README.md
+pyproject.toml
+src/autonomous_ml_research.egg-info/PKG-INFO
+src/autonomous_ml_research.egg-info/SOURCES.txt
+src/autonomous_ml_research.egg-info/dependency_links.txt
+src/autonomous_ml_research.egg-info/top_level.txt
+src/research_engine/__init__.py
+src/research_engine/cli.py
+src/research_engine/models.py
+src/research_engine/pipeline.py
+tests/test_pipeline.py

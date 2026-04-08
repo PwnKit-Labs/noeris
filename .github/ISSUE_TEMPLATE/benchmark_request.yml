@@ -1,0 +1,33 @@
+name: Benchmark Request
+description: Propose a new standing benchmark or research goal
+labels: [benchmark]
+body:
+  - type: input
+    attributes:
+      label: Benchmark name
+      description: Short name for the benchmark
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Goal
+      description: What should Noeris discover, improve, or validate?
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Success metric
+      description: How would success be measured?
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Why it matters
+      description: Why should this be a standing benchmark?
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Starter sources
+      description: Relevant papers, repos, eval suites, or benchmarks
+

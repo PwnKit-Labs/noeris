@@ -1,0 +1,58 @@
+name: Codex Benchmark Research
+
+on:
+  workflow_dispatch:
+    inputs:
+      benchmark_id:
+        description: "Benchmark id to research"
+        required: true
+        default: "long-context-reasoning"
+      max_results:
+        description: "Source results per provider"
+        required: false
+        default: "3"
+  schedule:
+    - cron: "0 8 * * 3"
+
+jobs:
+  codex-benchmark-research:
+    if: ${{ secrets.OPENAI_API_KEY != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+      AZURE_OPENAI_BASE_URL: ${{ vars.AZURE_OPENAI_BASE_URL }}
+      AZURE_OPENAI_MODEL: ${{ vars.AZURE_OPENAI_MODEL }}
+      AZURE_OPENAI_WIRE_API: ${{ vars.AZURE_OPENAI_WIRE_API }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package
+        run: python -m pip install -e .
+
+      - name: Gather sources
+        run: python -m research_engine.cli sources --topic "${{ github.event.inputs.benchmark_id || 'long-context-reasoning' }}" --max-results "${{ github.event.inputs.max_results || '3' }}" > codex-sources.json
+
+      - name: Run Codex research pass
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          prompt-file: .github/codex/prompts/benchmark-research.md
+          write-output: codex-report.md
+        env:
+          NOERIS_BENCHMARK_ID: ${{ github.event.inputs.benchmark_id || 'long-context-reasoning' }}
+
+      - name: Upload research artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-benchmark-research-${{ github.run_id }}
+          path: |
+            codex-sources.json
+            codex-report.md

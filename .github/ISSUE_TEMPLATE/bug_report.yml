@@ -1,0 +1,31 @@
+name: Bug Report
+description: Report a bug in Noeris
+labels: [bug]
+body:
+  - type: textarea
+    attributes:
+      label: What happened?
+      description: Describe the bug
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Steps to reproduce
+      description: How can we reproduce this?
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Expected behavior
+      description: What should have happened?
+  - type: input
+    attributes:
+      label: Noeris version or commit
+      description: Git commit, branch, or package version
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: Python version
+      description: Run `python3 --version`
+
