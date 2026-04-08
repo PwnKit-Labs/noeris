@@ -37,6 +37,7 @@ This repository is the first scaffold for that loop, starting with ML/LLMs becau
 - `docs/BENCHMARKS.md`: standing research goals and CI benchmark shape
 - `docs/CI.md`: layered CI strategy for tests, benchmark planning, and Codex lanes
 - `docs/CODEX_CI_ENV.md`: how to mirror local Codex provider config into GitHub Actions
+- `docs/RESEARCH_AGENDA.md`: which LLM/ML problems Noeris should pursue first
 - `docs/VERIFICATION.md`: evidence rules and publishability gates
 - `docs/RESEARCH_LANDSCAPE.md`: external landscape and design implications
 - `docs/NAME_SHORTLIST.md`: naming directions under review
@@ -48,6 +49,7 @@ This repository is the first scaffold for that loop, starting with ML/LLMs becau
 python3 -m pip install -e .
 python3 -m research_engine.cli thesis
 python3 -m research_engine.cli architecture
+python3 -m research_engine.cli agenda
 python3 -m research_engine.cli benchmarks
 python3 -m research_engine.cli ci-env
 python3 -m research_engine.cli sources --topic "long-context reasoning"

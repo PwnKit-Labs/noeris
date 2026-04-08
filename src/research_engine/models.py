@@ -126,3 +126,15 @@ class BenchmarkGoal:
     required_artifacts: list[str] = field(default_factory=list)
     ci_lane: str = "scheduled-benchmark"
     starter_topics: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class ResearchAgendaItem:
+    area_id: str
+    name: str
+    category: str
+    recommended_mode: str
+    priority: str
+    why_it_matters: str
+    benchmark_fit: str
+    starter_questions: list[str] = field(default_factory=list)

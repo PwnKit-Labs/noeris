@@ -5,6 +5,7 @@ from dataclasses import asdict
 import json
 import sys
 
+from .agenda import DEFAULT_RESEARCH_AGENDA
 from .benchmarks import DEFAULT_BENCHMARKS, get_benchmark
 from .codex_config import load_codex_provider_config, render_github_env_setup
 from .export import export_run_bundle
@@ -38,6 +39,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("thesis", help="print the current product thesis")
     subparsers.add_parser("architecture", help="print the current architecture stance")
+    subparsers.add_parser("agenda", help="print the current research agenda")
     subparsers.add_parser("benchmarks", help="print the current standing benchmark goals")
     subparsers.add_parser("ci-env", help="show GitHub env/secret mapping from local Codex config")
 
@@ -119,6 +121,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "architecture":
         print(ARCHITECTURE)
+        return 0
+    if args.command == "agenda":
+        print(json.dumps([asdict(item) for item in DEFAULT_RESEARCH_AGENDA], indent=2))
         return 0
     if args.command == "benchmarks":
         print(json.dumps([asdict(goal) for goal in DEFAULT_BENCHMARKS], indent=2))

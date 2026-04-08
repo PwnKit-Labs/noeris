@@ -1,5 +1,6 @@
 """Core package for the autonomous ML research scaffold."""
 
+from .agenda import DEFAULT_RESEARCH_AGENDA
 from .benchmarks import DEFAULT_BENCHMARKS
 from .codex_config import CodexProviderConfig, load_codex_provider_config, render_github_env_setup
 from .export import export_run_bundle
@@ -28,6 +29,7 @@ __all__ = [
     "BenchmarkGoal",
     "CodexProviderConfig",
     "CompositeSourceProvider",
+    "DEFAULT_RESEARCH_AGENDA",
     "DEFAULT_BENCHMARKS",
     "ExperimentResult",
     "ExperimentSpec",
