@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from dataclasses import field
 
 from .components import ExperimentExecutor
+from .llm import ResponsesApiClient
 from .models import ExperimentResult, ExperimentSpec, ExperimentStatus, ResearchTopic
 
 
@@ -200,6 +201,129 @@ class LongContextOfflineExecutor(ExperimentExecutor):
 
 
 @dataclass(slots=True)
+class LongContextResponsesExecutor(ExperimentExecutor):
+    """Model-backed executor for the long-context benchmark."""
+
+    client: ResponsesApiClient
+    baseline_char_budget: int = 120
+
+    def run(
+        self,
+        topic: ResearchTopic,
+        experiments: list[ExperimentSpec],
+    ) -> list[ExperimentResult]:
+        del topic
+        baseline_rows = self._evaluate(condition="baseline", truncated=True)
+        candidate_rows = self._evaluate(condition="candidate", truncated=False)
+        baseline_accuracy = _accuracy(baseline_rows)
+        candidate_accuracy = _accuracy(candidate_rows)
+        failures = [
+            f"{row['id']}: candidate predicted {row['prediction']!r}, expected {row['expected']!r}"
+            for row in candidate_rows
+            if not row["correct"]
+        ]
+        summary = (
+            f"Responses-backed long-context eval completed on {len(LONG_CONTEXT_FIXTURES)} fixtures. "
+            f"Baseline accuracy={baseline_accuracy:.2f}, candidate accuracy={candidate_accuracy:.2f}."
+        )
+        manifest = {
+            "benchmark": "long-context-reasoning",
+            "executor": "responses_api",
+            "model": self.client.config.model,
+            "provider": self.client.config.provider_name,
+            "fixtures": [
+                {
+                    "id": item["id"],
+                    "question": item["question"],
+                    "answer": item["answer"],
+                }
+                for item in LONG_CONTEXT_FIXTURES
+            ],
+        }
+        payloads = {
+            "eval-manifest.json": manifest,
+            "baseline-metrics.json": {
+                "accuracy": baseline_accuracy,
+                "rows": baseline_rows,
+            },
+            "candidate-metrics.json": {
+                "accuracy": candidate_accuracy,
+                "rows": candidate_rows,
+            },
+            "failure-analysis.md": _failure_analysis(
+                baseline_accuracy=baseline_accuracy,
+                candidate_accuracy=candidate_accuracy,
+                failures=failures,
+            ),
+        }
+        return [
+            ExperimentResult(
+                spec_name=experiment.name,
+                status=ExperimentStatus.COMPLETED,
+                outcome_summary=summary,
+                artifact_refs=list(payloads.keys()),
+                artifact_payloads=payloads,
+            )
+            for experiment in experiments
+        ]
+
+    def _evaluate(
+        self,
+        *,
+        condition: str,
+        truncated: bool,
+    ) -> list[dict[str, object]]:
+        fixtures = [
+            {
+                "id": item["id"],
+                "question": item["question"],
+                "expected": item["answer"],
+                "context": (
+                    item["context"][: self.baseline_char_budget]
+                    if truncated
+                    else item["context"]
+                ),
+            }
+            for item in LONG_CONTEXT_FIXTURES
+        ]
+        payload = self.client.generate_json(
+            schema_name=f"long_context_{condition}_answers",
+            schema=_LONG_CONTEXT_ANSWER_SCHEMA,
+            instructions=(
+                "Answer each question using only the supplied context. "
+                "Return a short answer string for each fixture. If the context is insufficient, return 'unknown'."
+            ),
+            prompt=(
+                f"Condition: {condition}\n"
+                "Evaluate the following fixtures and return one answer per id.\n\n"
+                f"{fixtures!r}"
+            ),
+            max_output_tokens=400,
+            reasoning_effort="low",
+            text_verbosity="low",
+        )
+        answer_map = {
+            item["id"]: _clean_prediction(item["answer"])
+            for item in payload.get("answers", [])
+            if isinstance(item, dict)
+            and isinstance(item.get("id"), str)
+            and isinstance(item.get("answer"), str)
+        }
+        rows = []
+        for item in fixtures:
+            prediction = answer_map.get(item["id"], "unknown")
+            rows.append(
+                {
+                    "id": item["id"],
+                    "prediction": prediction,
+                    "expected": item["expected"],
+                    "correct": prediction == item["expected"],
+                }
+            )
+        return rows
+
+
+@dataclass(slots=True)
 class ToolUseOfflineExecutor(ExperimentExecutor):
     """Deterministic offline executor for the tool-use benchmark."""
 
@@ -348,13 +472,13 @@ class MatmulOfflineExecutor(ExperimentExecutor):
 
 @dataclass(slots=True)
 class DefaultExperimentExecutor(ExperimentExecutor):
-    long_context_executor: LongContextOfflineExecutor = field(
+    long_context_executor: ExperimentExecutor = field(
         default_factory=LongContextOfflineExecutor
     )
-    tool_use_executor: ToolUseOfflineExecutor = field(
+    tool_use_executor: ExperimentExecutor = field(
         default_factory=ToolUseOfflineExecutor
     )
-    matmul_executor: MatmulOfflineExecutor = field(
+    matmul_executor: ExperimentExecutor = field(
         default_factory=MatmulOfflineExecutor
     )
 
@@ -389,6 +513,10 @@ def _accuracy(rows: list[dict[str, object]]) -> float:
         return 0.0
     correct = sum(1 for row in rows if row["correct"])
     return correct / len(rows)
+
+
+def _clean_prediction(value: str) -> str:
+    return " ".join(value.split())
 
 
 def _failure_analysis(
@@ -453,3 +581,24 @@ def _matmul_comparison(rows: list[dict[str, object]], mean_uplift: float) -> str
         ]
     )
     return "\n".join(lines) + "\n"
+
+
+_LONG_CONTEXT_ANSWER_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "answers": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "id": {"type": "string"},
+                    "answer": {"type": "string"},
+                },
+                "required": ["id", "answer"],
+            },
+        }
+    },
+    "required": ["answers"],
+}

@@ -66,7 +66,8 @@ Current state:
 
 - live-source discovery works
 - model-backed planning works
-- execution is still partly synthetic and must be upgraded
+- live model-backed execution now exists for the small replay harness
+- the next upgrade is broadening the fixture set and cost accounting
 
 Required artifacts:
 

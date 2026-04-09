@@ -202,6 +202,11 @@ class SeedMemoWriter(MemoWriter):
             result.status != ExperimentStatus.NOT_RUN for result in cycle.results
         )
         live_sources_attached = any(source.kind != "seed" for source in cycle.context.sources)
+        live_responses_execution = any(
+            isinstance(result.artifact_payloads.get("eval-manifest.json"), dict)
+            and result.artifact_payloads["eval-manifest.json"].get("executor") == "responses_api"
+            for result in cycle.results
+        )
         summary = (
             "Initial cycle scaffolded from the topic objective. "
             "Real source ingestion, ranking, and experiment execution are not "
@@ -232,10 +237,22 @@ class SeedMemoWriter(MemoWriter):
                     "remains a bounded offline harness until a live experiment runtime "
                     "is attached."
                 )
-            next_actions[-1] = (
-                "Replace the current synthetic offline executor with a "
-                "benchmark-specific live runtime."
-            )
+                next_actions[0] = "Attach or select an experiment executor for this topic."
+            if live_responses_execution:
+                summary = (
+                    "Research cycle executed with live source discovery, model-backed "
+                    "planning, and model-backed benchmark execution."
+                )
+                next_actions = [
+                    "Persist contradiction tracking and source confidence across runs.",
+                    "Add cost and latency accounting to live benchmark execution.",
+                    "Broaden the benchmark fixture set beyond the current small replay harness.",
+                ]
+            else:
+                next_actions[-1] = (
+                    "Replace the current synthetic offline executor with a "
+                    "benchmark-specific live runtime."
+                )
         if verification.blockers:
             next_actions.insert(
                 0,

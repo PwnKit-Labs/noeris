@@ -112,6 +112,42 @@ class ResponsesClientTests(unittest.TestCase):
         self.assertEqual(request_body["text"]["format"]["type"], "json_schema")
         self.assertEqual(request_body["input"][0]["content"][0]["type"], "input_text")
 
+    def test_generate_json_supports_reasoning_and_token_controls(self) -> None:
+        http_client = _FakeHttpClient(
+            {
+                "output_text": '{"ok": true}',
+            }
+        )
+        client = ResponsesApiClient(
+            config=ResponsesProviderConfig(
+                provider_name="openai",
+                api_key="sk-test",
+                base_url="https://api.openai.com/v1",
+                model="gpt-4.1-mini",
+            ),
+            http_client=http_client,
+        )
+
+        client.generate_json(
+            schema_name="probe",
+            schema={
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {"ok": {"type": "boolean"}},
+                "required": ["ok"],
+            },
+            instructions="system",
+            prompt="user",
+            max_output_tokens=123,
+            reasoning_effort="low",
+            text_verbosity="low",
+        )
+
+        _, request_body, _ = http_client.calls[0]
+        self.assertEqual(request_body["max_output_tokens"], 123)
+        self.assertEqual(request_body["reasoning"]["effort"], "low")
+        self.assertEqual(request_body["text"]["verbosity"], "low")
+
 
 class LlmPlannerTests(unittest.TestCase):
     def test_research_memory_sanitizes_unknown_sources(self) -> None:

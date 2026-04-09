@@ -56,7 +56,7 @@ python -m research_engine.cli benchmarks
 python -m research_engine.cli ci-env
 python -m research_engine.cli sources --topic "long-context reasoning"
 python -m research_engine.cli cycle --topic "long-context reasoning" --llm --max-results 1
-python -m research_engine.cli benchmark-run long-context-reasoning --llm --max-results 1
+python -m research_engine.cli benchmark-run long-context-reasoning --llm --live-execution --max-results 1
 python -m research_engine.cli benchmark-run matmul-speedup
 python -m research_engine.cli runs
 python -m research_engine.cli export-run <run_id>
@@ -90,6 +90,7 @@ What is real now:
 
 - live source discovery from arXiv and GitHub
 - model-backed claim extraction and hypothesis generation via the Responses API
+- model-backed long-context benchmark execution via the Responses API
 - persisted research runs and export bundles
 - verification gates around cycle completeness
 - offline benchmark executors for long-context, tool-use, and matmul lanes
@@ -105,7 +106,7 @@ What is still incomplete:
 Current empirical lanes:
 
 - `matmul-speedup`: deterministic offline systems executor with benchmark artifacts
-- `long-context-reasoning`: live-source + model-backed planning, with deterministic offline eval execution
+- `long-context-reasoning`: live-source + model-backed planning, with optional live model-backed eval execution
 - `tool-use-reliability`: deterministic offline executor comparing terminal-first against structured-tool policy
 
 ## Current Recommendation

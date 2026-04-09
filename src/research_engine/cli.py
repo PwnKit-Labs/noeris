@@ -9,6 +9,7 @@ from .agenda import DEFAULT_RESEARCH_AGENDA
 from .benchmarks import DEFAULT_BENCHMARKS, get_benchmark
 from .codex_config import load_codex_provider_config, render_github_env_setup
 from .export import export_run_bundle
+from .executors import DefaultExperimentExecutor, LongContextResponsesExecutor
 from .ingestion import (
     ArxivAtomSourceProvider,
     CompositeSourceProvider,
@@ -68,6 +69,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=3,
         help="max live source results per provider when --llm is enabled",
     )
+    cycle_parser.add_argument(
+        "--live-execution",
+        action="store_true",
+        help="use a real model-backed executor where available instead of the offline deterministic executor",
+    )
 
     sources_parser = subparsers.add_parser(
         "sources",
@@ -105,6 +111,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=3,
         help="max live source results per provider when --llm is enabled",
     )
+    run_parser.add_argument(
+        "--live-execution",
+        action="store_true",
+        help="use a real model-backed executor where available instead of the offline deterministic executor",
+    )
 
     subparsers.add_parser("runs", help="list persisted research runs")
 
@@ -140,6 +151,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=3,
         help="max live source results per provider when --llm is enabled",
+    )
+    benchmark_run_parser.add_argument(
+        "--live-execution",
+        action="store_true",
+        help="use a real model-backed executor where available instead of the offline deterministic executor",
     )
 
     return parser
@@ -208,7 +224,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "run":
         try:
-            pipeline = build_pipeline(use_llm=args.llm, max_results=args.max_results)
+            pipeline = build_pipeline(
+                use_llm=args.llm,
+                max_results=args.max_results,
+                live_execution=args.live_execution,
+            )
         except LlmConfigurationError as exc:
             print(json.dumps({"error": str(exc)}, indent=2))
             return 1
@@ -236,7 +256,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "benchmark-run":
         benchmark = get_benchmark(args.benchmark_id)
         try:
-            pipeline = build_pipeline(use_llm=args.llm, max_results=args.max_results)
+            pipeline = build_pipeline(
+                use_llm=args.llm,
+                max_results=args.max_results,
+                live_execution=args.live_execution,
+            )
         except LlmConfigurationError as exc:
             print(json.dumps({"error": str(exc)}, indent=2))
             return 1
@@ -275,7 +299,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     try:
-        pipeline = build_pipeline(use_llm=args.llm, max_results=args.max_results)
+        pipeline = build_pipeline(
+            use_llm=args.llm,
+            max_results=args.max_results,
+            live_execution=args.live_execution,
+        )
     except LlmConfigurationError as exc:
         print(json.dumps({"error": str(exc)}, indent=2))
         return 1
@@ -292,13 +320,15 @@ def build_pipeline(
     *,
     use_llm: bool,
     max_results: int,
+    live_execution: bool,
 ) -> ResearchPipeline:
-    if not use_llm:
+    if not use_llm and not live_execution:
         return ResearchPipeline()
 
     client = ResponsesApiClient.from_environment()
-    return ResearchPipeline(
-        source_provider=CompositeSourceProvider(
+    kwargs = {}
+    if use_llm:
+        kwargs["source_provider"] = CompositeSourceProvider(
             providers=[
                 ArxivAtomSourceProvider(client=UrllibHttpClient(), max_results=max_results),
                 GitHubRepositorySourceProvider(
@@ -306,10 +336,14 @@ def build_pipeline(
                     max_results=max_results,
                 ),
             ]
-        ),
-        research_memory=LlmResearchMemory(client=client, max_sources=max_results * 2),
-        hypothesis_planner=LlmHypothesisPlanner(client=client),
-    )
+        )
+        kwargs["research_memory"] = LlmResearchMemory(client=client, max_sources=max_results * 2)
+        kwargs["hypothesis_planner"] = LlmHypothesisPlanner(client=client)
+    if live_execution:
+        kwargs["experiment_executor"] = DefaultExperimentExecutor(
+            long_context_executor=LongContextResponsesExecutor(client=client)
+        )
+    return ResearchPipeline(**kwargs)
 
 
 if __name__ == "__main__":

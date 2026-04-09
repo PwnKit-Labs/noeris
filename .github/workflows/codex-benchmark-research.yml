@@ -47,7 +47,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
 
       - name: Run Noeris LLM research cycle
-        run: python -m research_engine.cli benchmark-run "${NOERIS_BENCHMARK_ID}" --llm --max-results "${NOERIS_MAX_RESULTS}" > noeris-run.json
+        run: python -m research_engine.cli benchmark-run "${NOERIS_BENCHMARK_ID}" --llm --live-execution --max-results "${NOERIS_MAX_RESULTS}" > noeris-run.json
         env:
           GITHUB_TOKEN: ${{ github.token }}
 

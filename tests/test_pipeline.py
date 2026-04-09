@@ -120,6 +120,29 @@ class StubExperimentExecutor(ExperimentExecutor):
         ]
 
 
+class StubLiveExperimentExecutor(ExperimentExecutor):
+    def run(
+        self,
+        topic: ResearchTopic,
+        experiments: list[ExperimentSpec],
+    ) -> list[ExperimentResult]:
+        del topic
+        return [
+            ExperimentResult(
+                spec_name=experiments[0].name,
+                status=ExperimentStatus.COMPLETED,
+                outcome_summary="live benchmark run",
+                artifact_refs=["eval-manifest.json"],
+                artifact_payloads={
+                    "eval-manifest.json": {
+                        "benchmark": "long-context-reasoning",
+                        "executor": "responses_api",
+                    }
+                },
+            )
+        ]
+
+
 class StubVerifier(Verifier):
     def verify(self, cycle: ResearchCycle) -> VerificationReport:
         return VerificationReport(
@@ -306,6 +329,25 @@ class ResearchPipelineTests(unittest.TestCase):
         self.assertFalse(record.verification.passed)
         self.assertIn("live source discovery", record.memo.summary)
         self.assertIn("Attach or select an experiment executor", record.memo.next_actions[1])
+
+    def test_live_execution_summary_mentions_model_backed_execution(self) -> None:
+        pipeline = ResearchPipeline(
+            source_provider=StubSourceProvider(),
+            experiment_executor=StubLiveExperimentExecutor(),
+        )
+        record = pipeline.run_record_for(
+            topic=ResearchTopic(
+                name="long-context reasoning",
+                objective="improve benchmark performance",
+                benchmark_id="long-context-reasoning",
+                constraints=["benchmark_id:long-context-reasoning"],
+            ),
+            benchmark_id="long-context-reasoning",
+        )
+
+        self.assertTrue(record.verification.passed)
+        self.assertIn("model-backed benchmark execution", record.memo.summary)
+        self.assertIn("cost and latency accounting", " ".join(record.memo.next_actions))
 
 
 if __name__ == "__main__":

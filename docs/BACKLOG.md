@@ -8,19 +8,21 @@ The goal is not to become a vague autonomous scientist. The goal is to make a fe
 
 ### P0: Make Long-Context Execution Real
 
-- Replace the synthetic long-context predictor with a real model-backed executor.
-- Keep the fixture set small and deterministic enough to replay.
+- Expand the live model-backed long-context executor beyond the current small replay harness.
+- Keep the fixture set deterministic enough to replay while making it harder to saturate.
 - Capture:
   - prompt/config manifest
   - baseline outputs
   - candidate outputs
   - scored metrics
   - failure analysis
+  - cost and latency accounting
 
 ### P0: Push Repo-Owned LLM CI Lane
 
 - Stop relying on external Codex-action research generation.
 - Use `benchmark-run --llm` as the canonical GitHub workflow path.
+- Use `--live-execution` for the long-context benchmark lane.
 - Verify Azure quota/config behavior on GitHub-hosted runners.
 - Upload run JSON, markdown report, and artifact bundle.
 
