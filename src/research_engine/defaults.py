@@ -105,6 +105,8 @@ class SeedHypothesisPlanner(HypothesisPlanner):
                 novelty_reason=novelty_reason,
                 expected_signal=topic.objective,
                 supporting_claims=[claim.title for claim in context.claims],
+                priority_score=1.0,
+                ranking_rationale="Default seed hypothesis with no comparative ranking signal.",
             )
         ]
 

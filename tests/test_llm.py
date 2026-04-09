@@ -15,6 +15,7 @@ from research_engine.llm import (
     load_responses_provider_config,
 )
 from research_engine.models import Claim, ResearchContext, ResearchSource, ResearchTopic
+from research_engine.models import Contradiction, SourceAssessment
 
 
 class _FakeHttpClient:
@@ -278,6 +279,94 @@ class LlmPlannerTests(unittest.TestCase):
 
         self.assertEqual(len(hypotheses), 3)
         self.assertEqual(hypotheses[0].supporting_claims, ["Known claim"])
+
+    def test_hypothesis_planner_ranks_by_confidence_and_contradictions(self) -> None:
+        http_client = _FakeHttpClient(
+            {
+                "output_text": (
+                    '{"hypotheses":['
+                    '{"title":"Weak idea","rationale":"Because",'
+                    '"novelty_reason":"Gap","expected_signal":"Higher accuracy",'
+                    '"supporting_claims":["Weak claim"]},'
+                    '{"title":"Strong contradiction idea","rationale":"Because too",'
+                    '"novelty_reason":"Gap 2","expected_signal":"Higher recall",'
+                    '"supporting_claims":["Strong claim"]}'
+                    ']}'
+                )
+            }
+        )
+        client = ResponsesApiClient(
+            config=ResponsesProviderConfig(
+                provider_name="openai",
+                api_key="sk-test",
+                base_url="https://api.openai.com/v1",
+                model="gpt-4.1-mini",
+            ),
+            http_client=http_client,
+        )
+        context = ResearchContext(
+            topic="tool use",
+            sources=[
+                ResearchSource(
+                    identifier="source-1",
+                    kind="paper",
+                    title="Strong source",
+                    locator="https://example.com/1",
+                    excerpt="Example",
+                ),
+                ResearchSource(
+                    identifier="source-2",
+                    kind="paper",
+                    title="Weak source",
+                    locator="https://example.com/2",
+                    excerpt="Example",
+                ),
+            ],
+            source_assessments=[
+                SourceAssessment(
+                    source_id="source-1",
+                    confidence="high",
+                    rationale="Primary evidence",
+                ),
+                SourceAssessment(
+                    source_id="source-2",
+                    confidence="low",
+                    rationale="Weak evidence",
+                ),
+            ],
+            claims=[
+                Claim(
+                    title="Strong claim",
+                    source="source-1",
+                    summary="Summary",
+                    evidence_refs=["source-1"],
+                ),
+                Claim(
+                    title="Weak claim",
+                    source="source-2",
+                    summary="Summary",
+                    evidence_refs=["source-2"],
+                ),
+            ],
+            contradictions=[
+                Contradiction(
+                    title="Conflict",
+                    summary="Strong claim conflicts with prior work",
+                    claim_titles=["Strong claim"],
+                    severity="high",
+                )
+            ],
+        )
+        planner = LlmHypothesisPlanner(client=client)
+
+        hypotheses = planner.plan(
+            ResearchTopic(name="tool use", objective="improve reliability"),
+            context,
+        )
+
+        self.assertEqual(hypotheses[0].title, "Strong contradiction idea")
+        self.assertGreater(hypotheses[0].priority_score, hypotheses[1].priority_score)
+        self.assertIn("contradiction bonus", hypotheses[0].ranking_rationale)
 
 
 if __name__ == "__main__":

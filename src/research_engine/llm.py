@@ -405,7 +405,7 @@ class LlmHypothesisPlanner(HypothesisPlanner):
                     supporting_claims=supporting_claims,
                 )
             )
-        return hypotheses[: self.max_hypotheses]
+        return _rank_hypotheses(hypotheses, context)[: self.max_hypotheses]
 
 
 def _sanitize_claims(
@@ -527,6 +527,76 @@ def _sanitize_level(value: object, *, allowed: set[str]) -> str:
         return "medium"
     text = value.strip().lower()
     return text if text in allowed else "medium"
+
+
+def _rank_hypotheses(
+    hypotheses: list[Hypothesis],
+    context: ResearchContext,
+) -> list[Hypothesis]:
+    claim_to_source = {claim.title: claim.source for claim in context.claims}
+    source_confidence = {
+        assessment.source_id: _confidence_weight(assessment.confidence)
+        for assessment in context.source_assessments
+    }
+    contradiction_map = {}
+    for contradiction in context.contradictions:
+        for claim_title in contradiction.claim_titles:
+            contradiction_map[claim_title] = max(
+                contradiction_map.get(claim_title, 0.0),
+                _severity_weight(contradiction.severity),
+            )
+
+    ranked: list[Hypothesis] = []
+    for hypothesis in hypotheses:
+        claim_scores = []
+        contradiction_bonus = 0.0
+        for claim_title in hypothesis.supporting_claims:
+            source_id = claim_to_source.get(claim_title)
+            if source_id is not None:
+                claim_scores.append(source_confidence.get(source_id, 0.4))
+            contradiction_bonus += contradiction_map.get(claim_title, 0.0)
+        support_score = sum(claim_scores)
+        coverage_bonus = 0.35 * len(hypothesis.supporting_claims)
+        score = round(support_score + contradiction_bonus + coverage_bonus, 3)
+        rationale_bits = []
+        rationale_bits.append(f"{len(hypothesis.supporting_claims)} supporting claims")
+        if claim_scores:
+            rationale_bits.append(f"source confidence {support_score:.2f}")
+        if contradiction_bonus:
+            rationale_bits.append(f"contradiction bonus {contradiction_bonus:.2f}")
+        if not claim_scores:
+            rationale_bits.append("weak evidence support")
+        ranked.append(
+            Hypothesis(
+                title=hypothesis.title,
+                rationale=hypothesis.rationale,
+                novelty_reason=hypothesis.novelty_reason,
+                expected_signal=hypothesis.expected_signal,
+                supporting_claims=hypothesis.supporting_claims,
+                priority_score=score,
+                ranking_rationale=", ".join(rationale_bits),
+            )
+        )
+    return sorted(
+        ranked,
+        key=lambda item: (-item.priority_score, item.title),
+    )
+
+
+def _confidence_weight(confidence: str) -> float:
+    return {
+        "low": 0.2,
+        "medium": 0.5,
+        "high": 0.8,
+    }.get(confidence, 0.4)
+
+
+def _severity_weight(severity: str) -> float:
+    return {
+        "low": 0.1,
+        "medium": 0.25,
+        "high": 0.4,
+    }.get(severity, 0.2)
 
 
 _RESEARCH_CONTEXT_SCHEMA = {

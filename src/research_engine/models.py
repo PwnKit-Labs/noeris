@@ -61,6 +61,8 @@ class Hypothesis:
     novelty_reason: str
     expected_signal: str
     supporting_claims: list[str] = field(default_factory=list)
+    priority_score: float = 0.0
+    ranking_rationale: str = ""
 
 
 class ExperimentStatus(StrEnum):
