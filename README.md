@@ -98,12 +98,12 @@ What is real now:
 
 What is still incomplete:
 
-- live experiment executors for LLM and agent benchmarks
 - contradiction-aware research memory
 - ranked hypothesis selection beyond single-pass generation
 - real training / eval runtime orchestration
 - stronger failure reporting and replay UX
 - cost and latency accounting for live benchmark runs
+- broader and harder-to-saturate live fixture sets
 
 Current empirical lanes:
 
@@ -119,9 +119,8 @@ Current empirical lanes:
 
 ## Immediate Next Steps
 
-- make the long-context executor genuinely online instead of synthetic
 - persist structured contradictions and source confidence
-- push the repo-owned LLM benchmark workflow through GitHub Actions
 - add cost and latency accounting to live benchmark execution
 - broaden the live fixture sets so benchmark lanes are harder to saturate
+- add richer benchmark-specific experiment templates and ranking
 - keep the benchmark surface narrow and high-signal instead of expanding scope too early

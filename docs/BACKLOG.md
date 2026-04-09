@@ -6,10 +6,10 @@ The goal is not to become a vague autonomous scientist. The goal is to make a fe
 
 ## Current Priority
 
-### P0: Make Long-Context Execution Real
+### P0: Expand Live Benchmark Execution
 
-- Expand the live model-backed long-context executor beyond the current small replay harness.
-- Keep the fixture set deterministic enough to replay while making it harder to saturate.
+- Expand the live model-backed long-context and tool-use executors beyond the current small replay harnesses.
+- Keep fixture sets deterministic enough to replay while making them harder to saturate.
 - Capture:
   - prompt/config manifest
   - baseline outputs
@@ -18,13 +18,11 @@ The goal is not to become a vague autonomous scientist. The goal is to make a fe
   - failure analysis
   - cost and latency accounting
 
-### P0: Push Repo-Owned LLM CI Lane
+### P0: Stabilize Repo-Owned LLM CI Lane
 
-- Stop relying on external Codex-action research generation.
-- Use `benchmark-run --llm` as the canonical GitHub workflow path.
-- Use `--live-execution` for the long-context benchmark lane.
-- Verify Azure quota/config behavior on GitHub-hosted runners.
-- Upload run JSON, markdown report, and artifact bundle.
+- Keep `benchmark-run --llm --live-execution` as the canonical GitHub workflow path for live lanes.
+- Upload run JSON, markdown report, and artifact bundle for every benchmark run.
+- Track and surface cost / latency in CI summaries.
 
 ### P0: Executor Selection Contract
 
@@ -61,6 +59,11 @@ The goal is not to become a vague autonomous scientist. The goal is to make a fe
 - Rank hypotheses instead of passing through all generated ones.
 - Add per-benchmark experiment templates.
 - Attach cost ceilings and runtime assumptions to each spec.
+
+### P1: Benchmark Metadata And Labels
+
+- Keep GitHub labels aligned with benchmark lanes and infra work.
+- Add issue triage conventions for benchmark, executor, llm, ci, and research-memory work.
 
 ## Later
 
