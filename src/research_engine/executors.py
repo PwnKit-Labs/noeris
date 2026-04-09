@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from dataclasses import field
 import os
+import platform
+from random import Random
 from time import perf_counter
 
 from .components import ExperimentExecutor
@@ -96,6 +98,12 @@ MATMUL_FIXTURES = [
         "candidate_tflops": 121.9,
         "strategy": "memory-coalesced epilogue fusion",
     },
+]
+
+LIVE_MATMUL_FIXTURES = [
+    {"id": "mm-live-1", "shape": (32, 32, 32), "dtype": "float64"},
+    {"id": "mm-live-2", "shape": (48, 48, 48), "dtype": "float64"},
+    {"id": "mm-live-3", "shape": (64, 64, 64), "dtype": "float64"},
 ]
 
 
@@ -578,6 +586,101 @@ class MatmulOfflineExecutor(ExperimentExecutor):
 
 
 @dataclass(slots=True)
+class MatmulPythonExecutor(ExperimentExecutor):
+    """Real CPU microbenchmark for the matmul benchmark lane."""
+
+    repetitions: int = 2
+
+    def run(
+        self,
+        topic: ResearchTopic,
+        experiments: list[ExperimentSpec],
+    ) -> list[ExperimentResult]:
+        del topic
+        rows = []
+        improvements = []
+        for fixture in LIVE_MATMUL_FIXTURES:
+            rows.append(self._run_fixture(fixture))
+            improvements.append(rows[-1]["uplift_pct"] / 100)
+
+        mean_uplift = sum(improvements) / len(improvements)
+        hardware_profile = {
+            "executor": "python_cpu_microbenchmark",
+            "machine": platform.machine(),
+            "processor": platform.processor() or "unknown",
+            "python_version": platform.python_version(),
+            "cpu_count": os.cpu_count(),
+            "fixtures": [
+                {
+                    "id": row["id"],
+                    "shape": row["shape"],
+                    "dtype": row["dtype"],
+                }
+                for row in rows
+            ],
+        }
+        payloads = {
+            "hardware-profile.json": hardware_profile,
+            "benchmark-config.json": {
+                "benchmark": "matmul-speedup",
+                "comparison": "python baseline vs transpose-aware candidate",
+                "baseline": "naive_ijk",
+                "candidate": "transpose_dot",
+                "repetitions": self.repetitions,
+            },
+            "raw-timing-results.json": {
+                "mean_uplift_pct": round(mean_uplift * 100, 2),
+                "rows": rows,
+            },
+            "baseline-comparison.md": _matmul_live_comparison(rows, mean_uplift),
+        }
+        summary = (
+            f"Live matmul CPU benchmark completed on {len(rows)} fixtures. "
+            f"Mean throughput uplift={mean_uplift * 100:.2f}%."
+        )
+        return [
+            ExperimentResult(
+                spec_name=experiment.name,
+                status=ExperimentStatus.COMPLETED,
+                outcome_summary=summary,
+                artifact_refs=list(payloads.keys()),
+                artifact_payloads=payloads,
+            )
+            for experiment in experiments
+        ]
+
+    def _run_fixture(self, fixture: dict[str, object]) -> dict[str, object]:
+        m, n, k = fixture["shape"]
+        seed = sum(ord(char) for char in fixture["id"])
+        a = _generate_matrix(m, k, seed=seed)
+        b = _generate_matrix(k, n, seed=seed + 1)
+        baseline_time = min(_time_call(lambda: _matmul_ijk(a, b)) for _ in range(self.repetitions))
+        candidate_time = min(
+            _time_call(lambda: _matmul_transpose_candidate(a, b))
+            for _ in range(self.repetitions)
+        )
+        baseline_result = _matmul_ijk(a, b)
+        candidate_result = _matmul_transpose_candidate(a, b)
+        max_abs_error = _max_abs_diff(baseline_result, candidate_result)
+        ops = 2 * m * n * k
+        baseline_gflops = ops / baseline_time / 1_000_000_000
+        candidate_gflops = ops / candidate_time / 1_000_000_000
+        uplift_pct = ((candidate_time * -1) + baseline_time) / baseline_time * 100
+        return {
+            "id": fixture["id"],
+            "shape": f"{m}x{n}x{k}",
+            "dtype": fixture["dtype"],
+            "baseline_seconds": round(baseline_time, 6),
+            "candidate_seconds": round(candidate_time, 6),
+            "baseline_gflops": round(baseline_gflops, 4),
+            "candidate_gflops": round(candidate_gflops, 4),
+            "uplift_pct": round(uplift_pct, 2),
+            "max_abs_error": round(max_abs_error, 12),
+            "strategy": "transpose-aware dot-product loop",
+        }
+
+
+@dataclass(slots=True)
 class DefaultExperimentExecutor(ExperimentExecutor):
     long_context_executor: ExperimentExecutor = field(
         default_factory=LongContextOfflineExecutor
@@ -701,6 +804,85 @@ def _matmul_comparison(rows: list[dict[str, object]], mean_uplift: float) -> str
         ]
     )
     return "\n".join(lines) + "\n"
+
+
+def _matmul_live_comparison(rows: list[dict[str, object]], mean_uplift: float) -> str:
+    lines = [
+        "# Baseline Comparison",
+        "",
+        f"- Mean throughput uplift: `{mean_uplift * 100:.2f}%`",
+        "",
+        "## Fixture Summary",
+        "",
+    ]
+    for row in rows:
+        lines.append(
+            "- "
+            f"{row['id']} | {row['shape']} | baseline={row['baseline_seconds']}s "
+            f"({row['baseline_gflops']} GFLOPS) | candidate={row['candidate_seconds']}s "
+            f"({row['candidate_gflops']} GFLOPS) | uplift={row['uplift_pct']}% | "
+            f"max_abs_error={row['max_abs_error']}"
+        )
+    lines.extend(
+        [
+            "",
+            "## Interpretation",
+            "",
+            "- Candidate uses a transpose-aware access pattern to reduce Python-level cache-unfriendly column access.",
+            "- This is a real CPU microbenchmark, not a synthetic placeholder, but it is still a small replay harness rather than a GPU kernel runtime.",
+        ]
+    )
+    return "\n".join(lines) + "\n"
+
+
+def _generate_matrix(rows: int, cols: int, *, seed: int) -> list[list[float]]:
+    rng = Random(seed)
+    return [[rng.random() for _ in range(cols)] for _ in range(rows)]
+
+
+def _matmul_ijk(a: list[list[float]], b: list[list[float]]) -> list[list[float]]:
+    rows = len(a)
+    cols = len(b[0])
+    depth = len(b)
+    out = [[0.0] * cols for _ in range(rows)]
+    for i in range(rows):
+        for j in range(cols):
+            value = 0.0
+            for k in range(depth):
+                value += a[i][k] * b[k][j]
+            out[i][j] = value
+    return out
+
+
+def _matmul_transpose_candidate(a: list[list[float]], b: list[list[float]]) -> list[list[float]]:
+    rows = len(a)
+    cols = len(b[0])
+    depth = len(b)
+    b_transposed = [list(column) for column in zip(*b)]
+    out = [[0.0] * cols for _ in range(rows)]
+    for i in range(rows):
+        row_a = a[i]
+        for j in range(cols):
+            row_b = b_transposed[j]
+            value = 0.0
+            for k in range(depth):
+                value += row_a[k] * row_b[k]
+            out[i][j] = value
+    return out
+
+
+def _time_call(fn) -> float:
+    started = perf_counter()
+    fn()
+    return perf_counter() - started
+
+
+def _max_abs_diff(left: list[list[float]], right: list[list[float]]) -> float:
+    value = 0.0
+    for row_left, row_right in zip(left, right):
+        for cell_left, cell_right in zip(row_left, row_right):
+            value = max(value, abs(cell_left - cell_right))
+    return value
 
 
 def _tool_use_rows_from_payload(payload: dict[str, object]) -> list[dict[str, object]]:

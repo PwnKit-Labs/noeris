@@ -370,6 +370,46 @@ class ResearchPipelineTests(unittest.TestCase):
 
         self.assertTrue(record.verification.passed)
         self.assertIn("model-backed benchmark execution", record.memo.summary)
+
+    def test_live_matmul_execution_summary_mentions_real_runtime(self) -> None:
+        pipeline = ResearchPipeline(
+            experiment_executor=StubLiveMatmulExecutor(),
+        )
+        record = pipeline.run_record_for(
+            topic=ResearchTopic(
+                name="matrix multiplication speedup",
+                objective="discover validated kernel-level speedups",
+                benchmark_id="matmul-speedup",
+                constraints=["benchmark_id:matmul-speedup"],
+            ),
+            benchmark_id="matmul-speedup",
+        )
+
+        self.assertTrue(record.verification.passed)
+        self.assertIn("real benchmark runtime", record.memo.summary)
+
+
+class StubLiveMatmulExecutor(ExperimentExecutor):
+    def run(
+        self,
+        topic: ResearchTopic,
+        experiments: list[ExperimentSpec],
+    ) -> list[ExperimentResult]:
+        del topic
+        return [
+            ExperimentResult(
+                spec_name=experiments[0].name,
+                status=ExperimentStatus.COMPLETED,
+                outcome_summary="live matmul benchmark run",
+                artifact_refs=["hardware-profile.json"],
+                artifact_payloads={
+                    "hardware-profile.json": {
+                        "benchmark": "matmul-speedup",
+                        "executor": "python_cpu_microbenchmark",
+                    }
+                },
+            )
+        ]
         self.assertIn("estimated live-run cost accounting", " ".join(record.memo.next_actions))
 
     def test_live_tool_use_execution_summary_mentions_model_backed_execution(self) -> None:

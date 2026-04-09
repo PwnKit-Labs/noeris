@@ -8,6 +8,7 @@ from research_engine.cli import build_pipeline
 from research_engine.executors import (
     DefaultExperimentExecutor,
     LongContextResponsesExecutor,
+    MatmulPythonExecutor,
     ToolUseResponsesExecutor,
 )
 from research_engine.llm import ResponsesJsonResult, ResponsesProviderConfig
@@ -166,6 +167,7 @@ class ExecutorTests(unittest.TestCase):
                 use_llm=False,
                 max_results=1,
                 live_execution=True,
+                benchmark_id="long-context-reasoning",
             )
 
         self.assertIsInstance(pipeline.experiment_executor, DefaultExperimentExecutor)
@@ -173,9 +175,50 @@ class ExecutorTests(unittest.TestCase):
             pipeline.experiment_executor.long_context_executor,
             LongContextResponsesExecutor,
         )
+
+    def test_matmul_python_executor_emits_expected_artifacts(self) -> None:
+        executor = MatmulPythonExecutor(repetitions=1)
+
+        results = executor.run(
+            ResearchTopic(
+                name="matrix multiplication speedup",
+                objective="improve quality",
+                benchmark_id="matmul-speedup",
+            ),
+            [
+                ExperimentSpec(
+                    name="exp-1",
+                    benchmark_id="matmul-speedup",
+                    hypothesis_title="Hypothesis",
+                    success_metric="throughput",
+                    budget="small",
+                    baseline="baseline",
+                    protocol=["run"],
+                )
+            ],
+        )
+
+        self.assertEqual(
+            results[0].artifact_payloads["hardware-profile.json"]["executor"],
+            "python_cpu_microbenchmark",
+        )
+        self.assertEqual(
+            len(results[0].artifact_payloads["raw-timing-results.json"]["rows"]),
+            3,
+        )
+
+    def test_build_pipeline_uses_live_matmul_executor(self) -> None:
+        pipeline = build_pipeline(
+            use_llm=False,
+            max_results=1,
+            live_execution=True,
+            benchmark_id="matmul-speedup",
+        )
+
+        self.assertIsInstance(pipeline.experiment_executor, DefaultExperimentExecutor)
         self.assertIsInstance(
-            pipeline.experiment_executor.tool_use_executor,
-            ToolUseResponsesExecutor,
+            pipeline.experiment_executor.matmul_executor,
+            MatmulPythonExecutor,
         )
 
 

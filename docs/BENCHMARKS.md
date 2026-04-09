@@ -56,6 +56,11 @@ Current offline executor:
 
 - deterministic synthetic systems lane with hardware-profile and timing artifacts
 
+Current live executor:
+
+- CPU microbenchmark comparing naive `i-j-k` multiplication against a transpose-aware candidate
+- intended as a real local measurement harness, not a final GPU-kernel runtime
+
 ### Long-Context Reasoning
 
 Goal:

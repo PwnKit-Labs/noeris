@@ -93,6 +93,7 @@ What is real now:
 - model-backed long-context benchmark execution via the Responses API
 - model-backed tool-use benchmark execution via the Responses API
 - token and latency accounting artifacts for live benchmark runs
+- real CPU benchmark execution for `matmul-speedup` via `--live-execution`
 - persisted research runs and export bundles
 - verification gates around cycle completeness
 - offline benchmark executors for long-context, tool-use, and matmul lanes
@@ -108,6 +109,7 @@ What is still incomplete:
 Current empirical lanes:
 
 - `matmul-speedup`: deterministic offline systems executor with benchmark artifacts
+- `matmul-speedup`: optional real CPU microbenchmark execution with artifact-backed measurements
 - `long-context-reasoning`: live-source + model-backed planning, with optional live model-backed eval execution
 - `tool-use-reliability`: live-source + model-backed planning, with optional live model-backed terminal-first vs structured evaluation
 

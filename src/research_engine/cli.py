@@ -12,6 +12,7 @@ from .export import export_run_bundle
 from .executors import (
     DefaultExperimentExecutor,
     LongContextResponsesExecutor,
+    MatmulPythonExecutor,
     ToolUseResponsesExecutor,
 )
 from .ingestion import (
@@ -232,6 +233,7 @@ def main(argv: list[str] | None = None) -> int:
                 use_llm=args.llm,
                 max_results=args.max_results,
                 live_execution=args.live_execution,
+                benchmark_id=None,
             )
         except LlmConfigurationError as exc:
             print(json.dumps({"error": str(exc)}, indent=2))
@@ -264,6 +266,7 @@ def main(argv: list[str] | None = None) -> int:
                 use_llm=args.llm,
                 max_results=args.max_results,
                 live_execution=args.live_execution,
+                benchmark_id=benchmark.benchmark_id,
             )
         except LlmConfigurationError as exc:
             print(json.dumps({"error": str(exc)}, indent=2))
@@ -307,6 +310,7 @@ def main(argv: list[str] | None = None) -> int:
             use_llm=args.llm,
             max_results=args.max_results,
             live_execution=args.live_execution,
+            benchmark_id=None,
         )
     except LlmConfigurationError as exc:
         print(json.dumps({"error": str(exc)}, indent=2))
@@ -325,12 +329,15 @@ def build_pipeline(
     use_llm: bool,
     max_results: int,
     live_execution: bool,
+    benchmark_id: str | None,
 ) -> ResearchPipeline:
     if not use_llm and not live_execution:
         return ResearchPipeline()
 
-    client = ResponsesApiClient.from_environment()
     kwargs = {}
+    client = None
+    if use_llm or (live_execution and benchmark_id in {"long-context-reasoning", "tool-use-reliability"}):
+        client = ResponsesApiClient.from_environment()
     if use_llm:
         kwargs["source_provider"] = CompositeSourceProvider(
             providers=[
@@ -345,8 +352,21 @@ def build_pipeline(
         kwargs["hypothesis_planner"] = LlmHypothesisPlanner(client=client)
     if live_execution:
         kwargs["experiment_executor"] = DefaultExperimentExecutor(
-            long_context_executor=LongContextResponsesExecutor(client=client),
-            tool_use_executor=ToolUseResponsesExecutor(client=client),
+            long_context_executor=(
+                LongContextResponsesExecutor(client=client)
+                if benchmark_id == "long-context-reasoning" and client is not None
+                else DefaultExperimentExecutor().long_context_executor
+            ),
+            tool_use_executor=(
+                ToolUseResponsesExecutor(client=client)
+                if benchmark_id == "tool-use-reliability" and client is not None
+                else DefaultExperimentExecutor().tool_use_executor
+            ),
+            matmul_executor=(
+                MatmulPythonExecutor()
+                if benchmark_id == "matmul-speedup"
+                else DefaultExperimentExecutor().matmul_executor
+            ),
         )
     return ResearchPipeline(**kwargs)
 

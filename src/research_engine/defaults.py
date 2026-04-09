@@ -213,6 +213,14 @@ class SeedMemoWriter(MemoWriter):
             )
             for result in cycle.results
         )
+        live_runtime_execution = any(
+            (
+                isinstance(result.artifact_payloads.get("hardware-profile.json"), dict)
+                and result.artifact_payloads["hardware-profile.json"].get("executor")
+                == "python_cpu_microbenchmark"
+            )
+            for result in cycle.results
+        )
         summary = (
             "Initial cycle scaffolded from the topic objective. "
             "Real source ingestion, ranking, and experiment execution are not "
@@ -253,6 +261,15 @@ class SeedMemoWriter(MemoWriter):
                     "Persist contradiction tracking and source confidence across runs.",
                     "Provide pricing inputs and budget thresholds for estimated live-run cost accounting.",
                     "Broaden the benchmark fixture set beyond the current small replay harness.",
+                ]
+            elif live_runtime_execution:
+                summary = (
+                    "Research cycle executed with a real benchmark runtime and artifact-backed measurement."
+                )
+                next_actions = [
+                    "Broaden the benchmark fixture set beyond the current small replay harness.",
+                    "Add stronger measurement statistics such as warmup control and percentile summaries.",
+                    "Move from CPU microbenchmarks to a richer hardware-backed matmul runtime when available.",
                 ]
             else:
                 next_actions[-1] = (
