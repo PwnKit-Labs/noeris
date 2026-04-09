@@ -49,6 +49,42 @@ class RunStoreTests(unittest.TestCase):
         self.assertEqual(summaries[0]["run_id"], record.run_id)
         self.assertEqual(summaries[0]["topic"], "tool use")
 
+    def test_summarize_history_reports_new_and_dropped_claims(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = JsonFileRunStore(Path(temp_dir))
+            older = ResearchPipeline().run_record_for(
+                topic=ResearchTopic(
+                    name="tool-use reliability",
+                    objective="improve task success",
+                    benchmark_id="tool-use-reliability",
+                    constraints=["benchmark_id:tool-use-reliability"],
+                ),
+                benchmark_id="tool-use-reliability",
+            )
+            older.memo.claims[0].title = "Older claim"
+            older.memo.source_assessments[0].confidence = "low"
+            store.save(older)
+
+            newer = ResearchPipeline().run_record_for(
+                topic=ResearchTopic(
+                    name="tool-use reliability",
+                    objective="improve task success",
+                    benchmark_id="tool-use-reliability",
+                    constraints=["benchmark_id:tool-use-reliability"],
+                ),
+                benchmark_id="tool-use-reliability",
+            )
+            newer.memo.claims[0].title = "Newer claim"
+            newer.memo.source_assessments[0].confidence = "high"
+            store.save(newer)
+
+            summary = store.summarize_history(benchmark_id="tool-use-reliability")
+
+        self.assertEqual(summary["run_count"], 2)
+        self.assertIn("Newer claim", summary["new_claim_titles"])
+        self.assertIn("Older claim", summary["dropped_claim_titles"])
+        self.assertEqual(summary["confidence_changes"][0]["latest_confidence"], "high")
+
 
 if __name__ == "__main__":
     unittest.main()

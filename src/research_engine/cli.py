@@ -124,6 +124,27 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("runs", help="list persisted research runs")
 
+    history_parser = subparsers.add_parser(
+        "history",
+        help="summarize cross-run claim and confidence changes",
+    )
+    history_parser.add_argument(
+        "--benchmark-id",
+        default="",
+        help="optional benchmark id filter",
+    )
+    history_parser.add_argument(
+        "--topic",
+        default="",
+        help="optional topic filter",
+    )
+    history_parser.add_argument(
+        "--limit",
+        type=int,
+        default=5,
+        help="max runs to compare",
+    )
+
     show_run_parser = subparsers.add_parser("show-run", help="show a persisted research run")
     show_run_parser.add_argument("run_id", help="identifier of the run to show")
 
@@ -214,6 +235,19 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "runs":
         store = JsonFileRunStore()
         print(json.dumps(store.list_runs(), indent=2))
+        return 0
+    if args.command == "history":
+        store = JsonFileRunStore()
+        print(
+            json.dumps(
+                store.summarize_history(
+                    benchmark_id=args.benchmark_id or None,
+                    topic=args.topic or None,
+                    limit=args.limit,
+                ),
+                indent=2,
+            )
+        )
         return 0
     if args.command == "show-run":
         store = JsonFileRunStore()
