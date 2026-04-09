@@ -103,10 +103,31 @@ def load_responses_provider_config() -> ResponsesProviderConfig:
             model=provider.model,
         )
 
+    azure_api_key = os.getenv("AZURE_OPENAI_API_KEY")
+    azure_base_url = os.getenv("AZURE_OPENAI_BASE_URL")
+    azure_model = os.getenv("AZURE_OPENAI_MODEL")
+    if azure_api_key:
+        missing_fields = []
+        if not azure_base_url:
+            missing_fields.append("AZURE_OPENAI_BASE_URL")
+        if not azure_model:
+            missing_fields.append("AZURE_OPENAI_MODEL")
+        if missing_fields:
+            raise LlmConfigurationError(
+                "Azure OpenAI environment is missing required values: "
+                + ", ".join(missing_fields)
+            )
+        return ResponsesProviderConfig(
+            provider_name="azure",
+            api_key=azure_api_key,
+            base_url=azure_base_url,
+            model=azure_model,
+        )
+
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise LlmConfigurationError(
-            "No Codex provider config was found and OPENAI_API_KEY is not set."
+            "No Codex provider config was found, AZURE_OPENAI_API_KEY is not set, and OPENAI_API_KEY is not set."
         )
     return ResponsesProviderConfig(
         provider_name="openai",
