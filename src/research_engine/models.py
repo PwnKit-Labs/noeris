@@ -30,12 +30,28 @@ class ResearchSource:
 
 
 @dataclass(slots=True)
+class SourceAssessment:
+    source_id: str
+    confidence: str
+    rationale: str
+
+
+@dataclass(slots=True)
+class Contradiction:
+    title: str
+    summary: str
+    claim_titles: list[str] = field(default_factory=list)
+    severity: str = "medium"
+
+
+@dataclass(slots=True)
 class ResearchContext:
     topic: str
     sources: list[ResearchSource]
     claims: list[Claim]
     open_questions: list[str] = field(default_factory=list)
-    contradictions: list[str] = field(default_factory=list)
+    contradictions: list[Contradiction] = field(default_factory=list)
+    source_assessments: list[SourceAssessment] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -90,7 +106,9 @@ class ResearchMemo:
     topic: str
     summary: str
     sources: list[ResearchSource]
+    source_assessments: list[SourceAssessment]
     claims: list[Claim]
+    contradictions: list[Contradiction]
     hypotheses: list[Hypothesis]
     experiments: list[ExperimentSpec]
     results: list[ExperimentResult]

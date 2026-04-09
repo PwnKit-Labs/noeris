@@ -94,13 +94,13 @@ What is real now:
 - model-backed tool-use benchmark execution via the Responses API
 - token and latency accounting artifacts for live benchmark runs
 - real CPU benchmark execution for `matmul-speedup` via `--live-execution`
+- source-confidence and contradiction structure in research memory and reports
 - persisted research runs and export bundles
 - verification gates around cycle completeness
 - offline benchmark executors for long-context, tool-use, and matmul lanes
 
 What is still incomplete:
 
-- contradiction-aware research memory
 - ranked hypothesis selection beyond single-pass generation
 - real training / eval runtime orchestration
 - stronger failure reporting and replay UX

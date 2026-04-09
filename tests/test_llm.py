@@ -186,7 +186,8 @@ class LlmPlannerTests(unittest.TestCase):
                 "output_text": (
                     '{"claims":[{"title":"Claim","source":"bad-source","summary":"Summary",'
                     '"evidence_refs":["source-1"]}],"open_questions":["What next?"],'
-                    '"contradictions":[]}'
+                    '"contradictions":[{"title":"Conflict","summary":"Sources disagree","claim_titles":["Claim"],"severity":"high"}],'
+                    '"source_assessments":[{"source_id":"source-1","confidence":"high","rationale":"Direct primary source"}]}'
                 )
             }
         )
@@ -215,6 +216,8 @@ class LlmPlannerTests(unittest.TestCase):
 
         self.assertEqual(context.claims[0].source, "source-1")
         self.assertEqual(context.claims[0].evidence_refs, ["source-1"])
+        self.assertEqual(context.source_assessments[0].confidence, "high")
+        self.assertEqual(context.contradictions[0].severity, "high")
 
     def test_hypothesis_planner_filters_unknown_supporting_claims(self) -> None:
         http_client = _FakeHttpClient(

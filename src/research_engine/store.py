@@ -6,6 +6,7 @@ from pathlib import Path
 
 from .models import (
     Claim,
+    Contradiction,
     ExperimentResult,
     ExperimentSpec,
     ExperimentStatus,
@@ -16,6 +17,7 @@ from .models import (
     ResearchRunRecord,
     ResearchSource,
     ResearchTopic,
+    SourceAssessment,
     VerificationReport,
 )
 
@@ -43,7 +45,14 @@ def deserialize_run_record(payload: dict) -> ResearchRunRecord:
         sources=context_sources,
         claims=context_claims,
         open_questions=context_payload.get("open_questions", []),
-        contradictions=context_payload.get("contradictions", []),
+        contradictions=[
+            _deserialize_contradiction(item)
+            for item in context_payload.get("contradictions", [])
+        ],
+        source_assessments=[
+            _deserialize_source_assessment(item)
+            for item in context_payload.get("source_assessments", [])
+        ],
     )
     cycle = ResearchCycle(
         topic=topic,
@@ -57,7 +66,15 @@ def deserialize_run_record(payload: dict) -> ResearchRunRecord:
         topic=memo_payload["topic"],
         summary=memo_payload["summary"],
         sources=[_deserialize_source(item) for item in memo_payload["sources"]],
+        source_assessments=[
+            _deserialize_source_assessment(item)
+            for item in memo_payload.get("source_assessments", [])
+        ],
         claims=[_deserialize_claim(item) for item in memo_payload["claims"]],
+        contradictions=[
+            _deserialize_contradiction(item)
+            for item in memo_payload.get("contradictions", [])
+        ],
         hypotheses=[Hypothesis(**item) for item in memo_payload["hypotheses"]],
         experiments=[ExperimentSpec(**item) for item in memo_payload["experiments"]],
         results=[_deserialize_result(item) for item in memo_payload["results"]],
@@ -80,6 +97,14 @@ def _deserialize_source(payload: dict) -> ResearchSource:
 
 def _deserialize_claim(payload: dict) -> Claim:
     return Claim(**payload)
+
+
+def _deserialize_source_assessment(payload: dict) -> SourceAssessment:
+    return SourceAssessment(**payload)
+
+
+def _deserialize_contradiction(payload: dict) -> Contradiction:
+    return Contradiction(**payload)
 
 
 def _deserialize_result(payload: dict) -> ExperimentResult:

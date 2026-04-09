@@ -24,11 +24,13 @@ class ExportBundleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             bundle_dir = export_run_bundle(record, Path(temp_dir))
             files = sorted(path.name for path in bundle_dir.iterdir())
+            summary = (bundle_dir / "summary.md").read_text(encoding="utf-8")
 
         self.assertEqual(
             files,
             ["memo.json", "run.json", "summary.md", "verification.json"],
         )
+        self.assertIn("Source Confidence", summary)
 
     def test_long_context_export_writes_required_artifacts(self) -> None:
         record = ResearchPipeline().run_record_for(

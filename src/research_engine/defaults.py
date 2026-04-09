@@ -12,6 +12,7 @@ from .components import (
 )
 from .models import (
     Claim,
+    Contradiction,
     ExperimentResult,
     ExperimentSpec,
     ExperimentStatus,
@@ -21,6 +22,7 @@ from .models import (
     ResearchMemo,
     ResearchSource,
     ResearchTopic,
+    SourceAssessment,
     VerificationReport,
 )
 
@@ -50,6 +52,14 @@ class SeedResearchMemory(ResearchMemory):
         return ResearchContext(
             topic=topic.name,
             sources=sources,
+            source_assessments=[
+                SourceAssessment(
+                    source_id=source.identifier,
+                    confidence="low",
+                    rationale="Seed source placeholder until live evidence ranking is attached.",
+                )
+                for source in sources
+            ],
             claims=[
                 Claim(
                     title=f"Known work related to {topic.name}",
@@ -286,7 +296,9 @@ class SeedMemoWriter(MemoWriter):
             topic=cycle.topic.name,
             summary=summary,
             sources=cycle.context.sources,
+            source_assessments=cycle.context.source_assessments,
             claims=cycle.context.claims,
+            contradictions=cycle.context.contradictions,
             hypotheses=cycle.hypotheses,
             experiments=cycle.experiments,
             results=cycle.results,

@@ -47,8 +47,8 @@ The goal is not to become a vague autonomous scientist. The goal is to make a fe
 
 ### P1: Research Memory Upgrade
 
-- Persist contradictions, not just claims.
-- Track source freshness and confidence.
+- Expand contradiction handling beyond single-pass extraction.
+- Track source freshness and confidence more deeply.
 - Distinguish:
   - direct evidence
   - weak evidence

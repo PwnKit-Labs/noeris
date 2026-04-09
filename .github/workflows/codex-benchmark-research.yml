@@ -99,6 +99,18 @@ jobs:
               lines.append(f"- **{claim['title']}**")
               lines.append(f"  - Source: `{claim['source']}`")
               lines.append(f"  - Summary: {claim['summary']}")
+          if memo.get("source_assessments"):
+              lines.extend(["", "## Source Confidence", ""])
+              for assessment in memo["source_assessments"]:
+                  lines.append(
+                      f"- `{assessment['source_id']}` | confidence=`{assessment['confidence']}` | {assessment['rationale']}"
+                  )
+          if memo.get("contradictions"):
+              lines.extend(["", "## Contradictions", ""])
+              for contradiction in memo["contradictions"]:
+                  lines.append(
+                      f"- **{contradiction['title']}** (`{contradiction['severity']}`): {contradiction['summary']}"
+                  )
           lines.extend(["", "## Hypotheses", ""])
           for hypothesis in memo["hypotheses"]:
               lines.append(f"- **{hypothesis['title']}**")

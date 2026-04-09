@@ -9,7 +9,15 @@ from urllib.request import Request, urlopen
 
 from .codex_config import load_codex_provider_config
 from .components import HypothesisPlanner, ResearchMemory
-from .models import Claim, Hypothesis, ResearchContext, ResearchSource, ResearchTopic
+from .models import (
+    Claim,
+    Contradiction,
+    Hypothesis,
+    ResearchContext,
+    ResearchSource,
+    ResearchTopic,
+    SourceAssessment,
+)
 
 
 class LlmConfigurationError(RuntimeError):
@@ -298,12 +306,20 @@ class LlmResearchMemory(ResearchMemory):
                 indent=2,
             ),
         )
+        claims = _sanitize_claims(payload.get("claims", []), selected_sources)
         return ResearchContext(
             topic=topic.name,
             sources=selected_sources,
-            claims=_sanitize_claims(payload.get("claims", []), selected_sources),
+            claims=claims,
             open_questions=_sanitize_string_list(payload.get("open_questions", []), limit=5),
-            contradictions=_sanitize_string_list(payload.get("contradictions", []), limit=5),
+            contradictions=_sanitize_contradictions(
+                payload.get("contradictions", []),
+                claims=claims,
+            ),
+            source_assessments=_sanitize_source_assessments(
+                payload.get("source_assessments", []),
+                selected_sources,
+            ),
         )
 
 
@@ -342,8 +358,24 @@ class LlmHypothesisPlanner(HypothesisPlanner):
                         }
                         for claim in context.claims
                     ],
+                    "source_assessments": [
+                        {
+                            "source_id": assessment.source_id,
+                            "confidence": assessment.confidence,
+                            "rationale": assessment.rationale,
+                        }
+                        for assessment in context.source_assessments
+                    ],
                     "open_questions": context.open_questions,
-                    "contradictions": context.contradictions,
+                    "contradictions": [
+                        {
+                            "title": contradiction.title,
+                            "summary": contradiction.summary,
+                            "claim_titles": contradiction.claim_titles,
+                            "severity": contradiction.severity,
+                        }
+                        for contradiction in context.contradictions
+                    ],
                 },
                 indent=2,
             ),
@@ -414,6 +446,65 @@ def _sanitize_claims(
     return claims[:5]
 
 
+def _sanitize_source_assessments(
+    payload: object,
+    sources: list[ResearchSource],
+) -> list[SourceAssessment]:
+    if not isinstance(payload, list):
+        return []
+    valid_sources = {source.identifier for source in sources}
+    assessments: list[SourceAssessment] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        source_id = _clean_text(item.get("source_id"))
+        rationale = _clean_text(item.get("rationale"))
+        confidence = _sanitize_level(item.get("confidence"), allowed={"low", "medium", "high"})
+        if source_id not in valid_sources or not rationale:
+            continue
+        assessments.append(
+            SourceAssessment(
+                source_id=source_id,
+                confidence=confidence,
+                rationale=rationale,
+            )
+        )
+    return assessments[: len(sources)]
+
+
+def _sanitize_contradictions(
+    payload: object,
+    *,
+    claims: list[Claim],
+) -> list[Contradiction]:
+    if not isinstance(payload, list):
+        return []
+    valid_claims = {claim.title for claim in claims}
+    contradictions: list[Contradiction] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        title = _clean_text(item.get("title"))
+        summary = _clean_text(item.get("summary"))
+        severity = _sanitize_level(item.get("severity"), allowed={"low", "medium", "high"})
+        claim_titles = [
+            claim_title
+            for claim_title in _sanitize_string_list(item.get("claim_titles", []), limit=4)
+            if claim_title in valid_claims
+        ]
+        if not title or not summary:
+            continue
+        contradictions.append(
+            Contradiction(
+                title=title,
+                summary=summary,
+                claim_titles=claim_titles,
+                severity=severity,
+            )
+        )
+    return contradictions[:5]
+
+
 def _sanitize_string_list(payload: object, *, limit: int) -> list[str]:
     if not isinstance(payload, list):
         return []
@@ -429,6 +520,13 @@ def _clean_text(value: object) -> str:
     if not isinstance(value, str):
         return ""
     return " ".join(value.split())
+
+
+def _sanitize_level(value: object, *, allowed: set[str]) -> str:
+    if not isinstance(value, str):
+        return "medium"
+    text = value.strip().lower()
+    return text if text in allowed else "medium"
 
 
 _RESEARCH_CONTEXT_SCHEMA = {
@@ -458,10 +556,36 @@ _RESEARCH_CONTEXT_SCHEMA = {
         },
         "contradictions": {
             "type": "array",
-            "items": {"type": "string"},
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "title": {"type": "string"},
+                    "summary": {"type": "string"},
+                    "claim_titles": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "severity": {"type": "string"},
+                },
+                "required": ["title", "summary", "claim_titles", "severity"],
+            },
+        },
+        "source_assessments": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "source_id": {"type": "string"},
+                    "confidence": {"type": "string"},
+                    "rationale": {"type": "string"},
+                },
+                "required": ["source_id", "confidence", "rationale"],
+            },
         },
     },
-    "required": ["claims", "open_questions", "contradictions"],
+    "required": ["claims", "open_questions", "contradictions", "source_assessments"],
 }
 
 

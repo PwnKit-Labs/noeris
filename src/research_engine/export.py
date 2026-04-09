@@ -54,6 +54,20 @@ def _render_summary(record: ResearchRunRecord) -> str:
     ]
     if cost_lines:
         sections.extend(["## Cost Summary", "", *cost_lines, ""])
+    if record.memo.source_assessments:
+        sections.extend(["## Source Confidence", ""])
+        for assessment in record.memo.source_assessments:
+            sections.append(
+                f"- `{assessment.source_id}` | confidence=`{assessment.confidence}` | {assessment.rationale}"
+            )
+        sections.append("")
+    if record.memo.contradictions:
+        sections.extend(["## Contradictions", ""])
+        for contradiction in record.memo.contradictions:
+            sections.append(
+                f"- **{contradiction.title}** (`{contradiction.severity}`): {contradiction.summary}"
+            )
+        sections.append("")
     sections.extend(
         [
             "## Checks",

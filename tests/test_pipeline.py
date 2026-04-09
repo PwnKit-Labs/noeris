@@ -14,6 +14,7 @@ from research_engine.components import (
 )
 from research_engine.models import (
     Claim,
+    Contradiction,
     ExperimentResult,
     ExperimentSpec,
     ExperimentStatus,
@@ -23,6 +24,7 @@ from research_engine.models import (
     ResearchMemo,
     ResearchSource,
     ResearchTopic,
+    SourceAssessment,
     VerificationReport,
 )
 from research_engine.pipeline import ResearchPipeline
@@ -50,6 +52,13 @@ class StubResearchMemory(ResearchMemory):
         return ResearchContext(
             topic=topic.name,
             sources=sources,
+            source_assessments=[
+                SourceAssessment(
+                    source_id=sources[0].identifier,
+                    confidence="high",
+                    rationale="stub confidence",
+                )
+            ],
             claims=[
                 Claim(
                     title="stub claim",
@@ -59,6 +68,14 @@ class StubResearchMemory(ResearchMemory):
                 )
             ],
             open_questions=["what next?"],
+            contradictions=[
+                Contradiction(
+                    title="stub contradiction",
+                    summary="stub contradiction summary",
+                    claim_titles=["stub claim"],
+                    severity="low",
+                )
+            ],
         )
 
 
@@ -188,7 +205,9 @@ class StubMemoWriter(MemoWriter):
             topic=cycle.topic.name,
             summary="custom memo",
             sources=cycle.context.sources,
+            source_assessments=cycle.context.source_assessments,
             claims=cycle.context.claims,
+            contradictions=cycle.context.contradictions,
             hypotheses=cycle.hypotheses,
             experiments=cycle.experiments,
             results=cycle.results,
