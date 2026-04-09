@@ -8,6 +8,7 @@ from research_engine.cli import build_pipeline
 from research_engine.executors import (
     DefaultExperimentExecutor,
     LongContextResponsesExecutor,
+    ToolUseResponsesExecutor,
 )
 from research_engine.llm import ResponsesApiClient, ResponsesProviderConfig
 from research_engine.models import ExperimentSpec, ResearchTopic
@@ -31,6 +32,29 @@ class _FakeResponsesClient:
                     {"id": "lc-1", "answer": "unknown"},
                     {"id": "lc-2", "answer": "court opinions"},
                     {"id": "lc-3", "answer": "unknown"},
+                ]
+            }
+        if "tool_use" in kwargs["schema_name"]:
+            return {
+                "judgments": [
+                    {
+                        "id": "tu-1",
+                        "terminal_first_success": True,
+                        "structured_success": False,
+                        "note": "Structured policy loses auth state.",
+                    },
+                    {
+                        "id": "tu-2",
+                        "terminal_first_success": True,
+                        "structured_success": False,
+                        "note": "Shell loops preserve local state.",
+                    },
+                    {
+                        "id": "tu-3",
+                        "terminal_first_success": True,
+                        "structured_success": True,
+                        "note": "Both paths are short enough to succeed.",
+                    },
                 ]
             }
         return {
@@ -74,6 +98,43 @@ class ExecutorTests(unittest.TestCase):
             "responses_api",
         )
 
+    def test_tool_use_responses_executor_emits_expected_artifacts(self) -> None:
+        client = _FakeResponsesClient()
+        executor = ToolUseResponsesExecutor(client=client)
+
+        results = executor.run(
+            ResearchTopic(
+                name="tool-use reliability",
+                objective="improve quality",
+                benchmark_id="tool-use-reliability",
+            ),
+            [
+                ExperimentSpec(
+                    name="exp-1",
+                    benchmark_id="tool-use-reliability",
+                    hypothesis_title="Hypothesis",
+                    success_metric="success rate",
+                    budget="small",
+                    baseline="baseline",
+                    protocol=["run"],
+                )
+            ],
+        )
+
+        self.assertEqual(len(client.calls), 1)
+        self.assertEqual(
+            results[0].artifact_payloads["task-suite.json"]["executor"],
+            "responses_api",
+        )
+        self.assertEqual(
+            results[0].artifact_payloads["success-summary.json"]["terminal_first_successes"],
+            3,
+        )
+        self.assertEqual(
+            results[0].artifact_payloads["success-summary.json"]["structured_successes"],
+            1,
+        )
+
     def test_build_pipeline_uses_live_long_context_executor(self) -> None:
         fake_client = _FakeResponsesClient()
         with unittest.mock.patch(
@@ -90,6 +151,10 @@ class ExecutorTests(unittest.TestCase):
         self.assertIsInstance(
             pipeline.experiment_executor.long_context_executor,
             LongContextResponsesExecutor,
+        )
+        self.assertIsInstance(
+            pipeline.experiment_executor.tool_use_executor,
+            ToolUseResponsesExecutor,
         )
 
 

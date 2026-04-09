@@ -400,6 +400,83 @@ class ToolUseOfflineExecutor(ExperimentExecutor):
 
 
 @dataclass(slots=True)
+class ToolUseResponsesExecutor(ExperimentExecutor):
+    """Model-backed evaluator for the tool-use benchmark."""
+
+    client: ResponsesApiClient
+
+    def run(
+        self,
+        topic: ResearchTopic,
+        experiments: list[ExperimentSpec],
+    ) -> list[ExperimentResult]:
+        del topic
+        evaluation = self.client.generate_json(
+            schema_name="tool_use_mode_judgments",
+            schema=_TOOL_USE_EVALUATION_SCHEMA,
+            instructions=(
+                "Judge each task under two execution modes: terminal-first and structured. "
+                "Return whether each mode would likely succeed, plus a short note. "
+                "Use only the task description and the stated benchmark framing."
+            ),
+            prompt=(
+                "Benchmark: tool-use-reliability\n"
+                "Terminal-first means shell-first execution with loops, curl, parsing, and state preserved in the shell.\n"
+                "Structured means a more rigid multi-tool or multi-step policy where state may be split across calls.\n\n"
+                f"Fixtures: {TOOL_USE_FIXTURES!r}"
+            ),
+            max_output_tokens=600,
+            reasoning_effort="low",
+            text_verbosity="low",
+        )
+        rows = _tool_use_rows_from_payload(evaluation)
+        terminal_successes = sum(1 for row in rows if row["mode"] == "terminal-first" and row["success"])
+        structured_successes = sum(1 for row in rows if row["mode"] == "structured" and row["success"])
+        total = len(TOOL_USE_FIXTURES)
+        terminal_rate = terminal_successes / total
+        structured_rate = structured_successes / total
+        summary = (
+            f"Responses-backed tool-use comparison completed on {total} fixtures. "
+            f"Structured success rate={structured_rate:.2f}, terminal-first success rate={terminal_rate:.2f}."
+        )
+        payloads = {
+            "task-suite.json": {
+                "benchmark": "tool-use-reliability",
+                "executor": "responses_api",
+                "model": self.client.config.model,
+                "provider": self.client.config.provider_name,
+                "fixtures": TOOL_USE_FIXTURES,
+            },
+            "terminal-transcript.jsonl": rows,
+            "tool-selection-summary.json": {
+                "structured_success_rate": structured_rate,
+                "terminal_first_success_rate": terminal_rate,
+                "winner": "terminal-first" if terminal_rate > structured_rate else "tie",
+            },
+            "success-summary.json": {
+                "total_tasks": total,
+                "structured_successes": structured_successes,
+                "terminal_first_successes": terminal_successes,
+            },
+            "error-taxonomy.md": _tool_use_failure_analysis(
+                structured_rate=structured_rate,
+                terminal_rate=terminal_rate,
+                rows=rows,
+            ),
+        }
+        return [
+            ExperimentResult(
+                spec_name=experiment.name,
+                status=ExperimentStatus.COMPLETED,
+                outcome_summary=summary,
+                artifact_refs=list(payloads.keys()),
+                artifact_payloads=payloads,
+            )
+            for experiment in experiments
+        ]
+
+
+@dataclass(slots=True)
 class MatmulOfflineExecutor(ExperimentExecutor):
     """Deterministic offline executor for the systems / matmul benchmark."""
 
@@ -541,17 +618,30 @@ def _failure_analysis(
 def _tool_use_failure_analysis(
     structured_rate: float,
     terminal_rate: float,
+    rows: list[dict[str, object]] | None = None,
 ) -> str:
     winner = "terminal-first" if terminal_rate > structured_rate else "tie"
-    return (
-        "# Error Taxonomy\n\n"
-        f"- Structured success rate: `{structured_rate:.2f}`\n"
-        f"- Terminal-first success rate: `{terminal_rate:.2f}`\n"
-        f"- Current winner: `{winner}`\n\n"
-        "## Observed failure pattern\n\n"
-        "- Structured flows lose reliability when stateful multi-step shell composition would be simpler.\n"
-        "- Terminal-first remains the default baseline until structured policies beat it on the same fixture set.\n"
-    )
+    lines = [
+        "# Error Taxonomy",
+        "",
+        f"- Structured success rate: `{structured_rate:.2f}`",
+        f"- Terminal-first success rate: `{terminal_rate:.2f}`",
+        f"- Current winner: `{winner}`",
+        "",
+        "## Observed failure pattern",
+        "",
+        "- Structured flows lose reliability when stateful multi-step shell composition would be simpler.",
+        "- Terminal-first remains the default baseline until structured policies beat it on the same fixture set.",
+    ]
+    if rows:
+        structured_failures = [
+            row for row in rows if row["mode"] == "structured" and not row["success"]
+        ]
+        if structured_failures:
+            lines.extend(["", "## Structured Failure Notes", ""])
+            for row in structured_failures:
+                lines.append(f"- {row['id']}: {row['note']}")
+    return "\n".join(lines) + "\n"
 
 
 def _matmul_comparison(rows: list[dict[str, object]], mean_uplift: float) -> str:
@@ -583,6 +673,41 @@ def _matmul_comparison(rows: list[dict[str, object]], mean_uplift: float) -> str
     return "\n".join(lines) + "\n"
 
 
+def _tool_use_rows_from_payload(payload: dict[str, object]) -> list[dict[str, object]]:
+    judgments = payload.get("judgments", [])
+    if not isinstance(judgments, list):
+        judgments = []
+    rows: list[dict[str, object]] = []
+    for item in judgments:
+        if not isinstance(item, dict):
+            continue
+        fixture_id = str(item.get("id", "")).strip()
+        terminal_success = bool(item.get("terminal_first_success"))
+        structured_success = bool(item.get("structured_success"))
+        note = " ".join(str(item.get("note", "")).split())
+        if not fixture_id:
+            continue
+        rows.append(
+            {
+                "id": fixture_id,
+                "mode": "terminal-first",
+                "success": terminal_success,
+                "event": "success" if terminal_success else "failure",
+                "note": note,
+            }
+        )
+        rows.append(
+            {
+                "id": fixture_id,
+                "mode": "structured",
+                "success": structured_success,
+                "event": "success" if structured_success else "failure",
+                "note": note,
+            }
+        )
+    return rows
+
+
 _LONG_CONTEXT_ANSWER_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
@@ -601,4 +726,32 @@ _LONG_CONTEXT_ANSWER_SCHEMA = {
         }
     },
     "required": ["answers"],
+}
+
+
+_TOOL_USE_EVALUATION_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "judgments": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "id": {"type": "string"},
+                    "terminal_first_success": {"type": "boolean"},
+                    "structured_success": {"type": "boolean"},
+                    "note": {"type": "string"},
+                },
+                "required": [
+                    "id",
+                    "terminal_first_success",
+                    "structured_success",
+                    "note",
+                ],
+            },
+        }
+    },
+    "required": ["judgments"],
 }

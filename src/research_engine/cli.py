@@ -9,7 +9,11 @@ from .agenda import DEFAULT_RESEARCH_AGENDA
 from .benchmarks import DEFAULT_BENCHMARKS, get_benchmark
 from .codex_config import load_codex_provider_config, render_github_env_setup
 from .export import export_run_bundle
-from .executors import DefaultExperimentExecutor, LongContextResponsesExecutor
+from .executors import (
+    DefaultExperimentExecutor,
+    LongContextResponsesExecutor,
+    ToolUseResponsesExecutor,
+)
 from .ingestion import (
     ArxivAtomSourceProvider,
     CompositeSourceProvider,
@@ -341,7 +345,8 @@ def build_pipeline(
         kwargs["hypothesis_planner"] = LlmHypothesisPlanner(client=client)
     if live_execution:
         kwargs["experiment_executor"] = DefaultExperimentExecutor(
-            long_context_executor=LongContextResponsesExecutor(client=client)
+            long_context_executor=LongContextResponsesExecutor(client=client),
+            tool_use_executor=ToolUseResponsesExecutor(client=client),
         )
     return ResearchPipeline(**kwargs)
 

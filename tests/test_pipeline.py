@@ -143,6 +143,29 @@ class StubLiveExperimentExecutor(ExperimentExecutor):
         ]
 
 
+class StubLiveToolUseExecutor(ExperimentExecutor):
+    def run(
+        self,
+        topic: ResearchTopic,
+        experiments: list[ExperimentSpec],
+    ) -> list[ExperimentResult]:
+        del topic
+        return [
+            ExperimentResult(
+                spec_name=experiments[0].name,
+                status=ExperimentStatus.COMPLETED,
+                outcome_summary="live tool-use benchmark run",
+                artifact_refs=["task-suite.json"],
+                artifact_payloads={
+                    "task-suite.json": {
+                        "benchmark": "tool-use-reliability",
+                        "executor": "responses_api",
+                    }
+                },
+            )
+        ]
+
+
 class StubVerifier(Verifier):
     def verify(self, cycle: ResearchCycle) -> VerificationReport:
         return VerificationReport(
@@ -348,6 +371,24 @@ class ResearchPipelineTests(unittest.TestCase):
         self.assertTrue(record.verification.passed)
         self.assertIn("model-backed benchmark execution", record.memo.summary)
         self.assertIn("cost and latency accounting", " ".join(record.memo.next_actions))
+
+    def test_live_tool_use_execution_summary_mentions_model_backed_execution(self) -> None:
+        pipeline = ResearchPipeline(
+            source_provider=StubSourceProvider(),
+            experiment_executor=StubLiveToolUseExecutor(),
+        )
+        record = pipeline.run_record_for(
+            topic=ResearchTopic(
+                name="tool-use reliability",
+                objective="improve task success",
+                benchmark_id="tool-use-reliability",
+                constraints=["benchmark_id:tool-use-reliability"],
+            ),
+            benchmark_id="tool-use-reliability",
+        )
+
+        self.assertTrue(record.verification.passed)
+        self.assertIn("model-backed benchmark execution", record.memo.summary)
 
 
 if __name__ == "__main__":

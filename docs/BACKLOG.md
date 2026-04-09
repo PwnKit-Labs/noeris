@@ -38,13 +38,14 @@ The goal is not to become a vague autonomous scientist. The goal is to make a fe
 
 ### P1: Tool-Use Evaluator Upgrade
 
-- Replace fixed synthetic success labels with model- or harness-backed task execution.
+- Expand the live tool-use evaluator beyond the current small replay harness.
 - Keep terminal-first as the baseline.
 - Measure:
   - task success
   - unforced errors
   - recovery rate
   - artifact completeness
+  - cost and latency
 
 ### P1: Research Memory Upgrade
 

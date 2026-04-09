@@ -86,6 +86,13 @@ Goal:
 
 - reduce unforced errors in multi-step tool-using agent tasks
 
+Current state:
+
+- live-source discovery works
+- model-backed planning works
+- live model-backed execution now exists for the small replay harness
+- the next upgrade is richer task fixtures and explicit cost/latency reporting
+
 Tool-use baseline:
 
 - compare terminal-first / bash-first execution against a more structured tool policy

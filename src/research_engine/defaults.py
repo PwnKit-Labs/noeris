@@ -203,8 +203,14 @@ class SeedMemoWriter(MemoWriter):
         )
         live_sources_attached = any(source.kind != "seed" for source in cycle.context.sources)
         live_responses_execution = any(
-            isinstance(result.artifact_payloads.get("eval-manifest.json"), dict)
-            and result.artifact_payloads["eval-manifest.json"].get("executor") == "responses_api"
+            (
+                isinstance(result.artifact_payloads.get("eval-manifest.json"), dict)
+                and result.artifact_payloads["eval-manifest.json"].get("executor") == "responses_api"
+            )
+            or (
+                isinstance(result.artifact_payloads.get("task-suite.json"), dict)
+                and result.artifact_payloads["task-suite.json"].get("executor") == "responses_api"
+            )
             for result in cycle.results
         )
         summary = (

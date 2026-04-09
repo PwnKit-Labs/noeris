@@ -91,6 +91,7 @@ What is real now:
 - live source discovery from arXiv and GitHub
 - model-backed claim extraction and hypothesis generation via the Responses API
 - model-backed long-context benchmark execution via the Responses API
+- model-backed tool-use benchmark execution via the Responses API
 - persisted research runs and export bundles
 - verification gates around cycle completeness
 - offline benchmark executors for long-context, tool-use, and matmul lanes
@@ -102,12 +103,13 @@ What is still incomplete:
 - ranked hypothesis selection beyond single-pass generation
 - real training / eval runtime orchestration
 - stronger failure reporting and replay UX
+- cost and latency accounting for live benchmark runs
 
 Current empirical lanes:
 
 - `matmul-speedup`: deterministic offline systems executor with benchmark artifacts
 - `long-context-reasoning`: live-source + model-backed planning, with optional live model-backed eval execution
-- `tool-use-reliability`: deterministic offline executor comparing terminal-first against structured-tool policy
+- `tool-use-reliability`: live-source + model-backed planning, with optional live model-backed terminal-first vs structured evaluation
 
 ## Current Recommendation
 
@@ -118,7 +120,8 @@ Current empirical lanes:
 ## Immediate Next Steps
 
 - make the long-context executor genuinely online instead of synthetic
-- add a real model-backed tool-use evaluator
 - persist structured contradictions and source confidence
 - push the repo-owned LLM benchmark workflow through GitHub Actions
+- add cost and latency accounting to live benchmark execution
+- broaden the live fixture sets so benchmark lanes are harder to saturate
 - keep the benchmark surface narrow and high-signal instead of expanding scope too early
