@@ -1,0 +1,32 @@
+name: Executor Request
+description: Propose or track a benchmark executor that should become real
+labels: [executor, enhancement]
+body:
+  - type: input
+    attributes:
+      label: Benchmark id
+      description: Which standing benchmark should this executor target?
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Current gap
+      description: What is still synthetic, stubbed, or missing?
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Desired executor behavior
+      description: What should a real executor actually run and compare?
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Required artifacts
+      description: Which files or outputs are required before the run counts as evidence-backed?
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Runtime constraints
+      description: Cost, model, hardware, CI lane, or API limits that shape this executor

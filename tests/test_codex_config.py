@@ -4,6 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from tests import _pathfix  # noqa: F401
+
 from research_engine.codex_config import load_codex_provider_config, render_github_env_setup
 
 

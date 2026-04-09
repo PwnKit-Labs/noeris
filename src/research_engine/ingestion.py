@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+import logging
 import os
 from typing import Protocol
 from urllib.parse import quote_plus
@@ -13,6 +14,7 @@ from .models import ResearchSource, ResearchTopic
 
 
 ATOM_NAMESPACE = {"atom": "http://www.w3.org/2005/Atom"}
+LOGGER = logging.getLogger(__name__)
 
 
 class HttpClient(Protocol):
@@ -150,6 +152,12 @@ class CompositeSourceProvider(SourceProvider):
             try:
                 provider_sources = provider.collect(topic)
             except Exception:
+                LOGGER.warning(
+                    "Source provider %s failed for topic %r",
+                    type(provider).__name__,
+                    topic.name,
+                    exc_info=True,
+                )
                 continue
             for source in provider_sources:
                 if source.identifier in seen:

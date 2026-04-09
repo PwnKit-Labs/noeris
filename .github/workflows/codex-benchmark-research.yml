@@ -1,4 +1,4 @@
-name: Codex Benchmark Research
+name: LLM Benchmark Research
 
 on:
   workflow_dispatch:
@@ -20,7 +20,7 @@ env:
   NOERIS_MAX_RESULTS: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.max_results || '3' }}
 
 jobs:
-  codex-benchmark-research:
+  llm-benchmark-research:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -41,33 +41,63 @@ jobs:
       - name: Install package
         run: python -m pip install -e .
 
-      - name: Check required secret
-        run: |
-          if [ -z "${OPENAI_API_KEY}" ]; then
-            echo "OPENAI_API_KEY is not set for this repository."
-            exit 1
-          fi
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-
       - name: Gather sources
-        run: python -m research_engine.cli sources --topic "${NOERIS_BENCHMARK_ID}" --max-results "${NOERIS_MAX_RESULTS}" > codex-sources.json
+        run: python -m research_engine.cli sources --topic "${NOERIS_BENCHMARK_ID}" --max-results "${NOERIS_MAX_RESULTS}" > noeris-sources.json
         env:
           GITHUB_TOKEN: ${{ github.token }}
 
-      - name: Run Codex research pass
-        uses: openai/codex-action@v1
-        with:
-          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
-          prompt-file: .github/codex/prompts/benchmark-research.md
-          output-file: codex-report.md
+      - name: Run Noeris LLM research cycle
+        run: python -m research_engine.cli benchmark-run "${NOERIS_BENCHMARK_ID}" --llm --max-results "${NOERIS_MAX_RESULTS}" > noeris-run.json
         env:
-          NOERIS_BENCHMARK_ID: ${{ env.NOERIS_BENCHMARK_ID }}
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Render research report
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(Path("noeris-run.json").read_text())
+          memo = payload["memo"]
+          verification = payload["verification"]
+
+          lines = [
+              f"# Noeris Benchmark Research: {payload['benchmark_id']}",
+              "",
+              f"- Run ID: `{payload['run_id']}`",
+              f"- Verification passed: `{verification['passed']}`",
+              "",
+              "## Sources",
+              "",
+          ]
+          for source in memo["sources"]:
+              lines.append(f"- **{source['title']}** ({source['kind']})")
+              lines.append(f"  - Locator: `{source['locator']}`")
+              lines.append(f"  - Excerpt: {source['excerpt']}")
+          lines.extend(["", "## Claims", ""])
+          for claim in memo["claims"]:
+              lines.append(f"- **{claim['title']}**")
+              lines.append(f"  - Source: `{claim['source']}`")
+              lines.append(f"  - Summary: {claim['summary']}")
+          lines.extend(["", "## Hypotheses", ""])
+          for hypothesis in memo["hypotheses"]:
+              lines.append(f"- **{hypothesis['title']}**")
+              lines.append(f"  - Rationale: {hypothesis['rationale']}")
+              lines.append(f"  - Expected signal: {hypothesis['expected_signal']}")
+          lines.extend(["", "## Verification", ""])
+          lines.append(f"- Checks: `{', '.join(verification['checks'])}`")
+          blockers = verification.get("blockers") or []
+          lines.append(f"- Blockers: `{', '.join(blockers) if blockers else 'none'}`")
+          Path("noeris-report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+          PY
 
       - name: Upload research artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: codex-benchmark-research-${{ github.run_id }}
+          name: llm-benchmark-research-${{ github.run_id }}
           path: |
-            codex-sources.json
-            codex-report.md
+            noeris-sources.json
+            noeris-run.json
+            noeris-report.md
+            .noeris/runs/*.json
+            .noeris/artifacts/**

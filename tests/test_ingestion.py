@@ -1,6 +1,8 @@
 import os
 import unittest
 
+from tests import _pathfix  # noqa: F401
+
 from research_engine.ingestion import (
     ArxivAtomSourceProvider,
     CompositeSourceProvider,
@@ -139,8 +141,11 @@ class IngestionProviderTests(unittest.TestCase):
         good_provider = GitHubRepositorySourceProvider(client=client, max_results=1)
         composite = CompositeSourceProvider(providers=[BrokenProvider(), good_provider])
 
-        sources = composite.collect(topic)
+        with self.assertLogs("research_engine.ingestion", level="WARNING") as captured:
+            sources = composite.collect(topic)
+
         self.assertEqual(len(sources), 1)
+        self.assertIn("Source provider BrokenProvider failed", captured.output[0])
 
 
 if __name__ == "__main__":

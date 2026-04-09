@@ -9,6 +9,16 @@ The point of these benchmarks is to force the system to:
 - define measurable experiments
 - produce real evidence or admit it has not yet done so
 
+## Benchmark Policy
+
+Each benchmark should answer three questions:
+
+1. What intervention is being proposed?
+2. What baseline is it compared against?
+3. What artifact bundle is required before we treat the result as evidence-backed?
+
+If a benchmark cannot answer those questions, it is not ready to be a standing lane.
+
 ## Initial Benchmark Tracks
 
 ### Matrix Multiplication Speedup
@@ -52,6 +62,12 @@ Goal:
 
 - improve reasoning quality over long contexts under bounded cost
 
+Current state:
+
+- live-source discovery works
+- model-backed planning works
+- execution is still partly synthetic and must be upgraded
+
 Required artifacts:
 
 - `eval-manifest.json`
@@ -90,6 +106,15 @@ Required artifacts:
 CI lane:
 
 - scheduled benchmark lane
+
+## Current Benchmark Surface
+
+Today the intended split is:
+
+- planning can be live and model-backed
+- execution can be either offline deterministic or live benchmark-specific
+
+That split is deliberate. It lets Noeris become useful before every executor is production-grade.
 
 ## CI Role
 

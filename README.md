@@ -1,6 +1,6 @@
 # Noeris
 
-Working codename for an autonomous ML/LLM research engine.
+Working codename for a benchmark-first ML/LLM research engine.
 
 The name is intentionally provisional and suitable for a private repo. The repository exists to make the product thesis concrete before locking a company or product name.
 
@@ -46,39 +46,66 @@ This repository is the first scaffold for that loop, starting with ML/LLMs becau
 ## Quick Start
 
 ```bash
-python3 -m pip install -e .
-python3 -m research_engine.cli thesis
-python3 -m research_engine.cli architecture
-python3 -m research_engine.cli agenda
-python3 -m research_engine.cli benchmarks
-python3 -m research_engine.cli ci-env
-python3 -m research_engine.cli sources --topic "long-context reasoning"
-python3 -m research_engine.cli run --topic "improve long-context reasoning"
-python3 -m research_engine.cli benchmark-run matmul-speedup
-python3 -m research_engine.cli runs
-python3 -m research_engine.cli export-run <run_id>
-python3 -m research_engine.cli cycle --topic "improve long-context reasoning"
-python3 -m unittest discover -s tests
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -e .
+python -m research_engine.cli thesis
+python -m research_engine.cli architecture
+python -m research_engine.cli agenda
+python -m research_engine.cli benchmarks
+python -m research_engine.cli ci-env
+python -m research_engine.cli sources --topic "long-context reasoning"
+python -m research_engine.cli cycle --topic "long-context reasoning" --llm --max-results 1
+python -m research_engine.cli benchmark-run long-context-reasoning --llm --max-results 1
+python -m research_engine.cli benchmark-run matmul-speedup
+python -m research_engine.cli runs
+python -m research_engine.cli export-run <run_id>
+python -m unittest discover -s tests
 ```
+
+## What Noeris Is
+
+Noeris is not a general "deep research" chatbot.
+
+It is a benchmark-first research loop:
+
+1. Discover fresh sources for a standing benchmark.
+2. Build structured claims and open questions.
+3. Propose bounded hypotheses.
+4. Convert them into benchmark-shaped experiment specs.
+5. Run an executor.
+6. Persist evidence, artifacts, and next actions.
+
+The intended product shape is:
+
+- research planning grounded in fresh sources
+- benchmark-specific execution lanes
+- artifact-backed verification and replay
 
 ## Current Status
 
-This is a scaffold, not the finished product. The current package defines explicit seams so later work can plug in:
+The repo has crossed from pure scaffold into an early working loop.
 
-- literature/repo ingestion
-- research memory and claim graph construction
-- hypothesis ranking
-- experiment generation
-- execution backends
-- verification and reporting
-- verification gates between cycle construction and memo publication
-- persisted research runs
-- standing benchmark goals
+What is real now:
+
+- live source discovery from arXiv and GitHub
+- model-backed claim extraction and hypothesis generation via the Responses API
+- persisted research runs and export bundles
+- verification gates around cycle completeness
+- offline benchmark executors for long-context, tool-use, and matmul lanes
+
+What is still incomplete:
+
+- live experiment executors for LLM and agent benchmarks
+- contradiction-aware research memory
+- ranked hypothesis selection beyond single-pass generation
+- real training / eval runtime orchestration
+- stronger failure reporting and replay UX
 
 Current empirical lanes:
 
 - `matmul-speedup`: deterministic offline systems executor with benchmark artifacts
-- `long-context-reasoning`: deterministic offline executor with eval artifacts
+- `long-context-reasoning`: live-source + model-backed planning, with deterministic offline eval execution
 - `tool-use-reliability`: deterministic offline executor comparing terminal-first against structured-tool policy
 
 ## Current Recommendation
@@ -86,3 +113,11 @@ Current empirical lanes:
 - Keep this as a private repo for now.
 - Incubate it as a separate project under a `PwnKit Labs` umbrella.
 - Start with post-training, evaluation, and agent-system research before touching pre-training.
+
+## Immediate Next Steps
+
+- make the long-context executor genuinely online instead of synthetic
+- add a real model-backed tool-use evaluator
+- persist structured contradictions and source confidence
+- push the repo-owned LLM benchmark workflow through GitHub Actions
+- keep the benchmark surface narrow and high-signal instead of expanding scope too early

@@ -4,6 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from tests import _pathfix  # noqa: F401
+
 from research_engine.models import ResearchTopic
 from research_engine.pipeline import ResearchPipeline
 from research_engine.store import JsonFileRunStore

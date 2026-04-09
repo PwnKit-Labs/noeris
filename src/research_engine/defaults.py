@@ -198,11 +198,44 @@ class SeedMemoWriter(MemoWriter):
         cycle: ResearchCycle,
         verification: VerificationReport,
     ) -> ResearchMemo:
+        empirical_execution = any(
+            result.status != ExperimentStatus.NOT_RUN for result in cycle.results
+        )
+        live_sources_attached = any(source.kind != "seed" for source in cycle.context.sources)
+        summary = (
+            "Initial cycle scaffolded from the topic objective. "
+            "Real source ingestion, ranking, and experiment execution are not "
+            "wired in yet."
+        )
         next_actions = [
             "Attach a live paper and repository ingestion backend.",
             "Persist a prior-art graph with contradiction tracking.",
             "Replace the seed executor with a reproducible runtime.",
         ]
+        if live_sources_attached:
+            summary = (
+                "Research cycle executed with live source discovery and structured "
+                "planning, but no experiment executor is attached yet."
+            )
+            next_actions[0] = "Attach or select an experiment executor for this topic."
+        if empirical_execution:
+            summary = (
+                "Initial cycle scaffolded from the topic objective and executed "
+                "through the current deterministic benchmark lane. Source "
+                "ingestion and ranking still rely on seed components, so this "
+                "remains a bounded offline harness."
+            )
+            if live_sources_attached:
+                summary = (
+                    "Research cycle executed with live source discovery, model-backed "
+                    "planning, and the current deterministic benchmark lane. This "
+                    "remains a bounded offline harness until a live experiment runtime "
+                    "is attached."
+                )
+            next_actions[-1] = (
+                "Replace the current synthetic offline executor with a "
+                "benchmark-specific live runtime."
+            )
         if verification.blockers:
             next_actions.insert(
                 0,
@@ -211,11 +244,7 @@ class SeedMemoWriter(MemoWriter):
 
         return ResearchMemo(
             topic=cycle.topic.name,
-            summary=(
-                "Initial cycle scaffolded from the topic objective. "
-                "Real source ingestion, ranking, and experiment execution are not "
-                "wired in yet."
-            ),
+            summary=summary,
             sources=cycle.context.sources,
             claims=cycle.context.claims,
             hypotheses=cycle.hypotheses,

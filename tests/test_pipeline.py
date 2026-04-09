@@ -1,5 +1,7 @@
 import unittest
 
+from tests import _pathfix  # noqa: F401
+
 from research_engine.cli import ARCHITECTURE, THESIS
 from research_engine.components import (
     ExperimentExecutor,
@@ -233,6 +235,9 @@ class ResearchPipelineTests(unittest.TestCase):
         self.assertTrue(record.verification.passed)
         self.assertIn("execution_backends_attached", record.verification.checks)
         self.assertEqual(record.cycle.results[0].status, ExperimentStatus.COMPLETED)
+        self.assertNotIn("not wired in yet", record.memo.summary)
+        self.assertIn("deterministic benchmark lane", record.memo.summary)
+        self.assertIn("synthetic offline executor", " ".join(record.memo.next_actions))
         self.assertIn(
             "eval-manifest.json",
             record.cycle.results[0].artifact_refs,
@@ -275,6 +280,32 @@ class ResearchPipelineTests(unittest.TestCase):
             "raw-timing-results.json",
             record.cycle.results[0].artifact_refs,
         )
+
+    def test_non_benchmark_run_keeps_planning_only_summary(self) -> None:
+        pipeline = ResearchPipeline()
+        record = pipeline.run_record(
+            ResearchTopic(
+                name="memory routing",
+                objective="improve measurable ML/LLM performance",
+            )
+        )
+
+        self.assertFalse(record.verification.passed)
+        self.assertIn("not wired in yet", record.memo.summary)
+        self.assertIn("Replace the seed executor", " ".join(record.memo.next_actions))
+
+    def test_live_source_planning_summary_mentions_missing_executor(self) -> None:
+        pipeline = ResearchPipeline(source_provider=StubSourceProvider())
+        record = pipeline.run_record(
+            ResearchTopic(
+                name="long-context reasoning",
+                objective="improve benchmark performance",
+            )
+        )
+
+        self.assertFalse(record.verification.passed)
+        self.assertIn("live source discovery", record.memo.summary)
+        self.assertIn("Attach or select an experiment executor", record.memo.next_actions[1])
 
 
 if __name__ == "__main__":

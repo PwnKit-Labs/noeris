@@ -15,6 +15,7 @@ from .ingestion import (
     GitHubRepositorySourceProvider,
     UrllibHttpClient,
 )
+from .llm import LlmConfigurationError, LlmHypothesisPlanner, LlmResearchMemory, ResponsesApiClient
 from .models import ResearchTopic
 from .pipeline import ResearchPipeline
 from .store import JsonFileRunStore
@@ -56,6 +57,17 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         help="optional operating constraint; repeatable",
     )
+    cycle_parser.add_argument(
+        "--llm",
+        action="store_true",
+        help="use the configured Responses API provider for research memory and hypothesis generation",
+    )
+    cycle_parser.add_argument(
+        "--max-results",
+        type=int,
+        default=3,
+        help="max live source results per provider when --llm is enabled",
+    )
 
     sources_parser = subparsers.add_parser(
         "sources",
@@ -82,6 +94,17 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         help="optional operating constraint; repeatable",
     )
+    run_parser.add_argument(
+        "--llm",
+        action="store_true",
+        help="use the configured Responses API provider for research memory and hypothesis generation",
+    )
+    run_parser.add_argument(
+        "--max-results",
+        type=int,
+        default=3,
+        help="max live source results per provider when --llm is enabled",
+    )
 
     subparsers.add_parser("runs", help="list persisted research runs")
 
@@ -106,6 +129,17 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark_run_parser.add_argument(
         "benchmark_id",
         help="identifier of the benchmark goal to run",
+    )
+    benchmark_run_parser.add_argument(
+        "--llm",
+        action="store_true",
+        help="use the configured Responses API provider for research memory and hypothesis generation",
+    )
+    benchmark_run_parser.add_argument(
+        "--max-results",
+        type=int,
+        default=3,
+        help="max live source results per provider when --llm is enabled",
     )
 
     return parser
@@ -173,7 +207,11 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"run_id": args.run_id, "bundle_dir": str(bundle_dir)}, indent=2))
         return 0
     if args.command == "run":
-        pipeline = ResearchPipeline()
+        try:
+            pipeline = build_pipeline(use_llm=args.llm, max_results=args.max_results)
+        except LlmConfigurationError as exc:
+            print(json.dumps({"error": str(exc)}, indent=2))
+            return 1
         topic = ResearchTopic(
             name=args.topic,
             objective=args.objective,
@@ -197,7 +235,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "benchmark-run":
         benchmark = get_benchmark(args.benchmark_id)
-        pipeline = ResearchPipeline()
+        try:
+            pipeline = build_pipeline(use_llm=args.llm, max_results=args.max_results)
+        except LlmConfigurationError as exc:
+            print(json.dumps({"error": str(exc)}, indent=2))
+            return 1
         topic = ResearchTopic(
             name=benchmark.name.lower(),
             objective=benchmark.goal,
@@ -232,7 +274,11 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
 
-    pipeline = ResearchPipeline()
+    try:
+        pipeline = build_pipeline(use_llm=args.llm, max_results=args.max_results)
+    except LlmConfigurationError as exc:
+        print(json.dumps({"error": str(exc)}, indent=2))
+        return 1
     topic = ResearchTopic(
         name=args.topic,
         objective=args.objective,
@@ -240,6 +286,30 @@ def main(argv: list[str] | None = None) -> int:
     )
     print(json.dumps(pipeline.run_cycle_dict(topic), indent=2))
     return 0
+
+
+def build_pipeline(
+    *,
+    use_llm: bool,
+    max_results: int,
+) -> ResearchPipeline:
+    if not use_llm:
+        return ResearchPipeline()
+
+    client = ResponsesApiClient.from_environment()
+    return ResearchPipeline(
+        source_provider=CompositeSourceProvider(
+            providers=[
+                ArxivAtomSourceProvider(client=UrllibHttpClient(), max_results=max_results),
+                GitHubRepositorySourceProvider(
+                    client=UrllibHttpClient(),
+                    max_results=max_results,
+                ),
+            ]
+        ),
+        research_memory=LlmResearchMemory(client=client, max_sources=max_results * 2),
+        hypothesis_planner=LlmHypothesisPlanner(client=client),
+    )
 
 
 if __name__ == "__main__":

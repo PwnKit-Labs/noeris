@@ -7,24 +7,26 @@
 - define cycle contract
 - establish repo skeleton
 
-## Phase 1: Source Ingestion
+## Phase 1: Source And Planning
 
 - arXiv and repo ingestion
-- benchmark metadata feeds
 - basic deduplication and normalization
+- model-backed claim extraction
+- model-backed bounded hypothesis generation
 
-## Phase 2: Research Memory
+## Phase 2: Benchmark-First Execution
+
+- long-context executor
+- tool-use executor
+- matmul runtime path
+- artifact capture and comparison
+
+## Phase 3: Research Memory
 
 - claim graph
 - method graph
 - contradiction and gap detection
-- topic timelines
-
-## Phase 3: Experimentation
-
-- experiment template library
-- budgeted execution runtime
-- artifact capture and comparison
+- topic timelines and source freshness
 
 ## Phase 4: Research Output
 
@@ -37,4 +39,3 @@
 - standing topics
 - daily/weekly digests
 - automatic follow-up experiment generation
-

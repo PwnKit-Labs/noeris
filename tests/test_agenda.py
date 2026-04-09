@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import unittest
 
+from tests import _pathfix  # noqa: F401
+
 from research_engine.agenda import DEFAULT_RESEARCH_AGENDA
 
 
