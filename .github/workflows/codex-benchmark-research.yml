@@ -88,6 +88,11 @@ jobs:
                   lines.append(
                       f"- Estimated cost USD: `{cost_summary['estimated_cost_usd']}`"
                   )
+              warnings = cost_summary.get("warnings") or []
+              if warnings:
+                  lines.append("- Warnings:")
+                  for warning in warnings:
+                      lines.append(f"  - {warning}")
               lines.append("")
           lines.extend(["## Sources", ""])
           for source in memo["sources"]:

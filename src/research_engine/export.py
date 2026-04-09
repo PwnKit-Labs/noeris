@@ -43,6 +43,10 @@ def _render_summary(record: ResearchRunRecord) -> str:
         cost_lines.append(f"- Elapsed ms: `{payload.get('elapsed_ms', 0)}`")
         if payload.get("estimated_cost_usd") is not None:
             cost_lines.append(f"- Estimated cost USD: `{payload['estimated_cost_usd']}`")
+        warnings = payload.get("warnings") or []
+        if warnings:
+            cost_lines.append("- Warnings:")
+            cost_lines.extend(f"  - {warning}" for warning in warnings)
     sections = [
         f"# Noeris Run {record.run_id}",
         "",

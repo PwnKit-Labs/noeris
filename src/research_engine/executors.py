@@ -969,12 +969,32 @@ def _build_cost_summary(
     total_tokens = sum(item["total_tokens"] for item in usages)
     input_price = _float_env("NOERIS_INPUT_TOKEN_COST_USD_PER_1M")
     output_price = _float_env("NOERIS_OUTPUT_TOKEN_COST_USD_PER_1M")
+    cost_budget_usd = _float_env("NOERIS_COST_BUDGET_USD")
+    latency_budget_ms = _int_env("NOERIS_LATENCY_BUDGET_MS")
     estimated_cost_usd = None
     if input_price is not None and output_price is not None:
         estimated_cost_usd = round(
             (input_tokens / 1_000_000 * input_price)
             + (output_tokens / 1_000_000 * output_price),
             6,
+        )
+    cost_budget_exceeded = (
+        estimated_cost_usd is not None
+        and cost_budget_usd is not None
+        and estimated_cost_usd > cost_budget_usd
+    )
+    latency_budget_exceeded = (
+        latency_budget_ms is not None
+        and elapsed_ms > latency_budget_ms
+    )
+    warnings: list[str] = []
+    if cost_budget_exceeded:
+        warnings.append(
+            f"Estimated cost {estimated_cost_usd} USD exceeded budget {cost_budget_usd} USD."
+        )
+    if latency_budget_exceeded:
+        warnings.append(
+            f"Elapsed time {elapsed_ms} ms exceeded budget {latency_budget_ms} ms."
         )
     return {
         "provider": provider,
@@ -985,6 +1005,11 @@ def _build_cost_summary(
         "total_tokens": total_tokens,
         "elapsed_ms": elapsed_ms,
         "estimated_cost_usd": estimated_cost_usd,
+        "cost_budget_usd": cost_budget_usd,
+        "latency_budget_ms": latency_budget_ms,
+        "cost_budget_exceeded": cost_budget_exceeded,
+        "latency_budget_exceeded": latency_budget_exceeded,
+        "warnings": warnings,
     }
 
 
@@ -994,6 +1019,16 @@ def _float_env(name: str) -> float | None:
         return None
     try:
         return float(value)
+    except ValueError:
+        return None
+
+
+def _int_env(name: str) -> int | None:
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return None
+    try:
+        return int(value)
     except ValueError:
         return None
 

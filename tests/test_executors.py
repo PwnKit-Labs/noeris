@@ -135,6 +135,45 @@ class ExecutorTests(unittest.TestCase):
             0,
         )
 
+    def test_cost_summary_tracks_thresholds_when_pricing_env_is_set(self) -> None:
+        client = _FakeResponsesClient()
+        executor = LongContextResponsesExecutor(client=client)
+
+        with unittest.mock.patch.dict(
+            "os.environ",
+            {
+                "NOERIS_INPUT_TOKEN_COST_USD_PER_1M": "1.0",
+                "NOERIS_OUTPUT_TOKEN_COST_USD_PER_1M": "2.0",
+                "NOERIS_COST_BUDGET_USD": "0.0001",
+                "NOERIS_LATENCY_BUDGET_MS": "1",
+            },
+            clear=False,
+        ):
+            results = executor.run(
+                ResearchTopic(
+                    name="long-context reasoning",
+                    objective="improve quality",
+                    benchmark_id="long-context-reasoning",
+                ),
+                [
+                    ExperimentSpec(
+                        name="exp-1",
+                        benchmark_id="long-context-reasoning",
+                        hypothesis_title="Hypothesis",
+                        success_metric="accuracy",
+                        budget="small",
+                        baseline="baseline",
+                        protocol=["run"],
+                    )
+                ],
+            )
+
+        cost_summary = results[0].artifact_payloads["cost-summary.json"]
+        self.assertIsNotNone(cost_summary["estimated_cost_usd"])
+        self.assertTrue(cost_summary["cost_budget_exceeded"])
+        self.assertTrue(cost_summary["warnings"])
+        self.assertIn("Estimated cost", cost_summary["warnings"][0])
+
     def test_tool_use_responses_executor_emits_expected_artifacts(self) -> None:
         client = _FakeResponsesClient()
         executor = ToolUseResponsesExecutor(client=client)
