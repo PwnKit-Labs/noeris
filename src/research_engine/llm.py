@@ -76,6 +76,12 @@ class ResponsesProviderConfig:
         return headers
 
 
+@dataclass(slots=True)
+class ResponsesJsonResult:
+    data: dict[str, object]
+    raw_response: dict[str, object]
+
+
 def load_responses_provider_config() -> ResponsesProviderConfig:
     provider = load_codex_provider_config()
     if provider is not None:
@@ -160,6 +166,27 @@ class ResponsesApiClient:
         reasoning_effort: str | None = None,
         text_verbosity: str = "medium",
     ) -> dict[str, object]:
+        return self.generate_json_result(
+            schema_name=schema_name,
+            schema=schema,
+            instructions=instructions,
+            prompt=prompt,
+            max_output_tokens=max_output_tokens,
+            reasoning_effort=reasoning_effort,
+            text_verbosity=text_verbosity,
+        ).data
+
+    def generate_json_result(
+        self,
+        *,
+        schema_name: str,
+        schema: dict[str, object],
+        instructions: str,
+        prompt: str,
+        max_output_tokens: int | None = None,
+        reasoning_effort: str | None = None,
+        text_verbosity: str = "medium",
+    ) -> ResponsesJsonResult:
         payload = {
             "model": self.config.model,
             "input": [
@@ -198,7 +225,10 @@ class ResponsesApiClient:
             else:
                 message = str(error)
             raise LlmApiError(message)
-        return json.loads(self._extract_output_text(response))
+        return ResponsesJsonResult(
+            data=json.loads(self._extract_output_text(response)),
+            raw_response=response,
+        )
 
     def _extract_output_text(self, payload: dict[str, object]) -> str:
         if isinstance(payload.get("output_text"), str):
@@ -215,6 +245,17 @@ class ResponsesApiClient:
                 if content.get("type") == "output_text" and isinstance(content.get("text"), str):
                     return str(content["text"])
         raise LlmApiError("Responses API reply did not include output_text.")
+
+
+def extract_usage(payload: dict[str, object]) -> dict[str, int]:
+    usage = payload.get("usage")
+    if not isinstance(usage, dict):
+        return {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+    return {
+        "input_tokens": int(usage.get("input_tokens", 0) or 0),
+        "output_tokens": int(usage.get("output_tokens", 0) or 0),
+        "total_tokens": int(usage.get("total_tokens", 0) or 0),
+    }
 
 
 @dataclass(slots=True)

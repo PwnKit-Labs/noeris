@@ -92,6 +92,7 @@ What is real now:
 - model-backed claim extraction and hypothesis generation via the Responses API
 - model-backed long-context benchmark execution via the Responses API
 - model-backed tool-use benchmark execution via the Responses API
+- token and latency accounting artifacts for live benchmark runs
 - persisted research runs and export bundles
 - verification gates around cycle completeness
 - offline benchmark executors for long-context, tool-use, and matmul lanes
@@ -102,7 +103,6 @@ What is still incomplete:
 - ranked hypothesis selection beyond single-pass generation
 - real training / eval runtime orchestration
 - stronger failure reporting and replay UX
-- cost and latency accounting for live benchmark runs
 - broader and harder-to-saturate live fixture sets
 
 Current empirical lanes:
@@ -120,7 +120,6 @@ Current empirical lanes:
 ## Immediate Next Steps
 
 - persist structured contradictions and source confidence
-- add cost and latency accounting to live benchmark execution
 - broaden the live fixture sets so benchmark lanes are harder to saturate
 - add richer benchmark-specific experiment templates and ranking
 - keep the benchmark surface narrow and high-signal instead of expanding scope too early

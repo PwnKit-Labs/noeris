@@ -251,7 +251,7 @@ class SeedMemoWriter(MemoWriter):
                 )
                 next_actions = [
                     "Persist contradiction tracking and source confidence across runs.",
-                    "Add cost and latency accounting to live benchmark execution.",
+                    "Provide pricing inputs and budget thresholds for estimated live-run cost accounting.",
                     "Broaden the benchmark fixture set beyond the current small replay harness.",
                 ]
             else:

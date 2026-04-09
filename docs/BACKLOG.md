@@ -16,7 +16,7 @@ The goal is not to become a vague autonomous scientist. The goal is to make a fe
   - candidate outputs
   - scored metrics
   - failure analysis
-  - cost and latency accounting
+  - richer cost and latency accounting, including CI summaries and pricing inputs
 
 ### P0: Stabilize Repo-Owned LLM CI Lane
 

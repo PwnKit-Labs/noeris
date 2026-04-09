@@ -370,7 +370,7 @@ class ResearchPipelineTests(unittest.TestCase):
 
         self.assertTrue(record.verification.passed)
         self.assertIn("model-backed benchmark execution", record.memo.summary)
-        self.assertIn("cost and latency accounting", " ".join(record.memo.next_actions))
+        self.assertIn("estimated live-run cost accounting", " ".join(record.memo.next_actions))
 
     def test_live_tool_use_execution_summary_mentions_model_backed_execution(self) -> None:
         pipeline = ResearchPipeline(

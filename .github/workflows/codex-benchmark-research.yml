@@ -60,6 +60,12 @@ jobs:
           payload = json.loads(Path("noeris-run.json").read_text())
           memo = payload["memo"]
           verification = payload["verification"]
+          cost_summary = None
+          for result in memo["results"]:
+              payloads = result.get("artifact_payloads", {})
+              if "cost-summary.json" in payloads:
+                  cost_summary = payloads["cost-summary.json"]
+                  break
 
           lines = [
               f"# Noeris Benchmark Research: {payload['benchmark_id']}",
@@ -67,9 +73,23 @@ jobs:
               f"- Run ID: `{payload['run_id']}`",
               f"- Verification passed: `{verification['passed']}`",
               "",
-              "## Sources",
-              "",
           ]
+          if cost_summary:
+              lines.extend(
+                  [
+                      "## Cost Summary",
+                      "",
+                      f"- Requests: `{cost_summary.get('request_count', 0)}`",
+                      f"- Tokens: `{cost_summary.get('total_tokens', 0)}`",
+                      f"- Elapsed ms: `{cost_summary.get('elapsed_ms', 0)}`",
+                  ]
+              )
+              if cost_summary.get("estimated_cost_usd") is not None:
+                  lines.append(
+                      f"- Estimated cost USD: `{cost_summary['estimated_cost_usd']}`"
+                  )
+              lines.append("")
+          lines.extend(["## Sources", ""])
           for source in memo["sources"]:
               lines.append(f"- **{source['title']}** ({source['kind']})")
               lines.append(f"  - Locator: `{source['locator']}`")

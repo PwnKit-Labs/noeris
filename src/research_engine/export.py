@@ -33,24 +33,48 @@ def _render_summary(record: ResearchRunRecord) -> str:
     benchmark_line = (
         f"- Benchmark: `{record.benchmark_id}`\n" if record.benchmark_id else ""
     )
-    return (
-        f"# Noeris Run {record.run_id}\n\n"
-        f"- Created: `{record.created_at}`\n"
-        f"{benchmark_line}"
-        f"- Topic: `{record.cycle.topic.name}`\n"
-        f"- Verification passed: `{record.verification.passed}`\n\n"
-        "## Checks\n\n"
-        + "\n".join(f"- `{check}`" for check in record.verification.checks)
-        + "\n\n## Blockers\n\n"
-        + (
-            "\n".join(f"- `{blocker}`" for blocker in record.verification.blockers)
-            if record.verification.blockers
-            else "- none"
-        )
-        + "\n\n## Next Actions\n\n"
-        + "\n".join(f"- {item}" for item in record.memo.next_actions)
-        + "\n"
+    cost_lines = []
+    for result in record.cycle.results:
+        payload = result.artifact_payloads.get("cost-summary.json")
+        if not isinstance(payload, dict):
+            continue
+        cost_lines.append(f"- Requests: `{payload.get('request_count', 0)}`")
+        cost_lines.append(f"- Tokens: `{payload.get('total_tokens', 0)}`")
+        cost_lines.append(f"- Elapsed ms: `{payload.get('elapsed_ms', 0)}`")
+        if payload.get("estimated_cost_usd") is not None:
+            cost_lines.append(f"- Estimated cost USD: `{payload['estimated_cost_usd']}`")
+    sections = [
+        f"# Noeris Run {record.run_id}",
+        "",
+        f"- Created: `{record.created_at}`",
+        benchmark_line.rstrip() if benchmark_line else None,
+        f"- Topic: `{record.cycle.topic.name}`",
+        f"- Verification passed: `{record.verification.passed}`",
+        "",
+    ]
+    if cost_lines:
+        sections.extend(["## Cost Summary", "", *cost_lines, ""])
+    sections.extend(
+        [
+            "## Checks",
+            "",
+            *[f"- `{check}`" for check in record.verification.checks],
+            "",
+            "## Blockers",
+            "",
+            *(
+                [f"- `{blocker}`" for blocker in record.verification.blockers]
+                if record.verification.blockers
+                else ["- none"]
+            ),
+            "",
+            "## Next Actions",
+            "",
+            *[f"- {item}" for item in record.memo.next_actions],
+            "",
+        ]
     )
+    return "\n".join(line for line in sections if line is not None)
 
 
 def _write_result_artifacts(record: ResearchRunRecord, base_dir: Path) -> None:

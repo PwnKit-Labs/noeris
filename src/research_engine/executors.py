@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from dataclasses import field
+import os
+from time import perf_counter
 
 from .components import ExperimentExecutor
-from .llm import ResponsesApiClient
+from .llm import ResponsesApiClient, extract_usage
 from .models import ExperimentResult, ExperimentSpec, ExperimentStatus, ResearchTopic
 
 
@@ -213,8 +215,14 @@ class LongContextResponsesExecutor(ExperimentExecutor):
         experiments: list[ExperimentSpec],
     ) -> list[ExperimentResult]:
         del topic
-        baseline_rows = self._evaluate(condition="baseline", truncated=True)
-        candidate_rows = self._evaluate(condition="candidate", truncated=False)
+        baseline_rows, baseline_usage, baseline_elapsed_ms = self._evaluate(
+            condition="baseline",
+            truncated=True,
+        )
+        candidate_rows, candidate_usage, candidate_elapsed_ms = self._evaluate(
+            condition="candidate",
+            truncated=False,
+        )
         baseline_accuracy = _accuracy(baseline_rows)
         candidate_accuracy = _accuracy(candidate_rows)
         failures = [
@@ -222,6 +230,13 @@ class LongContextResponsesExecutor(ExperimentExecutor):
             for row in candidate_rows
             if not row["correct"]
         ]
+        cost_summary = _build_cost_summary(
+            provider=self.client.config.provider_name,
+            model=self.client.config.model,
+            request_count=2,
+            usages=[baseline_usage, candidate_usage],
+            elapsed_ms=baseline_elapsed_ms + candidate_elapsed_ms,
+        )
         summary = (
             f"Responses-backed long-context eval completed on {len(LONG_CONTEXT_FIXTURES)} fixtures. "
             f"Baseline accuracy={baseline_accuracy:.2f}, candidate accuracy={candidate_accuracy:.2f}."
@@ -250,6 +265,7 @@ class LongContextResponsesExecutor(ExperimentExecutor):
                 "accuracy": candidate_accuracy,
                 "rows": candidate_rows,
             },
+            "cost-summary.json": cost_summary,
             "failure-analysis.md": _failure_analysis(
                 baseline_accuracy=baseline_accuracy,
                 candidate_accuracy=candidate_accuracy,
@@ -272,7 +288,7 @@ class LongContextResponsesExecutor(ExperimentExecutor):
         *,
         condition: str,
         truncated: bool,
-    ) -> list[dict[str, object]]:
+    ) -> tuple[list[dict[str, object]], dict[str, int], int]:
         fixtures = [
             {
                 "id": item["id"],
@@ -286,7 +302,8 @@ class LongContextResponsesExecutor(ExperimentExecutor):
             }
             for item in LONG_CONTEXT_FIXTURES
         ]
-        payload = self.client.generate_json(
+        started = perf_counter()
+        result = self.client.generate_json_result(
             schema_name=f"long_context_{condition}_answers",
             schema=_LONG_CONTEXT_ANSWER_SCHEMA,
             instructions=(
@@ -302,6 +319,8 @@ class LongContextResponsesExecutor(ExperimentExecutor):
             reasoning_effort="low",
             text_verbosity="low",
         )
+        elapsed_ms = int((perf_counter() - started) * 1000)
+        payload = result.data
         answer_map = {
             item["id"]: _clean_prediction(item["answer"])
             for item in payload.get("answers", [])
@@ -320,7 +339,7 @@ class LongContextResponsesExecutor(ExperimentExecutor):
                     "correct": prediction == item["expected"],
                 }
             )
-        return rows
+        return rows, extract_usage(result.raw_response), elapsed_ms
 
 
 @dataclass(slots=True)
@@ -411,7 +430,8 @@ class ToolUseResponsesExecutor(ExperimentExecutor):
         experiments: list[ExperimentSpec],
     ) -> list[ExperimentResult]:
         del topic
-        evaluation = self.client.generate_json(
+        started = perf_counter()
+        result = self.client.generate_json_result(
             schema_name="tool_use_mode_judgments",
             schema=_TOOL_USE_EVALUATION_SCHEMA,
             instructions=(
@@ -429,12 +449,21 @@ class ToolUseResponsesExecutor(ExperimentExecutor):
             reasoning_effort="low",
             text_verbosity="low",
         )
+        elapsed_ms = int((perf_counter() - started) * 1000)
+        evaluation = result.data
         rows = _tool_use_rows_from_payload(evaluation)
         terminal_successes = sum(1 for row in rows if row["mode"] == "terminal-first" and row["success"])
         structured_successes = sum(1 for row in rows if row["mode"] == "structured" and row["success"])
         total = len(TOOL_USE_FIXTURES)
         terminal_rate = terminal_successes / total
         structured_rate = structured_successes / total
+        cost_summary = _build_cost_summary(
+            provider=self.client.config.provider_name,
+            model=self.client.config.model,
+            request_count=1,
+            usages=[extract_usage(result.raw_response)],
+            elapsed_ms=elapsed_ms,
+        )
         summary = (
             f"Responses-backed tool-use comparison completed on {total} fixtures. "
             f"Structured success rate={structured_rate:.2f}, terminal-first success rate={terminal_rate:.2f}."
@@ -458,6 +487,7 @@ class ToolUseResponsesExecutor(ExperimentExecutor):
                 "structured_successes": structured_successes,
                 "terminal_first_successes": terminal_successes,
             },
+            "cost-summary.json": cost_summary,
             "error-taxonomy.md": _tool_use_failure_analysis(
                 structured_rate=structured_rate,
                 terminal_rate=terminal_rate,
@@ -706,6 +736,48 @@ def _tool_use_rows_from_payload(payload: dict[str, object]) -> list[dict[str, ob
             }
         )
     return rows
+
+
+def _build_cost_summary(
+    *,
+    provider: str,
+    model: str,
+    request_count: int,
+    usages: list[dict[str, int]],
+    elapsed_ms: int,
+) -> dict[str, object]:
+    input_tokens = sum(item["input_tokens"] for item in usages)
+    output_tokens = sum(item["output_tokens"] for item in usages)
+    total_tokens = sum(item["total_tokens"] for item in usages)
+    input_price = _float_env("NOERIS_INPUT_TOKEN_COST_USD_PER_1M")
+    output_price = _float_env("NOERIS_OUTPUT_TOKEN_COST_USD_PER_1M")
+    estimated_cost_usd = None
+    if input_price is not None and output_price is not None:
+        estimated_cost_usd = round(
+            (input_tokens / 1_000_000 * input_price)
+            + (output_tokens / 1_000_000 * output_price),
+            6,
+        )
+    return {
+        "provider": provider,
+        "model": model,
+        "request_count": request_count,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+        "elapsed_ms": elapsed_ms,
+        "estimated_cost_usd": estimated_cost_usd,
+    }
+
+
+def _float_env(name: str) -> float | None:
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        return None
 
 
 _LONG_CONTEXT_ANSWER_SCHEMA = {

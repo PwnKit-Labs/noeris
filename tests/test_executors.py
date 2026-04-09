@@ -10,7 +10,7 @@ from research_engine.executors import (
     LongContextResponsesExecutor,
     ToolUseResponsesExecutor,
 )
-from research_engine.llm import ResponsesApiClient, ResponsesProviderConfig
+from research_engine.llm import ResponsesJsonResult, ResponsesProviderConfig
 from research_engine.models import ExperimentSpec, ResearchTopic
 
 
@@ -25,17 +25,22 @@ class _FakeResponsesClient:
         self.calls: list[dict[str, object]] = []
 
     def generate_json(self, **kwargs) -> dict[str, object]:
+        return self.generate_json_result(**kwargs).data
+
+    def generate_json_result(self, **kwargs) -> ResponsesJsonResult:
         self.calls.append(kwargs)
         if "baseline" in kwargs["schema_name"]:
-            return {
+            data = {
                 "answers": [
                     {"id": "lc-1", "answer": "unknown"},
                     {"id": "lc-2", "answer": "court opinions"},
                     {"id": "lc-3", "answer": "unknown"},
                 ]
             }
+            raw = {"usage": {"input_tokens": 100, "output_tokens": 10, "total_tokens": 110}}
+            return ResponsesJsonResult(data=data, raw_response=raw)
         if "tool_use" in kwargs["schema_name"]:
-            return {
+            data = {
                 "judgments": [
                     {
                         "id": "tu-1",
@@ -57,13 +62,17 @@ class _FakeResponsesClient:
                     },
                 ]
             }
-        return {
+            raw = {"usage": {"input_tokens": 150, "output_tokens": 25, "total_tokens": 175}}
+            return ResponsesJsonResult(data=data, raw_response=raw)
+        data = {
             "answers": [
                 {"id": "lc-1", "answer": "Aster"},
                 {"id": "lc-2", "answer": "court opinions"},
                 {"id": "lc-3", "answer": "12 documents"},
             ]
         }
+        raw = {"usage": {"input_tokens": 120, "output_tokens": 12, "total_tokens": 132}}
+        return ResponsesJsonResult(data=data, raw_response=raw)
 
 
 class ExecutorTests(unittest.TestCase):
@@ -96,6 +105,14 @@ class ExecutorTests(unittest.TestCase):
         self.assertEqual(
             results[0].artifact_payloads["eval-manifest.json"]["executor"],
             "responses_api",
+        )
+        self.assertEqual(
+            results[0].artifact_payloads["cost-summary.json"]["request_count"],
+            2,
+        )
+        self.assertGreaterEqual(
+            results[0].artifact_payloads["cost-summary.json"]["total_tokens"],
+            0,
         )
 
     def test_tool_use_responses_executor_emits_expected_artifacts(self) -> None:
@@ -132,6 +149,10 @@ class ExecutorTests(unittest.TestCase):
         )
         self.assertEqual(
             results[0].artifact_payloads["success-summary.json"]["structured_successes"],
+            1,
+        )
+        self.assertEqual(
+            results[0].artifact_payloads["cost-summary.json"]["request_count"],
             1,
         )
 
