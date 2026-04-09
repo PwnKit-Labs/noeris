@@ -7,8 +7,11 @@ from tests import _pathfix  # noqa: F401
 from research_engine.cli import build_pipeline
 from research_engine.executors import (
     DefaultExperimentExecutor,
+    LONG_CONTEXT_FIXTURES,
     LongContextResponsesExecutor,
+    LIVE_MATMUL_FIXTURES,
     MatmulPythonExecutor,
+    TOOL_USE_FIXTURES,
     ToolUseResponsesExecutor,
 )
 from research_engine.llm import ResponsesJsonResult, ResponsesProviderConfig
@@ -36,6 +39,8 @@ class _FakeResponsesClient:
                     {"id": "lc-1", "answer": "unknown"},
                     {"id": "lc-2", "answer": "court opinions"},
                     {"id": "lc-3", "answer": "unknown"},
+                    {"id": "lc-4", "answer": "unknown"},
+                    {"id": "lc-5", "answer": "unknown"},
                 ]
             }
             raw = {"usage": {"input_tokens": 100, "output_tokens": 10, "total_tokens": 110}}
@@ -61,6 +66,18 @@ class _FakeResponsesClient:
                         "structured_success": True,
                         "note": "Both paths are short enough to succeed.",
                     },
+                    {
+                        "id": "tu-4",
+                        "terminal_first_success": True,
+                        "structured_success": False,
+                        "note": "Local filtering is simpler in a shell pipeline.",
+                    },
+                    {
+                        "id": "tu-5",
+                        "terminal_first_success": True,
+                        "structured_success": False,
+                        "note": "Rate-limit aware loops are easier in terminal-first mode.",
+                    },
                 ]
             }
             raw = {"usage": {"input_tokens": 150, "output_tokens": 25, "total_tokens": 175}}
@@ -70,6 +87,8 @@ class _FakeResponsesClient:
                 {"id": "lc-1", "answer": "Aster"},
                 {"id": "lc-2", "answer": "court opinions"},
                 {"id": "lc-3", "answer": "12 documents"},
+                {"id": "lc-4", "answer": "Nimbus"},
+                {"id": "lc-5", "answer": "8 documents"},
             ]
         }
         raw = {"usage": {"input_tokens": 120, "output_tokens": 12, "total_tokens": 132}}
@@ -101,7 +120,7 @@ class ExecutorTests(unittest.TestCase):
         )
 
         self.assertEqual(len(client.calls), 2)
-        self.assertEqual(results[0].artifact_payloads["baseline-metrics.json"]["accuracy"], 1 / 3)
+        self.assertEqual(results[0].artifact_payloads["baseline-metrics.json"]["accuracy"], 1 / 5)
         self.assertEqual(results[0].artifact_payloads["candidate-metrics.json"]["accuracy"], 1.0)
         self.assertEqual(
             results[0].artifact_payloads["eval-manifest.json"]["executor"],
@@ -146,7 +165,7 @@ class ExecutorTests(unittest.TestCase):
         )
         self.assertEqual(
             results[0].artifact_payloads["success-summary.json"]["terminal_first_successes"],
-            3,
+            len(TOOL_USE_FIXTURES),
         )
         self.assertEqual(
             results[0].artifact_payloads["success-summary.json"]["structured_successes"],
@@ -204,7 +223,7 @@ class ExecutorTests(unittest.TestCase):
         )
         self.assertEqual(
             len(results[0].artifact_payloads["raw-timing-results.json"]["rows"]),
-            3,
+            len(LIVE_MATMUL_FIXTURES),
         )
 
     def test_build_pipeline_uses_live_matmul_executor(self) -> None:

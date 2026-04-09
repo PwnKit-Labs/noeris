@@ -28,6 +28,12 @@ from research_engine.models import (
     VerificationReport,
 )
 from research_engine.pipeline import ResearchPipeline
+from research_engine.executors import (
+    LIVE_MATMUL_FIXTURES,
+    LONG_CONTEXT_FIXTURES,
+    MATMUL_FIXTURES,
+    TOOL_USE_FIXTURES,
+)
 
 
 class StubSourceProvider(SourceProvider):
@@ -307,6 +313,10 @@ class ResearchPipelineTests(unittest.TestCase):
             "eval-manifest.json",
             record.cycle.results[0].artifact_refs,
         )
+        self.assertEqual(
+            len(record.cycle.results[0].artifact_payloads["eval-manifest.json"]["fixtures"]),
+            len(LONG_CONTEXT_FIXTURES),
+        )
 
     def test_tool_use_benchmark_run_produces_empirical_result(self) -> None:
         pipeline = ResearchPipeline()
@@ -326,6 +336,10 @@ class ResearchPipelineTests(unittest.TestCase):
             "tool-selection-summary.json",
             record.cycle.results[0].artifact_refs,
         )
+        self.assertEqual(
+            record.cycle.results[0].artifact_payloads["success-summary.json"]["total_tasks"],
+            len(TOOL_USE_FIXTURES),
+        )
 
     def test_matmul_benchmark_run_produces_empirical_result(self) -> None:
         pipeline = ResearchPipeline()
@@ -344,6 +358,13 @@ class ResearchPipelineTests(unittest.TestCase):
         self.assertIn(
             "raw-timing-results.json",
             record.cycle.results[0].artifact_refs,
+        )
+        self.assertEqual(
+            len(record.cycle.results[0].artifact_payloads["raw-timing-results.json"]["rows"]),
+            len(LIVE_MATMUL_FIXTURES)
+            if "python_cpu_microbenchmark"
+            == record.cycle.results[0].artifact_payloads.get("hardware-profile.json", {}).get("executor")
+            else len(MATMUL_FIXTURES),
         )
 
     def test_non_benchmark_run_keeps_planning_only_summary(self) -> None:

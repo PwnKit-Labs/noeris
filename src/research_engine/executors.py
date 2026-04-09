@@ -44,6 +44,26 @@ LONG_CONTEXT_FIXTURES = [
             "the approved retrieval budget was 12 documents."
         ),
     },
+    {
+        "id": "lc-4",
+        "question": "Which codename was rejected after the legal review?",
+        "answer": "Nimbus",
+        "context": (
+            "Naming review covered Aster, Nimbus, Lattice, and Beacon. Product loved Nimbus, "
+            "but legal flagged a trademark conflict after the second review. The team kept "
+            "Aster and dropped Nimbus before launch planning."
+        ),
+    },
+    {
+        "id": "lc-5",
+        "question": "What document count was used in the final compression baseline?",
+        "answer": "8 documents",
+        "context": (
+            "The memory-routing study compared compression baselines using 4, 8, and 16 source "
+            "documents. After error analysis, the final compression baseline was fixed at 8 "
+            "documents because 4 hurt recall and 16 increased noise."
+        ),
+    },
 ]
 
 TOOL_USE_FIXTURES = [
@@ -67,6 +87,20 @@ TOOL_USE_FIXTURES = [
         "terminal_first_success": True,
         "structured_success": True,
         "reason": "Both interfaces can succeed when the transformation path is short.",
+    },
+    {
+        "id": "tu-4",
+        "task": "Download a JSON list, filter stale entries locally, then resubmit only failing IDs.",
+        "terminal_first_success": True,
+        "structured_success": False,
+        "reason": "Shell filtering and local reuse of intermediate state reduce coordination overhead.",
+    },
+    {
+        "id": "tu-5",
+        "task": "Probe a paginated endpoint until a hidden rate-limit header appears, then back off and resume.",
+        "terminal_first_success": True,
+        "structured_success": False,
+        "reason": "Stateful loops with conditional backoff are simpler in a terminal-first flow.",
     },
 ]
 
@@ -104,6 +138,8 @@ LIVE_MATMUL_FIXTURES = [
     {"id": "mm-live-1", "shape": (32, 32, 32), "dtype": "float64"},
     {"id": "mm-live-2", "shape": (48, 48, 48), "dtype": "float64"},
     {"id": "mm-live-3", "shape": (64, 64, 64), "dtype": "float64"},
+    {"id": "mm-live-4", "shape": (72, 72, 72), "dtype": "float64"},
+    {"id": "mm-live-5", "shape": (96, 96, 96), "dtype": "float64"},
 ]
 
 
