@@ -940,6 +940,12 @@ class MatmulPythonExecutor(ExperimentExecutor):
                     key=lambda item: item.get("runner_up_gap_pct", 10**9),
                 )
         proposal = self._propose_candidates(catalog, weakest_shapes, weakest_workloads)
+        existing_ids = {candidate["id"] for candidate in catalog}
+        for novel in proposal.get("novel_candidates", []):
+            materialized = _materialize_novel_candidate(novel, existing_ids=existing_ids)
+            if materialized is not None:
+                catalog.append(materialized)
+                existing_ids.add(materialized["id"])
         proposed_ids = set(proposal.get("candidate_ids", []))
         top_weakest_shapes = [
             item for item in weakest_shapes[:3] if isinstance(item, dict)
@@ -1024,6 +1030,7 @@ class MatmulPythonExecutor(ExperimentExecutor):
                 else 0
             )
             candidate["proposal_bonus"] = 1 if candidate["id"] in proposed_ids else 0
+            candidate["novel_proposed_bonus"] = 1 if candidate.get("novel") else 0
 
         selected = []
         pruned = []
@@ -1047,6 +1054,7 @@ class MatmulPythonExecutor(ExperimentExecutor):
                 -candidate["family_novelty_bonus"],
                 -candidate["lineage_bonus"],
                 -candidate["proposal_bonus"],
+                -candidate["novel_proposed_bonus"],
                 -candidate["priority"],
                 candidate["id"],
             ),
@@ -1079,6 +1087,10 @@ class MatmulPythonExecutor(ExperimentExecutor):
             lambda candidate: candidate["proposal_bonus"] > 0
             or candidate["target_workload_bonus"] > 0
             or candidate["weak_shape_bonus"] > 0,
+        )
+        _select_slot(
+            "novelty_proposed",
+            lambda candidate: candidate["novel_proposed_bonus"] > 0,
         )
         _select_slot(
             "novelty_1",
@@ -1138,6 +1150,7 @@ class MatmulPythonExecutor(ExperimentExecutor):
                     "family_novelty_bonus": candidate["family_novelty_bonus"],
                     "lineage_bonus": candidate["lineage_bonus"],
                     "proposal_bonus": candidate["proposal_bonus"],
+                    "novel_proposed_bonus": candidate.get("novel_proposed_bonus", 0),
                     "priority": candidate["priority"],
                     "mutation_params": candidate.get("mutation_params", {}),
                     "target_shapes": candidate.get("target_shapes", []),
@@ -1158,52 +1171,66 @@ class MatmulPythonExecutor(ExperimentExecutor):
             return {
                 "source": "none",
                 "candidate_ids": [],
+                "novel_candidates": [],
                 "global_rationale": "",
             }
-        try:
-            payload = self.proposer.generate_json(
-                schema_name="matmul_candidate_batch",
-                schema=_MATMUL_CANDIDATE_PROPOSAL_SCHEMA,
-                instructions=(
-                    "Choose the most promising next batch of implementable matmul candidate families. "
-                    "Only choose from the provided candidate ids. Favor candidates that attack the weakest shapes "
-                    "or mutate the current best family in a bounded way. "
-                    "Return at most four ids and keep global_rationale to one short sentence."
-                ),
-                prompt=json.dumps(
-                    {
-                        "best_candidate_id": (
-                            self.history_summary.get("best_matmul_candidate_id", "")
-                            if isinstance(self.history_summary, dict)
-                            else ""
-                        ),
-                        "weakest_shapes": weakest_shapes[:3],
-                        "weakest_workloads": weakest_workloads[:3] if isinstance(self.history_summary, dict) else [],
-                        "available_candidates": [
-                            {
-                                "id": candidate["id"],
-                                "family": candidate["family"],
-                                "description": candidate["description"],
-                                "priority": candidate["priority"],
-                                "parent_id": candidate.get("parent_id"),
-                                "target_workloads": candidate.get("target_workloads", []),
-                            }
-                            for candidate in catalog
-                        ],
-                    },
-                    indent=2,
-                ),
-                max_output_tokens=320,
-                reasoning_effort="low",
-                text_verbosity="low",
-            )
-        except Exception as exc:
+        param_insights = _extract_param_insights(self.history_summary)
+        prompt_data = {
+            "best_candidate_id": (
+                self.history_summary.get("best_matmul_candidate_id", "")
+                if isinstance(self.history_summary, dict)
+                else ""
+            ),
+            "weakest_shapes": weakest_shapes[:3],
+            "weakest_workloads": weakest_workloads[:3] if isinstance(self.history_summary, dict) else [],
+            "available_candidates": [
+                {
+                    "id": candidate["id"],
+                    "family": candidate["family"],
+                    "description": candidate["description"],
+                    "priority": candidate["priority"],
+                    "parent_id": candidate.get("parent_id"),
+                    "mutation_params": candidate.get("mutation_params", {}),
+                    "target_workloads": candidate.get("target_workloads", []),
+                }
+                for candidate in catalog
+            ],
+        }
+        if param_insights:
+            prompt_data["param_insights"] = param_insights
+        last_error = None
+        for attempt in range(2):
+            try:
+                payload = self.proposer.generate_json(
+                    schema_name="matmul_candidate_batch",
+                    schema=_MATMUL_CANDIDATE_PROPOSAL_SCHEMA,
+                    instructions=(
+                        "Choose the most promising next batch of implementable matmul candidate families. "
+                        "You may choose from the provided candidate ids AND/OR propose novel candidates "
+                        "with new (row_block, col_block, k_unroll) or (row_block, j_unroll) parameter combos. "
+                        "Novel candidates let you explore configurations not yet in the catalog. "
+                        "Favor candidates that attack the weakest workloads or mutate the current best family. "
+                        "Use the param_insights (if provided) to understand which params tend to win which workloads. "
+                        "Return at most four existing ids plus up to three novel candidates. "
+                        "Keep global_rationale to one short sentence."
+                    ),
+                    prompt=json.dumps(prompt_data, indent=2),
+                    max_output_tokens=500,
+                    reasoning_effort="low",
+                    text_verbosity="low",
+                )
+                last_error = None
+                break
+            except Exception as exc:
+                last_error = exc
+        if last_error is not None:
             return {
                 "source": "responses_api_error",
                 "candidate_ids": [],
+                "novel_candidates": [],
                 "global_rationale": "",
-                "error": type(exc).__name__,
-                "detail": " ".join(str(exc).split())[:240],
+                "error": type(last_error).__name__,
+                "detail": " ".join(str(last_error).split())[:240],
             }
         allowed = {candidate["id"] for candidate in catalog}
         candidate_ids = [
@@ -1211,9 +1238,13 @@ class MatmulPythonExecutor(ExperimentExecutor):
             for candidate_id in payload.get("candidate_ids", [])
             if isinstance(candidate_id, str) and candidate_id in allowed
         ][: self.max_candidates_per_run]
+        novel_candidates = _sanitize_novel_candidates(
+            payload.get("novel_candidates", []),
+        )
         return {
             "source": "responses_api",
             "candidate_ids": candidate_ids,
+            "novel_candidates": novel_candidates,
             "global_rationale": " ".join(str(payload.get("global_rationale", "")).split()),
         }
 
@@ -1747,6 +1778,60 @@ def _matmul_transpose_rowpair_dualcol_candidate(
     return out
 
 
+def _matmul_ikj_param_candidate(
+    a: list[list[float]],
+    b: list[list[float]],
+    *,
+    row_block: int,
+    j_unroll: int,
+) -> list[list[float]]:
+    rows = len(a)
+    cols = len(b[0])
+    depth = len(b)
+    out = [[0.0] * cols for _ in range(rows)]
+    for ii in range(0, rows, row_block):
+        active_rows = min(row_block, rows - ii)
+        for k in range(depth):
+            a_vals = [a[ii + r][k] for r in range(active_rows)]
+            row_b = b[k]
+            j = 0
+            while j + j_unroll - 1 < cols:
+                for r in range(active_rows):
+                    a_val = a_vals[r]
+                    row_out = out[ii + r]
+                    for offset in range(j_unroll):
+                        row_out[j + offset] += a_val * row_b[j + offset]
+                j += j_unroll
+            while j < cols:
+                for r in range(active_rows):
+                    out[ii + r][j] += a_vals[r] * row_b[j]
+                j += 1
+    return out
+
+
+def _make_ikj_param_candidate(
+    *,
+    row_block: int,
+    j_unroll: int,
+):
+    specialized = {
+        (1, 4): _matmul_ikj_unroll4_candidate,
+    }
+    key = (row_block, j_unroll)
+    if key in specialized:
+        return specialized[key]
+
+    def generated(a: list[list[float]], b: list[list[float]]) -> list[list[float]]:
+        return _matmul_ikj_param_candidate(
+            a,
+            b,
+            row_block=row_block,
+            j_unroll=j_unroll,
+        )
+
+    return generated
+
+
 def _matmul_transpose_param_candidate(
     a: list[list[float]],
     b: list[list[float]],
@@ -1857,7 +1942,7 @@ _MATMUL_BASE_CANDIDATES = [
 ]
 
 
-_MATMUL_MUTATION_DESCRIPTORS = [
+_MATMUL_CURATED_TRANSPOSE_DESCRIPTORS = [
     {
         "id": "transpose_unroll8",
         "name": "transpose-aware unroll-8 loop",
@@ -1867,45 +1952,6 @@ _MATMUL_MUTATION_DESCRIPTORS = [
         "col_block": 1,
         "k_unroll": 8,
         "priority": 0.95,
-        "parent_id": "transpose_dot",
-        "enabled_when": "transpose_or_default",
-        "target_workload_group": "wide_output",
-    },
-    {
-        "id": "transpose_unroll16",
-        "name": "transpose-aware unroll-16 loop",
-        "family": "unrolling",
-        "description": "Use transpose plus manual unroll-16 accumulation in the inner loop.",
-        "row_block": 1,
-        "col_block": 1,
-        "k_unroll": 16,
-        "priority": 0.55,
-        "parent_id": "transpose_dot",
-        "enabled_when": "transpose_only",
-        "target_workload_group": "wide_output",
-    },
-    {
-        "id": "transpose_unroll4",
-        "name": "transpose-aware unroll-4 loop",
-        "family": "unrolling",
-        "description": "Use transpose plus manual unroll-4 accumulation in the inner loop.",
-        "row_block": 1,
-        "col_block": 1,
-        "k_unroll": 4,
-        "priority": 0.8,
-        "parent_id": "transpose_dot",
-        "enabled_when": "transpose_only",
-        "target_workload_group": "balanced",
-    },
-    {
-        "id": "transpose_dual_col",
-        "name": "transpose-aware dual-column sweep",
-        "family": "column_pairing",
-        "description": "Compute two output columns per pass to reuse each A row on wide-output workloads.",
-        "row_block": 1,
-        "col_block": 2,
-        "k_unroll": 1,
-        "priority": 0.78,
         "parent_id": "transpose_dot",
         "enabled_when": "transpose_or_default",
         "target_workload_group": "wide_output",
@@ -1925,19 +1971,6 @@ _MATMUL_MUTATION_DESCRIPTORS = [
         "target_shape_mode": "weak_shapes",
     },
     {
-        "id": "transpose_rowpair_u4",
-        "name": "transpose-aware row-pair sweep with k unroll-4",
-        "family": "row_pairing",
-        "description": "Pair output rows and unroll the k loop modestly to test a broader row-pair family.",
-        "row_block": 2,
-        "col_block": 1,
-        "k_unroll": 4,
-        "priority": 0.74,
-        "parent_id": "transpose_rowpair",
-        "enabled_when": "transpose_or_default",
-        "target_workload_group": "balanced",
-    },
-    {
         "id": "transpose_rowpair_dualcol",
         "name": "transpose-aware row/column pair sweep",
         "family": "pairwise_tiling",
@@ -1949,32 +1982,6 @@ _MATMUL_MUTATION_DESCRIPTORS = [
         "parent_id": "transpose_rowpair",
         "enabled_when": "transpose_or_default",
         "target_workload_group": "wide_output",
-    },
-    {
-        "id": "transpose_dual_col_u4",
-        "name": "transpose-aware dual-column sweep with k unroll-4",
-        "family": "column_pairing",
-        "description": "Pair output columns and unroll the k loop to probe a generated wide-output variant.",
-        "row_block": 1,
-        "col_block": 2,
-        "k_unroll": 4,
-        "priority": 0.79,
-        "parent_id": "transpose_dual_col",
-        "enabled_when": "transpose_or_default",
-        "target_workload_group": "wide_output",
-    },
-    {
-        "id": "transpose_rowpair_u8",
-        "name": "transpose-aware row-pair sweep with k unroll-8",
-        "family": "row_pairing",
-        "description": "Pair output rows and unroll the k loop more aggressively to test a generated row-pair variant.",
-        "row_block": 2,
-        "col_block": 1,
-        "k_unroll": 8,
-        "priority": 0.8,
-        "parent_id": "transpose_rowpair",
-        "enabled_when": "transpose_or_default",
-        "target_workload_group": "balanced",
     },
     {
         "id": "transpose_rowpair_dualcol_u4",
@@ -1989,18 +1996,107 @@ _MATMUL_MUTATION_DESCRIPTORS = [
         "enabled_when": "transpose_or_default",
         "target_workload_group": "wide_output",
     },
+]
+
+_MATMUL_CURATED_IKJ_DESCRIPTORS = [
     {
         "id": "ikj_unroll4",
         "name": "i-k-j accumulation loop with j unroll-4",
-        "family": "loop_reordering",
+        "family": "ikj_blocking",
         "description": "Accumulate output rows row-major with an unrolled j loop.",
         "fn": _matmul_ikj_unroll4_candidate,
         "priority": 0.85,
         "parent_id": "ikj_accumulate",
         "enabled_when": "ikj_or_default",
         "target_workload_group": "ikj_friendly",
+        "kernel_family": "ikj",
+        "row_block": 1,
+        "j_unroll": 4,
     },
 ]
+
+
+def _generate_transpose_grid() -> list[dict[str, object]]:
+    """Generate the full transpose parameter grid.
+
+    Returns descriptors for all (row_block, col_block, k_unroll) combos
+    not already covered by curated descriptors.
+    """
+    curated_params = {
+        (d["row_block"], d["col_block"], d["k_unroll"])
+        for d in _MATMUL_CURATED_TRANSPOSE_DESCRIPTORS
+    }
+    grid: list[dict[str, object]] = []
+    for row_block in [1, 2, 4]:
+        for col_block in [1, 2, 4]:
+            for k_unroll in [1, 2, 4, 8, 16]:
+                if (row_block, col_block, k_unroll) == (1, 1, 1):
+                    continue
+                if (row_block, col_block, k_unroll) in curated_params:
+                    continue
+                candidate_id = f"transpose_r{row_block}_c{col_block}_k{k_unroll}"
+                complexity = row_block * col_block
+                priority = round(0.4 + 0.05 * min(k_unroll, 8) - 0.02 * complexity, 2)
+                workload_group = "wide_output" if col_block >= 2 else "balanced"
+                grid.append({
+                    "id": candidate_id,
+                    "name": f"transpose rb={row_block} cb={col_block} ku={k_unroll}",
+                    "family": f"transpose_grid_r{row_block}c{col_block}",
+                    "description": (
+                        f"Generated transpose kernel with row_block={row_block}, "
+                        f"col_block={col_block}, k_unroll={k_unroll}."
+                    ),
+                    "row_block": row_block,
+                    "col_block": col_block,
+                    "k_unroll": k_unroll,
+                    "priority": max(0.1, min(priority, 0.65)),
+                    "parent_id": "transpose_dot",
+                    "enabled_when": "transpose_or_default",
+                    "target_workload_group": workload_group,
+                })
+    return grid
+
+
+def _generate_ikj_grid() -> list[dict[str, object]]:
+    """Generate the ikj parameter grid.
+
+    Returns descriptors for all (row_block, j_unroll) combos
+    not already covered by curated descriptors.
+    """
+    grid: list[dict[str, object]] = []
+    for row_block in [1, 2, 4]:
+        for j_unroll in [1, 2, 4, 8]:
+            if (row_block, j_unroll) == (1, 1):
+                continue
+            if row_block == 1 and j_unroll == 4:
+                continue
+            candidate_id = f"ikj_r{row_block}_j{j_unroll}"
+            priority = round(0.35 + 0.04 * min(j_unroll, 8) - 0.02 * row_block, 2)
+            grid.append({
+                "id": candidate_id,
+                "name": f"ikj rb={row_block} ju={j_unroll}",
+                "family": f"ikj_blocking_r{row_block}",
+                "description": (
+                    f"Generated ikj kernel with row_block={row_block}, j_unroll={j_unroll}."
+                ),
+                "row_block": row_block,
+                "j_unroll": j_unroll,
+                "priority": max(0.1, min(priority, 0.6)),
+                "parent_id": "ikj_accumulate",
+                "enabled_when": "ikj_or_default",
+                "target_workload_group": "ikj_friendly",
+                "kernel_family": "ikj",
+            })
+    return grid
+
+
+def _build_mutation_descriptors() -> list[dict[str, object]]:
+    return (
+        list(_MATMUL_CURATED_TRANSPOSE_DESCRIPTORS)
+        + _generate_transpose_grid()
+        + list(_MATMUL_CURATED_IKJ_DESCRIPTORS)
+        + _generate_ikj_grid()
+    )
 
 
 def _materialize_matmul_candidate(
@@ -2009,29 +2105,52 @@ def _materialize_matmul_candidate(
     target_workload_groups: dict[str, list[str]],
     target_shapes: list[str],
 ) -> dict[str, object]:
+    kernel_family = str(descriptor.get("kernel_family", "")).strip()
     row_block = int(descriptor.get("row_block", 1))
-    col_block = int(descriptor.get("col_block", 1))
-    k_unroll = int(descriptor.get("k_unroll", 1))
-    candidate = {
-        "id": descriptor["id"],
-        "name": descriptor["name"],
-        "family": descriptor["family"],
-        "description": descriptor["description"],
-        "fn": descriptor.get("fn")
-        or _make_transpose_param_candidate(
-            row_block=row_block,
-            col_block=col_block,
-            k_unroll=k_unroll,
-        ),
-        "priority": descriptor["priority"],
-        "parent_id": descriptor.get("parent_id"),
-        "generated": True,
-        "mutation_params": {
-            "row_block": row_block,
-            "col_block": col_block,
-            "k_unroll": k_unroll,
-        },
-    }
+
+    if kernel_family == "ikj":
+        j_unroll = int(descriptor.get("j_unroll", 1))
+        candidate = {
+            "id": descriptor["id"],
+            "name": descriptor["name"],
+            "family": descriptor["family"],
+            "description": descriptor["description"],
+            "fn": descriptor.get("fn")
+            or _make_ikj_param_candidate(
+                row_block=row_block,
+                j_unroll=j_unroll,
+            ),
+            "priority": descriptor["priority"],
+            "parent_id": descriptor.get("parent_id"),
+            "generated": True,
+            "mutation_params": {
+                "row_block": row_block,
+                "j_unroll": j_unroll,
+            },
+        }
+    else:
+        col_block = int(descriptor.get("col_block", 1))
+        k_unroll = int(descriptor.get("k_unroll", 1))
+        candidate = {
+            "id": descriptor["id"],
+            "name": descriptor["name"],
+            "family": descriptor["family"],
+            "description": descriptor["description"],
+            "fn": descriptor.get("fn")
+            or _make_transpose_param_candidate(
+                row_block=row_block,
+                col_block=col_block,
+                k_unroll=k_unroll,
+            ),
+            "priority": descriptor["priority"],
+            "parent_id": descriptor.get("parent_id"),
+            "generated": True,
+            "mutation_params": {
+                "row_block": row_block,
+                "col_block": col_block,
+                "k_unroll": k_unroll,
+            },
+        }
     workload_group = str(descriptor.get("target_workload_group", "")).strip()
     if workload_group:
         candidate["target_workloads"] = list(target_workload_groups.get(workload_group, []))
@@ -2081,7 +2200,7 @@ def _matmul_candidate_catalog(
     }
 
     generated: list[dict[str, object]] = []
-    for descriptor in _MATMUL_MUTATION_DESCRIPTORS:
+    for descriptor in _build_mutation_descriptors():
         enabled_when = descriptor["enabled_when"]
         enabled = False
         if enabled_when == "transpose_only":
@@ -2092,6 +2211,8 @@ def _matmul_candidate_catalog(
             enabled = best_candidate_id.startswith("transpose") and bool(weak_shape_targets)
         elif enabled_when == "ikj_or_default":
             enabled = best_candidate_id.startswith("ikj") or not best_candidate_id
+        elif enabled_when == "always":
+            enabled = True
         if not enabled:
             continue
         generated.append(
@@ -2112,10 +2233,191 @@ _MATMUL_CANDIDATE_PROPOSAL_SCHEMA = {
             "type": "array",
             "items": {"type": "string"},
         },
+        "novel_candidates": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "kernel_family": {
+                        "type": "string",
+                        "description": "transpose or ikj",
+                    },
+                    "row_block": {"type": "integer"},
+                    "col_block": {"type": "integer"},
+                    "k_unroll": {"type": "integer"},
+                    "j_unroll": {"type": "integer"},
+                    "rationale": {"type": "string"},
+                },
+                "required": [
+                    "kernel_family",
+                    "row_block",
+                    "col_block",
+                    "k_unroll",
+                    "j_unroll",
+                    "rationale",
+                ],
+            },
+        },
         "global_rationale": {"type": "string"},
     },
-    "required": ["candidate_ids", "global_rationale"],
+    "required": ["candidate_ids", "novel_candidates", "global_rationale"],
 }
+
+
+def _sanitize_novel_candidates(
+    payload: object,
+) -> list[dict[str, object]]:
+    """Validate and bound novel candidate proposals from the LLM."""
+    if not isinstance(payload, list):
+        return []
+    max_novel = 3
+    seen_keys: set[tuple] = set()
+    results: list[dict[str, object]] = []
+    for item in payload:
+        if not isinstance(item, dict) or len(results) >= max_novel:
+            break
+        kernel_family = str(item.get("kernel_family", "")).strip().lower()
+        if kernel_family not in ("transpose", "ikj"):
+            continue
+        row_block = _clamp_int(item.get("row_block"), 1, 8)
+        rationale = " ".join(str(item.get("rationale", "")).split())[:120]
+        if kernel_family == "ikj":
+            j_unroll = _clamp_int(item.get("j_unroll"), 1, 16)
+            key = ("ikj", row_block, j_unroll)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            results.append({
+                "kernel_family": "ikj",
+                "row_block": row_block,
+                "j_unroll": j_unroll,
+                "rationale": rationale,
+            })
+        else:
+            col_block = _clamp_int(item.get("col_block"), 1, 8)
+            k_unroll = _clamp_int(item.get("k_unroll"), 1, 16)
+            key = ("transpose", row_block, col_block, k_unroll)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            results.append({
+                "kernel_family": "transpose",
+                "row_block": row_block,
+                "col_block": col_block,
+                "k_unroll": k_unroll,
+                "rationale": rationale,
+            })
+    return results
+
+
+def _clamp_int(value: object, low: int, high: int) -> int:
+    try:
+        return max(low, min(int(value), high))
+    except (TypeError, ValueError):
+        return low
+
+
+def _materialize_novel_candidate(
+    novel: dict[str, object],
+    *,
+    existing_ids: set[str],
+) -> dict[str, object] | None:
+    """Build a runnable candidate dict from a novel proposal."""
+    kernel_family = str(novel.get("kernel_family", "")).strip().lower()
+    row_block = int(novel.get("row_block", 1))
+    rationale = str(novel.get("rationale", ""))
+
+    if kernel_family == "ikj":
+        j_unroll = int(novel.get("j_unroll", 1))
+        candidate_id = f"novel_ikj_r{row_block}_j{j_unroll}"
+        if candidate_id in existing_ids:
+            return None
+        return {
+            "id": candidate_id,
+            "name": f"novel ikj rb={row_block} ju={j_unroll}",
+            "family": f"novel_ikj_r{row_block}",
+            "description": rationale or f"LLM-proposed ikj kernel rb={row_block} ju={j_unroll}.",
+            "fn": _make_ikj_param_candidate(row_block=row_block, j_unroll=j_unroll),
+            "priority": 0.7,
+            "parent_id": "ikj_accumulate",
+            "generated": True,
+            "novel": True,
+            "mutation_params": {"row_block": row_block, "j_unroll": j_unroll},
+            "target_workloads": [],
+        }
+    else:
+        col_block = int(novel.get("col_block", 1))
+        k_unroll = int(novel.get("k_unroll", 1))
+        candidate_id = f"novel_transpose_r{row_block}_c{col_block}_k{k_unroll}"
+        if candidate_id in existing_ids:
+            return None
+        return {
+            "id": candidate_id,
+            "name": f"novel transpose rb={row_block} cb={col_block} ku={k_unroll}",
+            "family": f"novel_transpose_r{row_block}c{col_block}",
+            "description": rationale or f"LLM-proposed transpose kernel rb={row_block} cb={col_block} ku={k_unroll}.",
+            "fn": _make_transpose_param_candidate(
+                row_block=row_block, col_block=col_block, k_unroll=k_unroll,
+            ),
+            "priority": 0.7,
+            "parent_id": "transpose_dot",
+            "generated": True,
+            "novel": True,
+            "mutation_params": {"row_block": row_block, "col_block": col_block, "k_unroll": k_unroll},
+            "target_workloads": [],
+        }
+
+
+def _extract_param_insights(
+    history_summary: dict[str, object] | None,
+) -> list[dict[str, object]]:
+    """Build concise param->workload win correlations from history."""
+    if not isinstance(history_summary, dict):
+        return []
+    workload_winners = history_summary.get("matmul_workload_winners", {})
+    if not isinstance(workload_winners, dict):
+        return []
+    frontier_archive = history_summary.get("matmul_frontier_archive", [])
+    if not isinstance(frontier_archive, list):
+        frontier_archive = []
+    insights: list[dict[str, object]] = []
+    for workload_tag, entry in workload_winners.items():
+        if not isinstance(entry, dict):
+            continue
+        winner_counts = entry.get("winner_counts", {})
+        if not isinstance(winner_counts, dict):
+            continue
+        top_winners = sorted(
+            winner_counts.items(),
+            key=lambda pair: -int(pair[1]),
+        )[:2]
+        if top_winners:
+            insights.append({
+                "workload_tag": str(workload_tag),
+                "top_candidates": [
+                    {"id": str(candidate_id), "wins": int(count)}
+                    for candidate_id, count in top_winners
+                ],
+            })
+    for item in frontier_archive:
+        if not isinstance(item, dict):
+            continue
+        workload_tag = str(item.get("workload_tag", "")).strip()
+        best_id = str(item.get("best_candidate_id", "")).strip()
+        if workload_tag and best_id:
+            existing = next(
+                (i for i in insights if i["workload_tag"] == workload_tag),
+                None,
+            )
+            if existing is None:
+                insights.append({
+                    "workload_tag": workload_tag,
+                    "current_best": best_id,
+                })
+            else:
+                existing["current_best"] = best_id
+    return insights[:8]
 
 
 def _time_call(fn) -> float:

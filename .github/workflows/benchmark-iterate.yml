@@ -1,6 +1,9 @@
 name: Benchmark Iterate
 
 on:
+  schedule:
+    - cron: "0 2 * * *"
+    - cron: "0 14 * * *"
   workflow_dispatch:
     inputs:
       benchmark_id:
@@ -12,7 +15,7 @@ on:
         required: false
         default: "2"
       auto_chain_runs_remaining:
-        description: "How many follow-up workflow runs to auto-dispatch after this one"
+        description: "How many follow-up workflow runs to auto-dispatch after this one (scheduled runs default to 20)"
         required: false
         default: "0"
       auto_chain_policy:
@@ -30,7 +33,7 @@ env:
 jobs:
   benchmark-iterate:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     permissions:
       actions: write
       contents: read
@@ -166,7 +169,7 @@ jobs:
         run: |
           python -m research_engine.cli iterate \
             "${{ github.event.inputs.benchmark_id || 'matmul-speedup' }}" \
-            --iterations "${{ github.event.inputs.iterations || '2' }}" \
+            --iterations "${{ github.event.inputs.iterations || '3' }}" \
             --llm \
             --live-execution > iterate-run.json
 
@@ -174,10 +177,10 @@ jobs:
         id: auto_chain
         env:
           NOERIS_BENCHMARK_ID: ${{ github.event.inputs.benchmark_id || 'matmul-speedup' }}
-          NOERIS_ITERATIONS: ${{ github.event.inputs.iterations || '2' }}
-          NOERIS_AUTO_CHAIN_RUNS_REMAINING: ${{ github.event.inputs.auto_chain_runs_remaining || '0' }}
+          NOERIS_ITERATIONS: ${{ github.event.inputs.iterations || '3' }}
+          NOERIS_AUTO_CHAIN_RUNS_REMAINING: ${{ github.event.inputs.auto_chain_runs_remaining || '20' }}
           NOERIS_AUTO_CHAIN_POLICY: ${{ github.event.inputs.auto_chain_policy || 'improve_or_frontier' }}
-          NOERIS_MIN_METRIC_DELTA: ${{ github.event.inputs.min_metric_delta || '0.25' }}
+          NOERIS_MIN_METRIC_DELTA: ${{ github.event.inputs.min_metric_delta || '0.15' }}
         run: |
           python - <<'PY'
           import json
@@ -328,9 +331,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           NOERIS_BENCHMARK_ID: ${{ github.event.inputs.benchmark_id || 'matmul-speedup' }}
-          NOERIS_ITERATIONS: ${{ github.event.inputs.iterations || '2' }}
+          NOERIS_ITERATIONS: ${{ github.event.inputs.iterations || '3' }}
           NOERIS_AUTO_CHAIN_POLICY: ${{ github.event.inputs.auto_chain_policy || 'improve_or_frontier' }}
-          NOERIS_MIN_METRIC_DELTA: ${{ github.event.inputs.min_metric_delta || '0.25' }}
+          NOERIS_MIN_METRIC_DELTA: ${{ github.event.inputs.min_metric_delta || '0.15' }}
           NOERIS_AUTO_CHAIN_NEXT_REMAINING: ${{ steps.auto_chain.outputs.next_remaining }}
         run: |
           python - <<'PY'
