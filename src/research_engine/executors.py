@@ -911,7 +911,7 @@ class MatmulPythonExecutor(ExperimentExecutor):
             return {
                 "source": "none",
                 "candidate_ids": [],
-                "rationale_by_candidate": {},
+                "global_rationale": "",
             }
         try:
             payload = self.proposer.generate_json(
@@ -951,7 +951,7 @@ class MatmulPythonExecutor(ExperimentExecutor):
             return {
                 "source": "responses_api_error",
                 "candidate_ids": [],
-                "rationale_by_candidate": {},
+                "global_rationale": "",
                 "error": type(exc).__name__,
             }
         allowed = {candidate["id"] for candidate in catalog}
@@ -960,17 +960,10 @@ class MatmulPythonExecutor(ExperimentExecutor):
             for candidate_id in payload.get("candidate_ids", [])
             if isinstance(candidate_id, str) and candidate_id in allowed
         ][: self.max_candidates_per_run]
-        rationale_by_candidate = {
-            item["candidate_id"]: " ".join(str(item["rationale"]).split())
-            for item in (payload.get("candidate_rationales") or [])
-            if isinstance(item, dict)
-            and item.get("candidate_id") in allowed
-            and isinstance(item.get("rationale"), str)
-        }
         return {
             "source": "responses_api",
             "candidate_ids": candidate_ids,
-            "rationale_by_candidate": rationale_by_candidate,
+            "global_rationale": " ".join(str(payload.get("global_rationale", "")).split()),
         }
 
 
@@ -1457,20 +1450,9 @@ _MATMUL_CANDIDATE_PROPOSAL_SCHEMA = {
             "type": "array",
             "items": {"type": "string"},
         },
-        "candidate_rationales": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "candidate_id": {"type": "string"},
-                    "rationale": {"type": "string"},
-                },
-                "required": ["candidate_id", "rationale"],
-            },
-        },
+        "global_rationale": {"type": "string"},
     },
-    "required": ["candidate_ids", "candidate_rationales"],
+    "required": ["candidate_ids", "global_rationale"],
 }
 
 

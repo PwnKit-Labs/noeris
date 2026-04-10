@@ -337,16 +337,7 @@ class ExecutorTests(unittest.TestCase):
             return ResponsesJsonResult(
                 data={
                     "candidate_ids": ["transpose_unroll8", "transpose_unroll4"],
-                    "candidate_rationales": [
-                        {
-                            "candidate_id": "transpose_unroll8",
-                            "rationale": "Best challenger on weak shapes.",
-                        },
-                        {
-                            "candidate_id": "transpose_unroll4",
-                            "rationale": "Secondary mutation worth comparing.",
-                        },
-                    ],
+                    "global_rationale": "Best challenger on weak shapes.",
                 },
                 raw_response={"usage": {"input_tokens": 10, "output_tokens": 10, "total_tokens": 20}},
             )
@@ -362,6 +353,7 @@ class ExecutorTests(unittest.TestCase):
 
         self.assertEqual(proposal["source"], "responses_api")
         self.assertIn("transpose_unroll8", proposal["candidate_ids"])
+        self.assertIn("Best challenger", proposal["global_rationale"])
         self.assertTrue(any(candidate["proposal_bonus"] for candidate in selected))
 
 
