@@ -740,6 +740,7 @@ class MatmulPythonExecutor(ExperimentExecutor):
                         "priority": candidate["priority"],
                         "parent_id": candidate.get("parent_id"),
                         "generated": candidate.get("generated", False),
+                        "mutation_params": candidate.get("mutation_params", {}),
                         "target_workloads": candidate.get("target_workloads", []),
                     }
                     for candidate in selected_candidates
@@ -1006,6 +1007,14 @@ class MatmulPythonExecutor(ExperimentExecutor):
             )
             candidate["archive_bonus"] = 1 if candidate["id"] in archive_candidate_ids else 0
             candidate["pareto_bonus"] = 1 if candidate["id"] in historical_pareto_ids else 0
+            candidate["novelty_bonus"] = (
+                1
+                if candidate.get("generated", False)
+                and candidate["historical_wins"] == 0
+                and candidate["archive_bonus"] == 0
+                and candidate["pareto_bonus"] == 0
+                else 0
+            )
             candidate["family_novelty_bonus"] = 1 if candidate["family_wins"] == 0 else 0
             candidate["lineage_bonus"] = (
                 1
@@ -1033,6 +1042,7 @@ class MatmulPythonExecutor(ExperimentExecutor):
                 -candidate["weak_shape_bonus"],
                 -candidate["archive_bonus"],
                 -candidate["pareto_bonus"],
+                -candidate["novelty_bonus"],
                 -candidate["family_novelty_bonus"],
                 -candidate["lineage_bonus"],
                 -candidate["proposal_bonus"],
@@ -1049,7 +1059,8 @@ class MatmulPythonExecutor(ExperimentExecutor):
             (
                 candidate
                 for candidate in ranked[1:]
-                if candidate["family_novelty_bonus"] > 0
+                if candidate["novelty_bonus"] > 0
+                or candidate["family_novelty_bonus"] > 0
                 or candidate["pareto_bonus"] > 0
                 or candidate["target_workload_bonus"] > 0
                 or candidate["archive_bonus"] == 0
@@ -1102,10 +1113,12 @@ class MatmulPythonExecutor(ExperimentExecutor):
                     "weak_shape_bonus": candidate["weak_shape_bonus"],
                     "archive_bonus": candidate["archive_bonus"],
                     "pareto_bonus": candidate["pareto_bonus"],
+                    "novelty_bonus": candidate["novelty_bonus"],
                     "family_novelty_bonus": candidate["family_novelty_bonus"],
                     "lineage_bonus": candidate["lineage_bonus"],
                     "proposal_bonus": candidate["proposal_bonus"],
                     "priority": candidate["priority"],
+                    "mutation_params": candidate.get("mutation_params", {}),
                     "target_shapes": candidate.get("target_shapes", []),
                     "target_workloads": candidate.get("target_workloads", []),
                 }
@@ -1713,6 +1726,80 @@ def _matmul_transpose_rowpair_dualcol_candidate(
     return out
 
 
+def _matmul_transpose_param_candidate(
+    a: list[list[float]],
+    b: list[list[float]],
+    *,
+    row_block: int,
+    col_block: int,
+    k_unroll: int,
+) -> list[list[float]]:
+    rows = len(a)
+    cols = len(b[0])
+    depth = len(b)
+    b_transposed = [list(column) for column in zip(*b)]
+    out = [[0.0] * cols for _ in range(rows)]
+    for ii in range(0, rows, row_block):
+        active_rows = min(row_block, rows - ii)
+        for jj in range(0, cols, col_block):
+            active_cols = min(col_block, cols - jj)
+            values = [[0.0] * active_cols for _ in range(active_rows)]
+            k = 0
+            while k + k_unroll - 1 < depth:
+                for offset in range(k_unroll):
+                    kk = k + offset
+                    b_values = [b_transposed[jj + col][kk] for col in range(active_cols)]
+                    for row in range(active_rows):
+                        a_value = a[ii + row][kk]
+                        for col, b_value in enumerate(b_values):
+                            values[row][col] += a_value * b_value
+                k += k_unroll
+            while k < depth:
+                b_values = [b_transposed[jj + col][k] for col in range(active_cols)]
+                for row in range(active_rows):
+                    a_value = a[ii + row][k]
+                    for col, b_value in enumerate(b_values):
+                        values[row][col] += a_value * b_value
+                k += 1
+            for row in range(active_rows):
+                row_out = out[ii + row]
+                for col in range(active_cols):
+                    row_out[jj + col] = values[row][col]
+    return out
+
+
+def _make_transpose_param_candidate(
+    *,
+    row_block: int,
+    col_block: int,
+    k_unroll: int,
+):
+    specialized = {
+        (1, 1, 1): _matmul_transpose_candidate,
+        (1, 1, 4): _matmul_transpose_unroll4_candidate,
+        (1, 1, 8): _matmul_transpose_unroll8_candidate,
+        (1, 1, 16): _matmul_transpose_unroll16_candidate,
+        (2, 1, 1): _matmul_transpose_rowpair_candidate,
+        (2, 1, 4): _matmul_transpose_rowpair_unroll4_candidate,
+        (1, 2, 1): _matmul_transpose_dual_col_candidate,
+        (2, 2, 1): _matmul_transpose_rowpair_dualcol_candidate,
+    }
+    key = (row_block, col_block, k_unroll)
+    if key in specialized:
+        return specialized[key]
+
+    def generated(a: list[list[float]], b: list[list[float]]) -> list[list[float]]:
+        return _matmul_transpose_param_candidate(
+            a,
+            b,
+            row_block=row_block,
+            col_block=col_block,
+            k_unroll=k_unroll,
+        )
+
+    return generated
+
+
 _MATMUL_BASE_CANDIDATES = [
     {
         "id": "transpose_dot",
@@ -1755,7 +1842,9 @@ _MATMUL_MUTATION_DESCRIPTORS = [
         "name": "transpose-aware unroll-8 loop",
         "family": "unrolling",
         "description": "Use transpose plus manual unroll-8 accumulation in the inner loop.",
-        "fn": _matmul_transpose_unroll8_candidate,
+        "row_block": 1,
+        "col_block": 1,
+        "k_unroll": 8,
         "priority": 0.95,
         "parent_id": "transpose_dot",
         "enabled_when": "transpose_or_default",
@@ -1766,7 +1855,9 @@ _MATMUL_MUTATION_DESCRIPTORS = [
         "name": "transpose-aware unroll-16 loop",
         "family": "unrolling",
         "description": "Use transpose plus manual unroll-16 accumulation in the inner loop.",
-        "fn": _matmul_transpose_unroll16_candidate,
+        "row_block": 1,
+        "col_block": 1,
+        "k_unroll": 16,
         "priority": 0.55,
         "parent_id": "transpose_dot",
         "enabled_when": "transpose_only",
@@ -1777,7 +1868,9 @@ _MATMUL_MUTATION_DESCRIPTORS = [
         "name": "transpose-aware unroll-4 loop",
         "family": "unrolling",
         "description": "Use transpose plus manual unroll-4 accumulation in the inner loop.",
-        "fn": _matmul_transpose_unroll4_candidate,
+        "row_block": 1,
+        "col_block": 1,
+        "k_unroll": 4,
         "priority": 0.8,
         "parent_id": "transpose_dot",
         "enabled_when": "transpose_only",
@@ -1788,7 +1881,9 @@ _MATMUL_MUTATION_DESCRIPTORS = [
         "name": "transpose-aware dual-column sweep",
         "family": "column_pairing",
         "description": "Compute two output columns per pass to reuse each A row on wide-output workloads.",
-        "fn": _matmul_transpose_dual_col_candidate,
+        "row_block": 1,
+        "col_block": 2,
+        "k_unroll": 1,
         "priority": 0.78,
         "parent_id": "transpose_dot",
         "enabled_when": "transpose_only",
@@ -1799,7 +1894,9 @@ _MATMUL_MUTATION_DESCRIPTORS = [
         "name": "transpose-aware row-pair sweep",
         "family": "row_pairing",
         "description": "Reuse each transposed B row across two output rows to cut interpreter overhead on larger workloads.",
-        "fn": _matmul_transpose_rowpair_candidate,
+        "row_block": 2,
+        "col_block": 1,
+        "k_unroll": 1,
         "priority": 0.98,
         "parent_id": "transpose_dot",
         "enabled_when": "transpose_with_weak_shapes",
@@ -1811,7 +1908,9 @@ _MATMUL_MUTATION_DESCRIPTORS = [
         "name": "transpose-aware row-pair sweep with k unroll-4",
         "family": "row_pairing",
         "description": "Pair output rows and unroll the k loop modestly to test a broader row-pair family.",
-        "fn": _matmul_transpose_rowpair_unroll4_candidate,
+        "row_block": 2,
+        "col_block": 1,
+        "k_unroll": 4,
         "priority": 0.74,
         "parent_id": "transpose_rowpair",
         "enabled_when": "transpose_only",
@@ -1822,9 +1921,50 @@ _MATMUL_MUTATION_DESCRIPTORS = [
         "name": "transpose-aware row/column pair sweep",
         "family": "pairwise_tiling",
         "description": "Pair both rows and columns to test a small register-blocked transpose family.",
-        "fn": _matmul_transpose_rowpair_dualcol_candidate,
+        "row_block": 2,
+        "col_block": 2,
+        "k_unroll": 1,
         "priority": 0.72,
         "parent_id": "transpose_rowpair",
+        "enabled_when": "transpose_only",
+        "target_workload_group": "wide_output",
+    },
+    {
+        "id": "transpose_dual_col_u4",
+        "name": "transpose-aware dual-column sweep with k unroll-4",
+        "family": "column_pairing",
+        "description": "Pair output columns and unroll the k loop to probe a generated wide-output variant.",
+        "row_block": 1,
+        "col_block": 2,
+        "k_unroll": 4,
+        "priority": 0.79,
+        "parent_id": "transpose_dual_col",
+        "enabled_when": "transpose_only",
+        "target_workload_group": "wide_output",
+    },
+    {
+        "id": "transpose_rowpair_u8",
+        "name": "transpose-aware row-pair sweep with k unroll-8",
+        "family": "row_pairing",
+        "description": "Pair output rows and unroll the k loop more aggressively to test a generated row-pair variant.",
+        "row_block": 2,
+        "col_block": 1,
+        "k_unroll": 8,
+        "priority": 0.8,
+        "parent_id": "transpose_rowpair",
+        "enabled_when": "transpose_only",
+        "target_workload_group": "balanced",
+    },
+    {
+        "id": "transpose_rowpair_dualcol_u4",
+        "name": "transpose-aware row/column pair sweep with k unroll-4",
+        "family": "pairwise_tiling",
+        "description": "Pair rows and columns together with modest k unrolling to test a generated microtile variant.",
+        "row_block": 2,
+        "col_block": 2,
+        "k_unroll": 4,
+        "priority": 0.83,
+        "parent_id": "transpose_rowpair_dualcol",
         "enabled_when": "transpose_only",
         "target_workload_group": "wide_output",
     },
@@ -1848,15 +1988,28 @@ def _materialize_matmul_candidate(
     target_workload_groups: dict[str, list[str]],
     target_shapes: list[str],
 ) -> dict[str, object]:
+    row_block = int(descriptor.get("row_block", 1))
+    col_block = int(descriptor.get("col_block", 1))
+    k_unroll = int(descriptor.get("k_unroll", 1))
     candidate = {
         "id": descriptor["id"],
         "name": descriptor["name"],
         "family": descriptor["family"],
         "description": descriptor["description"],
-        "fn": descriptor["fn"],
+        "fn": descriptor.get("fn")
+        or _make_transpose_param_candidate(
+            row_block=row_block,
+            col_block=col_block,
+            k_unroll=k_unroll,
+        ),
         "priority": descriptor["priority"],
         "parent_id": descriptor.get("parent_id"),
         "generated": True,
+        "mutation_params": {
+            "row_block": row_block,
+            "col_block": col_block,
+            "k_unroll": k_unroll,
+        },
     }
     workload_group = str(descriptor.get("target_workload_group", "")).strip()
     if workload_group:
