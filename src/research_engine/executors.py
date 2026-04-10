@@ -1699,44 +1699,171 @@ def _matmul_transpose_rowpair_dualcol_candidate(
     return out
 
 
+_MATMUL_BASE_CANDIDATES = [
+    {
+        "id": "transpose_dot",
+        "name": "transpose-aware dot-product loop",
+        "family": "layout_transform",
+        "description": "Transpose B first so inner loops read contiguous memory.",
+        "fn": _matmul_transpose_candidate,
+        "priority": 1.0,
+    },
+    {
+        "id": "ikj_accumulate",
+        "name": "i-k-j accumulation loop",
+        "family": "loop_reordering",
+        "description": "Accumulate output rows while streaming through B row-major.",
+        "fn": _matmul_ikj_candidate,
+        "priority": 0.9,
+    },
+    {
+        "id": "blocked_transpose_16",
+        "name": "blocked transpose-aware loop (16)",
+        "family": "tiling",
+        "description": "Use transpose plus 16-wide block tiling to reduce cache-miss pressure.",
+        "fn": _matmul_blocked_transpose_candidate,
+        "priority": 0.7,
+    },
+    {
+        "id": "blocked_transpose_8",
+        "name": "blocked transpose-aware loop (8)",
+        "family": "tiling",
+        "description": "Use transpose plus 8-wide block tiling to reduce cache-miss pressure.",
+        "fn": _matmul_blocked_transpose_8_candidate,
+        "priority": 0.5,
+    },
+]
+
+
+_MATMUL_MUTATION_DESCRIPTORS = [
+    {
+        "id": "transpose_unroll8",
+        "name": "transpose-aware unroll-8 loop",
+        "family": "unrolling",
+        "description": "Use transpose plus manual unroll-8 accumulation in the inner loop.",
+        "fn": _matmul_transpose_unroll8_candidate,
+        "priority": 0.95,
+        "parent_id": "transpose_dot",
+        "enabled_when": "transpose_or_default",
+        "target_workload_group": "wide_output",
+    },
+    {
+        "id": "transpose_unroll16",
+        "name": "transpose-aware unroll-16 loop",
+        "family": "unrolling",
+        "description": "Use transpose plus manual unroll-16 accumulation in the inner loop.",
+        "fn": _matmul_transpose_unroll16_candidate,
+        "priority": 0.55,
+        "parent_id": "transpose_dot",
+        "enabled_when": "transpose_only",
+        "target_workload_group": "wide_output",
+    },
+    {
+        "id": "transpose_unroll4",
+        "name": "transpose-aware unroll-4 loop",
+        "family": "unrolling",
+        "description": "Use transpose plus manual unroll-4 accumulation in the inner loop.",
+        "fn": _matmul_transpose_unroll4_candidate,
+        "priority": 0.8,
+        "parent_id": "transpose_dot",
+        "enabled_when": "transpose_only",
+        "target_workload_group": "balanced",
+    },
+    {
+        "id": "transpose_dual_col",
+        "name": "transpose-aware dual-column sweep",
+        "family": "column_pairing",
+        "description": "Compute two output columns per pass to reuse each A row on wide-output workloads.",
+        "fn": _matmul_transpose_dual_col_candidate,
+        "priority": 0.78,
+        "parent_id": "transpose_dot",
+        "enabled_when": "transpose_only",
+        "target_workload_group": "wide_output",
+    },
+    {
+        "id": "transpose_rowpair",
+        "name": "transpose-aware row-pair sweep",
+        "family": "row_pairing",
+        "description": "Reuse each transposed B row across two output rows to cut interpreter overhead on larger workloads.",
+        "fn": _matmul_transpose_rowpair_candidate,
+        "priority": 0.98,
+        "parent_id": "transpose_dot",
+        "enabled_when": "transpose_with_weak_shapes",
+        "target_workload_group": "weak_or_balanced",
+        "target_shape_mode": "weak_shapes",
+    },
+    {
+        "id": "transpose_rowpair_u4",
+        "name": "transpose-aware row-pair sweep with k unroll-4",
+        "family": "row_pairing",
+        "description": "Pair output rows and unroll the k loop modestly to test a broader row-pair family.",
+        "fn": _matmul_transpose_rowpair_unroll4_candidate,
+        "priority": 0.74,
+        "parent_id": "transpose_rowpair",
+        "enabled_when": "transpose_only",
+        "target_workload_group": "balanced",
+    },
+    {
+        "id": "transpose_rowpair_dualcol",
+        "name": "transpose-aware row/column pair sweep",
+        "family": "pairwise_tiling",
+        "description": "Pair both rows and columns to test a small register-blocked transpose family.",
+        "fn": _matmul_transpose_rowpair_dualcol_candidate,
+        "priority": 0.72,
+        "parent_id": "transpose_rowpair",
+        "enabled_when": "transpose_only",
+        "target_workload_group": "wide_output",
+    },
+    {
+        "id": "ikj_unroll4",
+        "name": "i-k-j accumulation loop with j unroll-4",
+        "family": "loop_reordering",
+        "description": "Accumulate output rows row-major with an unrolled j loop.",
+        "fn": _matmul_ikj_unroll4_candidate,
+        "priority": 0.85,
+        "parent_id": "ikj_accumulate",
+        "enabled_when": "ikj_or_default",
+        "target_workload_group": "ikj_friendly",
+    },
+]
+
+
+def _materialize_matmul_candidate(
+    descriptor: dict[str, object],
+    *,
+    target_workload_groups: dict[str, list[str]],
+    target_shapes: list[str],
+) -> dict[str, object]:
+    candidate = {
+        "id": descriptor["id"],
+        "name": descriptor["name"],
+        "family": descriptor["family"],
+        "description": descriptor["description"],
+        "fn": descriptor["fn"],
+        "priority": descriptor["priority"],
+        "parent_id": descriptor.get("parent_id"),
+        "generated": True,
+    }
+    workload_group = str(descriptor.get("target_workload_group", "")).strip()
+    if workload_group:
+        candidate["target_workloads"] = list(target_workload_groups.get(workload_group, []))
+    if descriptor.get("target_shape_mode") == "weak_shapes":
+        candidate["target_shapes"] = list(target_shapes)
+    return candidate
+
+
 def _matmul_candidate_catalog(
     history_summary: dict[str, object] | None = None,
 ) -> list[dict[str, object]]:
-    wide_output_workloads = [fixture["workload_tag"] for fixture in LIVE_MATMUL_FIXTURES if fixture["shape"][1] >= fixture["shape"][0] * 2]
-    balanced_workloads = [fixture["workload_tag"] for fixture in LIVE_MATMUL_FIXTURES if fixture["shape"][0] >= 64 and fixture["shape"][2] >= 64]
-    catalog = [
-        {
-            "id": "transpose_dot",
-            "name": "transpose-aware dot-product loop",
-            "family": "layout_transform",
-            "description": "Transpose B first so inner loops read contiguous memory.",
-            "fn": _matmul_transpose_candidate,
-            "priority": 1.0,
-        },
-        {
-            "id": "ikj_accumulate",
-            "name": "i-k-j accumulation loop",
-            "family": "loop_reordering",
-            "description": "Accumulate output rows while streaming through B row-major.",
-            "fn": _matmul_ikj_candidate,
-            "priority": 0.9,
-        },
-        {
-            "id": "blocked_transpose_16",
-            "name": "blocked transpose-aware loop (16)",
-            "family": "tiling",
-            "description": "Use transpose plus 16-wide block tiling to reduce cache-miss pressure.",
-            "fn": _matmul_blocked_transpose_candidate,
-            "priority": 0.7,
-        },
-        {
-            "id": "blocked_transpose_8",
-            "name": "blocked transpose-aware loop (8)",
-            "family": "tiling",
-            "description": "Use transpose plus 8-wide block tiling to reduce cache-miss pressure.",
-            "fn": _matmul_blocked_transpose_8_candidate,
-            "priority": 0.5,
-        },
+    wide_output_workloads = [
+        fixture["workload_tag"]
+        for fixture in LIVE_MATMUL_FIXTURES
+        if fixture["shape"][1] >= fixture["shape"][0] * 2
+    ]
+    balanced_workloads = [
+        fixture["workload_tag"]
+        for fixture in LIVE_MATMUL_FIXTURES
+        if fixture["shape"][0] >= 64 and fixture["shape"][2] >= 64
     ]
     best_candidate_id = ""
     weak_shape_targets: list[str] = []
@@ -1758,138 +1885,35 @@ def _matmul_candidate_catalog(
             if workload_tag
         ][:3]
 
-    generated = []
-    if best_candidate_id.startswith("transpose"):
-        generated.extend(
-            [
-                {
-                    "id": "transpose_unroll8",
-                    "name": "transpose-aware unroll-8 loop",
-                    "family": "unrolling",
-                    "description": "Use transpose plus manual unroll-8 accumulation in the inner loop.",
-                    "fn": _matmul_transpose_unroll8_candidate,
-                    "priority": 0.95,
-                    "parent_id": "transpose_dot",
-                    "generated": True,
-                    "target_workloads": wide_output_workloads,
-                },
-                {
-                    "id": "transpose_unroll16",
-                    "name": "transpose-aware unroll-16 loop",
-                    "family": "unrolling",
-                    "description": "Use transpose plus manual unroll-16 accumulation in the inner loop.",
-                    "fn": _matmul_transpose_unroll16_candidate,
-                    "priority": 0.55,
-                    "parent_id": "transpose_dot",
-                    "generated": True,
-                    "target_workloads": wide_output_workloads,
-                },
-                {
-                    "id": "transpose_unroll4",
-                    "name": "transpose-aware unroll-4 loop",
-                    "family": "unrolling",
-                    "description": "Use transpose plus manual unroll-4 accumulation in the inner loop.",
-                    "fn": _matmul_transpose_unroll4_candidate,
-                    "priority": 0.8,
-                    "parent_id": "transpose_dot",
-                    "generated": True,
-                    "target_workloads": balanced_workloads,
-                },
-            ]
-        )
-        generated.extend(
-            [
-                {
-                    "id": "transpose_dual_col",
-                    "name": "transpose-aware dual-column sweep",
-                    "family": "column_pairing",
-                    "description": "Compute two output columns per pass to reuse each A row on wide-output workloads.",
-                    "fn": _matmul_transpose_dual_col_candidate,
-                    "priority": 0.78,
-                    "parent_id": "transpose_dot",
-                    "generated": True,
-                    "target_workloads": wide_output_workloads,
-                },
-                {
-                    "id": "transpose_rowpair_u4",
-                    "name": "transpose-aware row-pair sweep with k unroll-4",
-                    "family": "row_pairing",
-                    "description": "Pair output rows and unroll the k loop modestly to test a broader row-pair family.",
-                    "fn": _matmul_transpose_rowpair_unroll4_candidate,
-                    "priority": 0.74,
-                    "parent_id": "transpose_rowpair",
-                    "generated": True,
-                    "target_workloads": balanced_workloads,
-                },
-                {
-                    "id": "transpose_rowpair_dualcol",
-                    "name": "transpose-aware row/column pair sweep",
-                    "family": "pairwise_tiling",
-                    "description": "Pair both rows and columns to test a small register-blocked transpose family.",
-                    "fn": _matmul_transpose_rowpair_dualcol_candidate,
-                    "priority": 0.72,
-                    "parent_id": "transpose_rowpair",
-                    "generated": True,
-                    "target_workloads": wide_output_workloads,
-                },
-            ]
-        )
-        if weak_shape_targets:
-            generated.append(
-                {
-                    "id": "transpose_rowpair",
-                    "name": "transpose-aware row-pair sweep",
-                    "family": "row_pairing",
-                    "description": "Reuse each transposed B row across two output rows to cut interpreter overhead on larger square shapes.",
-                    "fn": _matmul_transpose_rowpair_candidate,
-                    "priority": 0.98,
-                    "parent_id": "transpose_dot",
-                    "generated": True,
-                    "target_shapes": weak_shape_targets,
-                    "target_workloads": weak_workload_targets or balanced_workloads,
-                }
-            )
-    if best_candidate_id.startswith("ikj"):
+    target_workload_groups = {
+        "wide_output": wide_output_workloads,
+        "balanced": balanced_workloads,
+        "ikj_friendly": ["mlp_down_proj", "residual_adapter"],
+        "weak_or_balanced": weak_workload_targets or balanced_workloads,
+    }
+
+    generated: list[dict[str, object]] = []
+    for descriptor in _MATMUL_MUTATION_DESCRIPTORS:
+        enabled_when = descriptor["enabled_when"]
+        enabled = False
+        if enabled_when == "transpose_only":
+            enabled = best_candidate_id.startswith("transpose")
+        elif enabled_when == "transpose_or_default":
+            enabled = best_candidate_id.startswith("transpose") or not best_candidate_id
+        elif enabled_when == "transpose_with_weak_shapes":
+            enabled = best_candidate_id.startswith("transpose") and bool(weak_shape_targets)
+        elif enabled_when == "ikj_or_default":
+            enabled = best_candidate_id.startswith("ikj") or not best_candidate_id
+        if not enabled:
+            continue
         generated.append(
-            {
-                "id": "ikj_unroll4",
-                "name": "i-k-j accumulation loop with j unroll-4",
-                "family": "loop_reordering",
-                "description": "Accumulate output rows row-major with an unrolled j loop.",
-                "fn": _matmul_ikj_unroll4_candidate,
-                "priority": 0.85,
-                "parent_id": "ikj_accumulate",
-                "generated": True,
-            }
+            _materialize_matmul_candidate(
+                descriptor,
+                target_workload_groups=target_workload_groups,
+                target_shapes=weak_shape_targets,
+            )
         )
-    if not generated:
-        generated.extend(
-            [
-                {
-                    "id": "transpose_unroll8",
-                    "name": "transpose-aware unroll-8 loop",
-                    "family": "unrolling",
-                    "description": "Use transpose plus manual unroll-8 accumulation in the inner loop.",
-                    "fn": _matmul_transpose_unroll8_candidate,
-                    "priority": 0.95,
-                    "parent_id": "transpose_dot",
-                    "generated": True,
-                    "target_workloads": wide_output_workloads,
-                },
-                {
-                    "id": "ikj_unroll4",
-                    "name": "i-k-j accumulation loop with j unroll-4",
-                    "family": "loop_reordering",
-                    "description": "Accumulate output rows row-major with an unrolled j loop.",
-                    "fn": _matmul_ikj_unroll4_candidate,
-                    "priority": 0.85,
-                    "parent_id": "ikj_accumulate",
-                    "generated": True,
-                    "target_workloads": ["mlp_down_proj", "residual_adapter"],
-                },
-            ]
-        )
-    return catalog + generated
+    return list(_MATMUL_BASE_CANDIDATES) + generated
 
 
 _MATMUL_CANDIDATE_PROPOSAL_SCHEMA = {

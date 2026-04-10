@@ -593,6 +593,10 @@ def _extract_frontier_snapshot_from_record(
                     if isinstance(candidate, dict) and candidate.get("id")
                 ],
                 "proposal_source": payloads.get("candidate-proposals.json", {}).get("source", ""),
+                "frontier_archive": payloads.get("frontier-archive.json", {}).get(
+                    "workload_winners",
+                    [],
+                ),
             }
         )
     return snapshot
@@ -615,6 +619,29 @@ def _build_frontier_delta(
     }
     previous_best_candidate_id = str(previous_frontier.get("best_candidate_id", "")).strip()
     best_candidate_id = str(best_frontier.get("best_candidate_id", "")).strip()
+    previous_archive = {
+        str(item.get("workload_tag", "")).strip(): str(item.get("best_candidate_id", "")).strip()
+        for item in previous_frontier.get("frontier_archive", [])
+        if isinstance(item, dict)
+        and str(item.get("workload_tag", "")).strip()
+        and str(item.get("best_candidate_id", "")).strip()
+    }
+    best_archive = {
+        str(item.get("workload_tag", "")).strip(): str(item.get("best_candidate_id", "")).strip()
+        for item in best_frontier.get("frontier_archive", [])
+        if isinstance(item, dict)
+        and str(item.get("workload_tag", "")).strip()
+        and str(item.get("best_candidate_id", "")).strip()
+    }
+    workload_changes = [
+        {
+            "workload_tag": workload_tag,
+            "previous_best_candidate_id": previous_archive.get(workload_tag, ""),
+            "best_candidate_id": best_archive.get(workload_tag, ""),
+        }
+        for workload_tag in sorted(set(previous_archive) | set(best_archive))
+        if previous_archive.get(workload_tag, "") != best_archive.get(workload_tag, "")
+    ]
     return {
         "best_candidate_changed": (
             previous_best_candidate_id != best_candidate_id
@@ -626,6 +653,8 @@ def _build_frontier_delta(
         "candidate_set_changed": previous_candidates != best_candidates,
         "added_candidates": sorted(best_candidates - previous_candidates),
         "dropped_candidates": sorted(previous_candidates - best_candidates),
+        "workload_frontier_changed": bool(workload_changes),
+        "workload_changes": workload_changes,
         "proposal_source": best_frontier.get("proposal_source", ""),
     }
 
