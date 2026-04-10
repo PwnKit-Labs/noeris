@@ -2163,8 +2163,8 @@ def _generate_transpose_grid() -> list[dict[str, object]]:
                 if (row_block, col_block, k_unroll) in curated_params:
                     continue
                 candidate_id = f"transpose_r{row_block}_c{col_block}_k{k_unroll}"
-                complexity = row_block * col_block
-                priority = round(0.4 + 0.05 * min(k_unroll, 8) - 0.02 * complexity, 2)
+                blocking_bonus = min(row_block, 4) * 0.06 + min(col_block, 4) * 0.06
+                priority = round(0.3 + blocking_bonus + 0.02 * min(k_unroll, 8), 2)
                 workload_group = "wide_output" if col_block >= 2 else "balanced"
                 grid.append({
                     "id": candidate_id,
