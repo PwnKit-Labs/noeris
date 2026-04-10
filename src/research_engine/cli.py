@@ -371,6 +371,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "iterate":
         benchmark = get_benchmark(args.benchmark_id)
+        store = JsonFileRunStore()
+        history_before = store.summarize_history(
+            benchmark_id=benchmark.benchmark_id,
+            limit=20,
+        )
         try:
             pipeline = build_pipeline(
                 use_llm=args.llm,
@@ -381,7 +386,6 @@ def main(argv: list[str] | None = None) -> int:
         except LlmConfigurationError as exc:
             print(json.dumps({"error": str(exc)}, indent=2))
             return 1
-        store = JsonFileRunStore()
         iterations = max(1, args.iterations)
         runs = []
         best_metric = None
@@ -416,13 +420,24 @@ def main(argv: list[str] | None = None) -> int:
             if best_metric is None or metric > best_metric:
                 best_metric = metric
                 best_run_id = record.run_id
+        previous_best_metric = history_before.get("best_benchmark_metric")
+        if previous_best_metric is None:
+            outcome = "new_baseline"
+        elif best_metric > previous_best_metric:
+            outcome = "improved"
+        elif best_metric < previous_best_metric:
+            outcome = "regressed"
+        else:
+            outcome = "plateaued"
         print(
             json.dumps(
                 {
                     "benchmark_id": benchmark.benchmark_id,
                     "iterations": iterations,
+                    "previous_best_metric": previous_best_metric,
                     "best_run_id": best_run_id,
                     "best_metric": best_metric,
+                    "outcome": outcome,
                     "runs": runs,
                 },
                 indent=2,

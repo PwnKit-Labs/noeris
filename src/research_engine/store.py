@@ -285,6 +285,7 @@ class JsonFileRunStore:
                 if matmul_candidate_wins
                 else ""
             ),
+            "best_benchmark_metric": _best_metric(records, benchmark_id),
             "matmul_shape_winners": matmul_shape_winners,
             "matmul_shape_challengers": matmul_shape_challengers,
             "weakest_matmul_shapes": sorted(
@@ -319,3 +320,31 @@ class JsonFileRunStore:
                 continue
             records.append(record)
         return sorted(records, key=lambda record: record.created_at, reverse=True)
+
+
+def _best_metric(records: list[ResearchRunRecord], benchmark_id: str | None) -> float | None:
+    best = None
+    for record in records:
+        metric = _extract_metric_from_record(record, benchmark_id)
+        if metric is None:
+            continue
+        best = metric if best is None or metric > best else best
+    return best
+
+
+def _extract_metric_from_record(
+    record: ResearchRunRecord,
+    benchmark_id: str | None,
+) -> float | None:
+    if not record.memo.results:
+        return None
+    payloads = record.memo.results[0].artifact_payloads
+    if benchmark_id == "matmul-speedup":
+        value = payloads.get("raw-timing-results.json", {}).get("mean_uplift_pct")
+    elif benchmark_id == "long-context-reasoning":
+        value = payloads.get("candidate-metrics.json", {}).get("accuracy")
+    elif benchmark_id == "tool-use-reliability":
+        value = payloads.get("tool-selection-summary.json", {}).get("terminal_first_success_rate")
+    else:
+        value = None
+    return float(value) if isinstance(value, (int, float)) else None
