@@ -765,6 +765,24 @@ class MatmulPythonExecutor(ExperimentExecutor):
             "max_abs_error": best_candidate["max_abs_error"],
             "strategy": best_candidate["candidate_name"],
             "best_candidate_id": best_candidate["candidate_id"],
+            "runner_up_candidate_id": (
+                sorted(valid_candidates, key=lambda row: row["candidate_seconds"])[1]["candidate_id"]
+                if len(valid_candidates) > 1
+                else ""
+            ),
+            "runner_up_gap_pct": (
+                round(
+                    (
+                        sorted(valid_candidates, key=lambda row: row["candidate_seconds"])[1]["candidate_seconds"]
+                        - best_candidate["candidate_seconds"]
+                    )
+                    / sorted(valid_candidates, key=lambda row: row["candidate_seconds"])[1]["candidate_seconds"]
+                    * 100,
+                    2,
+                )
+                if len(valid_candidates) > 1
+                else 0.0
+            ),
             "candidate_results": candidate_rows,
         }
 
@@ -772,14 +790,21 @@ class MatmulPythonExecutor(ExperimentExecutor):
         catalog = _matmul_candidate_catalog(self.history_summary)
         wins = {}
         shape_winners = {}
+        shape_challengers = {}
         if isinstance(self.history_summary, dict):
             wins = self.history_summary.get("matmul_candidate_wins", {}) or {}
             shape_winners = self.history_summary.get("matmul_shape_winners", {}) or {}
+            shape_challengers = self.history_summary.get("matmul_shape_challengers", {}) or {}
         for candidate in catalog:
             candidate["historical_wins"] = int(wins.get(candidate["id"], 0))
             candidate["shape_bonus"] = sum(
                 int(shape_entry.get("winner_counts", {}).get(candidate["id"], 0))
                 for shape_entry in shape_winners.values()
+                if isinstance(shape_entry, dict)
+            )
+            candidate["challenger_bonus"] = sum(
+                int(shape_entry.get("runner_up_counts", {}).get(candidate["id"], 0))
+                for shape_entry in shape_challengers.values()
                 if isinstance(shape_entry, dict)
             )
 
@@ -792,6 +817,7 @@ class MatmulPythonExecutor(ExperimentExecutor):
             key=lambda candidate: (
                 -candidate["historical_wins"],
                 -candidate["shape_bonus"],
+                -candidate["challenger_bonus"],
                 -candidate["priority"],
                 candidate["id"],
             ),
@@ -811,11 +837,11 @@ class MatmulPythonExecutor(ExperimentExecutor):
             if family in seen_families and candidate["historical_wins"] == 0 and candidate["priority"] < 0.75:
                 pruned.append(
                     {
-                        "id": candidate["id"],
-                        "family": family,
-                        "reason": "family_pruned_after_higher_priority_candidate",
-                    }
-                )
+                    "id": candidate["id"],
+                    "family": family,
+                    "reason": "family_pruned_after_higher_priority_candidate",
+                }
+            )
                 continue
             selected.append(candidate)
             seen_families.add(family)
@@ -1153,6 +1179,32 @@ def _matmul_transpose_unroll8_candidate(
     return out
 
 
+def _matmul_transpose_unroll16_candidate(
+    a: list[list[float]],
+    b: list[list[float]],
+) -> list[list[float]]:
+    rows = len(a)
+    cols = len(b[0])
+    depth = len(b)
+    b_transposed = [list(column) for column in zip(*b)]
+    out = [[0.0] * cols for _ in range(rows)]
+    for i in range(rows):
+        row_a = a[i]
+        for j in range(cols):
+            row_b = b_transposed[j]
+            value = 0.0
+            k = 0
+            while k + 15 < depth:
+                for offset in range(16):
+                    value += row_a[k + offset] * row_b[k + offset]
+                k += 16
+            while k < depth:
+                value += row_a[k] * row_b[k]
+                k += 1
+            out[i][j] = value
+    return out
+
+
 def _matmul_candidate_catalog(
     history_summary: dict[str, object] | None = None,
 ) -> list[dict[str, object]]:
@@ -1205,6 +1257,16 @@ def _matmul_candidate_catalog(
                     "description": "Use transpose plus manual unroll-8 accumulation in the inner loop.",
                     "fn": _matmul_transpose_unroll8_candidate,
                     "priority": 0.95,
+                    "parent_id": "transpose_dot",
+                    "generated": True,
+                },
+                {
+                    "id": "transpose_unroll16",
+                    "name": "transpose-aware unroll-16 loop",
+                    "family": "unrolling",
+                    "description": "Use transpose plus manual unroll-16 accumulation in the inner loop.",
+                    "fn": _matmul_transpose_unroll16_candidate,
+                    "priority": 0.55,
                     "parent_id": "transpose_dot",
                     "generated": True,
                 },

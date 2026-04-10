@@ -275,22 +275,31 @@ class ExecutorTests(unittest.TestCase):
                 for candidate in results[0].artifact_payloads["candidate-catalog.json"]["selected_candidates"]
             )
         )
+        self.assertIn("runner_up_candidate_id", results[0].artifact_payloads["raw-timing-results.json"]["rows"][0])
         self.assertTrue(
             results[0].artifact_payloads["best-candidate-summary.json"]["best_overall_candidate_id"]
         )
 
     def test_build_pipeline_uses_live_matmul_executor(self) -> None:
-        pipeline = build_pipeline(
-            use_llm=False,
-            max_results=1,
-            live_execution=True,
-            benchmark_id="matmul-speedup",
-        )
+        with unittest.mock.patch(
+            "research_engine.cli.JsonFileRunStore.summarize_history",
+            return_value={"best_matmul_candidate_id": "transpose_dot"},
+        ):
+            pipeline = build_pipeline(
+                use_llm=False,
+                max_results=1,
+                live_execution=True,
+                benchmark_id="matmul-speedup",
+            )
 
         self.assertIsInstance(pipeline.experiment_executor, DefaultExperimentExecutor)
         self.assertIsInstance(
             pipeline.experiment_executor.matmul_executor,
             MatmulPythonExecutor,
+        )
+        self.assertEqual(
+            pipeline.experiment_executor.matmul_executor.history_summary["best_matmul_candidate_id"],
+            "transpose_dot",
         )
 
     def test_matmul_executor_uses_history_to_seed_generated_candidates(self) -> None:
@@ -299,6 +308,13 @@ class ExecutorTests(unittest.TestCase):
             history_summary={
                 "best_matmul_candidate_id": "transpose_dot",
                 "matmul_candidate_wins": {"transpose_dot": 3},
+                "matmul_shape_challengers": {
+                    "64x64x64": {
+                        "runner_up_counts": {"transpose_unroll8": 2},
+                        "latest_runner_up": "transpose_unroll8",
+                        "latest_runner_up_gap_pct": 6.0,
+                    }
+                },
             },
         )
 
@@ -306,6 +322,7 @@ class ExecutorTests(unittest.TestCase):
         selected_ids = {candidate["id"] for candidate in selected}
 
         self.assertIn("transpose_unroll8", selected_ids)
+        self.assertNotIn("transpose_unroll16", selected_ids)
 
 
 if __name__ == "__main__":

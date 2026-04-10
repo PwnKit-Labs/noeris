@@ -107,6 +107,8 @@ class RunStoreTests(unittest.TestCase):
                         "shape": "32x32x32",
                         "best_candidate_id": "transpose_dot",
                         "uplift_pct": 12.3,
+                        "runner_up_candidate_id": "ikj_accumulate",
+                        "runner_up_gap_pct": 3.2,
                     }
                 ]
             }
@@ -117,6 +119,7 @@ class RunStoreTests(unittest.TestCase):
         self.assertEqual(summary["best_matmul_candidate_id"], "transpose_dot")
         self.assertEqual(summary["matmul_candidate_wins"]["transpose_dot"], 5)
         self.assertIn("32x32x32", summary["matmul_shape_winners"])
+        self.assertEqual(summary["weakest_matmul_shapes"][0]["shape"], "32x32x32")
 
 
 if __name__ == "__main__":

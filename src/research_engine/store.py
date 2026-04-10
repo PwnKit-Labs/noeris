@@ -210,6 +210,7 @@ class JsonFileRunStore:
 
         matmul_candidate_wins: dict[str, int] = {}
         matmul_shape_winners: dict[str, dict[str, object]] = {}
+        matmul_shape_challengers: dict[str, dict[str, object]] = {}
         if benchmark_id == "matmul-speedup":
             for record in records:
                 for result in record.memo.results:
@@ -243,6 +244,22 @@ class JsonFileRunStore:
                             entry["winner_counts"][winner] = entry["winner_counts"].get(winner, 0) + 1
                             entry["latest_winner"] = winner
                             entry["latest_uplift_pct"] = uplift
+                            runner_up = str(row.get("runner_up_candidate_id", "")).strip()
+                            runner_up_gap_pct = row.get("runner_up_gap_pct")
+                            if runner_up:
+                                challenger_entry = matmul_shape_challengers.setdefault(
+                                    shape,
+                                    {
+                                        "runner_up_counts": {},
+                                        "latest_runner_up": runner_up,
+                                        "latest_runner_up_gap_pct": runner_up_gap_pct,
+                                    },
+                                )
+                                challenger_entry["runner_up_counts"][runner_up] = (
+                                    challenger_entry["runner_up_counts"].get(runner_up, 0) + 1
+                                )
+                                challenger_entry["latest_runner_up"] = runner_up
+                                challenger_entry["latest_runner_up_gap_pct"] = runner_up_gap_pct
 
         return {
             "benchmark_id": benchmark_id or (latest.benchmark_id if latest else ""),
@@ -269,6 +286,18 @@ class JsonFileRunStore:
                 else ""
             ),
             "matmul_shape_winners": matmul_shape_winners,
+            "matmul_shape_challengers": matmul_shape_challengers,
+            "weakest_matmul_shapes": sorted(
+                [
+                    {
+                        "shape": shape,
+                        "runner_up_candidate_id": entry.get("latest_runner_up", ""),
+                        "runner_up_gap_pct": entry.get("latest_runner_up_gap_pct", 0),
+                    }
+                    for shape, entry in matmul_shape_challengers.items()
+                ],
+                key=lambda item: item.get("runner_up_gap_pct", 10**9),
+            ),
         }
 
     def _load_matching_runs(
