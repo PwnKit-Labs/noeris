@@ -208,6 +208,42 @@ class JsonFileRunStore:
                 }
             )
 
+        matmul_candidate_wins: dict[str, int] = {}
+        matmul_shape_winners: dict[str, dict[str, object]] = {}
+        if benchmark_id == "matmul-speedup":
+            for record in records:
+                for result in record.memo.results:
+                    payload = result.artifact_payloads.get("best-candidate-summary.json")
+                    if not isinstance(payload, dict):
+                        continue
+                    winner_counts = payload.get("winner_counts", {})
+                    if not isinstance(winner_counts, dict):
+                        continue
+                    for candidate_id, count in winner_counts.items():
+                        try:
+                            matmul_candidate_wins[str(candidate_id)] = (
+                                matmul_candidate_wins.get(str(candidate_id), 0) + int(count)
+                            )
+                        except (TypeError, ValueError):
+                            continue
+                    raw_rows = result.artifact_payloads.get("raw-timing-results.json", {}).get("rows", [])
+                    if isinstance(raw_rows, list):
+                        for row in raw_rows:
+                            if not isinstance(row, dict):
+                                continue
+                            shape = str(row.get("shape", "")).strip()
+                            winner = str(row.get("best_candidate_id", "")).strip()
+                            uplift = row.get("uplift_pct")
+                            if not shape or not winner:
+                                continue
+                            entry = matmul_shape_winners.setdefault(
+                                shape,
+                                {"winner_counts": {}, "latest_winner": winner, "latest_uplift_pct": uplift},
+                            )
+                            entry["winner_counts"][winner] = entry["winner_counts"].get(winner, 0) + 1
+                            entry["latest_winner"] = winner
+                            entry["latest_uplift_pct"] = uplift
+
         return {
             "benchmark_id": benchmark_id or (latest.benchmark_id if latest else ""),
             "topic": topic or (latest.memo.topic if latest else ""),
@@ -226,6 +262,13 @@ class JsonFileRunStore:
                 }
                 for contradiction in (latest.memo.contradictions if latest else [])
             ],
+            "matmul_candidate_wins": matmul_candidate_wins,
+            "best_matmul_candidate_id": (
+                max(matmul_candidate_wins, key=matmul_candidate_wins.get)
+                if matmul_candidate_wins
+                else ""
+            ),
+            "matmul_shape_winners": matmul_shape_winners,
         }
 
     def _load_matching_runs(

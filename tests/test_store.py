@@ -85,6 +85,39 @@ class RunStoreTests(unittest.TestCase):
         self.assertIn("Older claim", summary["dropped_claim_titles"])
         self.assertEqual(summary["confidence_changes"][0]["latest_confidence"], "high")
 
+    def test_summarize_history_reports_matmul_candidate_wins(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = JsonFileRunStore(Path(temp_dir))
+            record = ResearchPipeline().run_record_for(
+                topic=ResearchTopic(
+                    name="matrix multiplication speedup",
+                    objective="discover validated kernel-level speedups",
+                    benchmark_id="matmul-speedup",
+                    constraints=["benchmark_id:matmul-speedup"],
+                ),
+                benchmark_id="matmul-speedup",
+            )
+            record.memo.results[0].artifact_payloads["best-candidate-summary.json"] = {
+                "winner_counts": {"transpose_dot": 5, "ikj_accumulate": 0},
+                "best_overall_candidate_id": "transpose_dot",
+            }
+            record.memo.results[0].artifact_payloads["raw-timing-results.json"] = {
+                "rows": [
+                    {
+                        "shape": "32x32x32",
+                        "best_candidate_id": "transpose_dot",
+                        "uplift_pct": 12.3,
+                    }
+                ]
+            }
+            store.save(record)
+
+            summary = store.summarize_history(benchmark_id="matmul-speedup")
+
+        self.assertEqual(summary["best_matmul_candidate_id"], "transpose_dot")
+        self.assertEqual(summary["matmul_candidate_wins"]["transpose_dot"], 5)
+        self.assertIn("32x32x32", summary["matmul_shape_winners"])
+
 
 if __name__ == "__main__":
     unittest.main()

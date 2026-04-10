@@ -264,6 +264,20 @@ class ExecutorTests(unittest.TestCase):
             len(results[0].artifact_payloads["raw-timing-results.json"]["rows"]),
             len(LIVE_MATMUL_FIXTURES),
         )
+        self.assertEqual(
+            len(results[0].artifact_payloads["candidate-catalog.json"]["selected_candidates"]),
+            4,
+        )
+        self.assertTrue(results[0].artifact_payloads["candidate-catalog.json"]["pruned_candidates"])
+        self.assertTrue(
+            any(
+                candidate.get("generated")
+                for candidate in results[0].artifact_payloads["candidate-catalog.json"]["selected_candidates"]
+            )
+        )
+        self.assertTrue(
+            results[0].artifact_payloads["best-candidate-summary.json"]["best_overall_candidate_id"]
+        )
 
     def test_build_pipeline_uses_live_matmul_executor(self) -> None:
         pipeline = build_pipeline(
@@ -278,6 +292,20 @@ class ExecutorTests(unittest.TestCase):
             pipeline.experiment_executor.matmul_executor,
             MatmulPythonExecutor,
         )
+
+    def test_matmul_executor_uses_history_to_seed_generated_candidates(self) -> None:
+        executor = MatmulPythonExecutor(
+            repetitions=1,
+            history_summary={
+                "best_matmul_candidate_id": "transpose_dot",
+                "matmul_candidate_wins": {"transpose_dot": 3},
+            },
+        )
+
+        selected, _ = executor._select_candidates()
+        selected_ids = {candidate["id"] for candidate in selected}
+
+        self.assertIn("transpose_unroll8", selected_ids)
 
 
 if __name__ == "__main__":

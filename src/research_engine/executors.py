@@ -626,6 +626,8 @@ class MatmulPythonExecutor(ExperimentExecutor):
     """Real CPU microbenchmark for the matmul benchmark lane."""
 
     repetitions: int = 2
+    max_candidates_per_run: int = 4
+    history_summary: dict[str, object] | None = None
 
     def run(
         self,
@@ -635,17 +637,23 @@ class MatmulPythonExecutor(ExperimentExecutor):
         del topic
         rows = []
         improvements = []
+        winner_counts: dict[str, int] = {}
+        selected_candidates, pruned_candidates = self._select_candidates()
         for fixture in LIVE_MATMUL_FIXTURES:
-            rows.append(self._run_fixture(fixture))
-            improvements.append(rows[-1]["uplift_pct"] / 100)
+            row = self._run_fixture(fixture, selected_candidates)
+            rows.append(row)
+            improvements.append(row["uplift_pct"] / 100)
+            winner_counts[row["best_candidate_id"]] = winner_counts.get(row["best_candidate_id"], 0) + 1
 
         mean_uplift = sum(improvements) / len(improvements)
+        candidates = _matmul_candidate_catalog()
         hardware_profile = {
             "executor": "python_cpu_microbenchmark",
             "machine": platform.machine(),
             "processor": platform.processor() or "unknown",
             "python_version": platform.python_version(),
             "cpu_count": os.cpu_count(),
+            "candidate_count": len(selected_candidates),
             "fixtures": [
                 {
                     "id": row["id"],
@@ -659,14 +667,38 @@ class MatmulPythonExecutor(ExperimentExecutor):
             "hardware-profile.json": hardware_profile,
             "benchmark-config.json": {
                 "benchmark": "matmul-speedup",
-                "comparison": "python baseline vs transpose-aware candidate",
+                "comparison": "python baseline vs generated candidate family",
                 "baseline": "naive_ijk",
-                "candidate": "transpose_dot",
+                "candidate_ids": [candidate["id"] for candidate in selected_candidates],
                 "repetitions": self.repetitions,
+            },
+            "candidate-catalog.json": {
+                "baseline": "naive_ijk",
+                "selected_candidates": [
+                    {
+                        "id": candidate["id"],
+                        "name": candidate["name"],
+                        "family": candidate["family"],
+                        "description": candidate["description"],
+                        "priority": candidate["priority"],
+                        "parent_id": candidate.get("parent_id"),
+                        "generated": candidate.get("generated", False),
+                    }
+                    for candidate in selected_candidates
+                ],
+                "pruned_candidates": pruned_candidates,
             },
             "raw-timing-results.json": {
                 "mean_uplift_pct": round(mean_uplift * 100, 2),
                 "rows": rows,
+            },
+            "best-candidate-summary.json": {
+                "winner_counts": winner_counts,
+                "best_overall_candidate_id": max(
+                    winner_counts,
+                    key=winner_counts.get,
+                    default="",
+                ),
             },
             "baseline-comparison.md": _matmul_live_comparison(rows, mean_uplift),
         }
@@ -685,35 +717,109 @@ class MatmulPythonExecutor(ExperimentExecutor):
             for experiment in experiments
         ]
 
-    def _run_fixture(self, fixture: dict[str, object]) -> dict[str, object]:
+    def _run_fixture(
+        self,
+        fixture: dict[str, object],
+        candidates: list[dict[str, object]],
+    ) -> dict[str, object]:
         m, n, k = fixture["shape"]
         seed = sum(ord(char) for char in fixture["id"])
         a = _generate_matrix(m, k, seed=seed)
         b = _generate_matrix(k, n, seed=seed + 1)
         baseline_time = min(_time_call(lambda: _matmul_ijk(a, b)) for _ in range(self.repetitions))
-        candidate_time = min(
-            _time_call(lambda: _matmul_transpose_candidate(a, b))
-            for _ in range(self.repetitions)
-        )
         baseline_result = _matmul_ijk(a, b)
-        candidate_result = _matmul_transpose_candidate(a, b)
-        max_abs_error = _max_abs_diff(baseline_result, candidate_result)
         ops = 2 * m * n * k
         baseline_gflops = ops / baseline_time / 1_000_000_000
-        candidate_gflops = ops / candidate_time / 1_000_000_000
-        uplift_pct = ((candidate_time * -1) + baseline_time) / baseline_time * 100
+        candidate_rows = []
+        for candidate in candidates:
+            fn = candidate["fn"]
+            candidate_time = min(_time_call(lambda fn=fn: fn(a, b)) for _ in range(self.repetitions))
+            candidate_result = fn(a, b)
+            max_abs_error = _max_abs_diff(baseline_result, candidate_result)
+            candidate_rows.append(
+                {
+                    "candidate_id": candidate["id"],
+                    "candidate_name": candidate["name"],
+                    "candidate_family": candidate["family"],
+                    "candidate_seconds": round(candidate_time, 6),
+                    "candidate_gflops": round(ops / candidate_time / 1_000_000_000, 4),
+                    "max_abs_error": round(max_abs_error, 12),
+                }
+            )
+        valid_candidates = [
+            row for row in candidate_rows if row["max_abs_error"] <= 1e-9
+        ] or candidate_rows
+        best_candidate = min(valid_candidates, key=lambda row: row["candidate_seconds"])
+        uplift_pct = (
+            (baseline_time - best_candidate["candidate_seconds"]) / baseline_time * 100
+        )
         return {
             "id": fixture["id"],
             "shape": f"{m}x{n}x{k}",
             "dtype": fixture["dtype"],
             "baseline_seconds": round(baseline_time, 6),
-            "candidate_seconds": round(candidate_time, 6),
+            "candidate_seconds": best_candidate["candidate_seconds"],
             "baseline_gflops": round(baseline_gflops, 4),
-            "candidate_gflops": round(candidate_gflops, 4),
+            "candidate_gflops": best_candidate["candidate_gflops"],
             "uplift_pct": round(uplift_pct, 2),
-            "max_abs_error": round(max_abs_error, 12),
-            "strategy": "transpose-aware dot-product loop",
+            "max_abs_error": best_candidate["max_abs_error"],
+            "strategy": best_candidate["candidate_name"],
+            "best_candidate_id": best_candidate["candidate_id"],
+            "candidate_results": candidate_rows,
         }
+
+    def _select_candidates(self) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+        catalog = _matmul_candidate_catalog(self.history_summary)
+        wins = {}
+        shape_winners = {}
+        if isinstance(self.history_summary, dict):
+            wins = self.history_summary.get("matmul_candidate_wins", {}) or {}
+            shape_winners = self.history_summary.get("matmul_shape_winners", {}) or {}
+        for candidate in catalog:
+            candidate["historical_wins"] = int(wins.get(candidate["id"], 0))
+            candidate["shape_bonus"] = sum(
+                int(shape_entry.get("winner_counts", {}).get(candidate["id"], 0))
+                for shape_entry in shape_winners.values()
+                if isinstance(shape_entry, dict)
+            )
+
+        selected = []
+        pruned = []
+        seen_families: set[str] = set()
+
+        ranked = sorted(
+            catalog,
+            key=lambda candidate: (
+                -candidate["historical_wins"],
+                -candidate["shape_bonus"],
+                -candidate["priority"],
+                candidate["id"],
+            ),
+        )
+
+        for candidate in ranked:
+            if len(selected) >= self.max_candidates_per_run:
+                pruned.append(
+                    {
+                        "id": candidate["id"],
+                        "family": candidate["family"],
+                        "reason": "candidate_cap_reached",
+                    }
+                )
+                continue
+            family = candidate["family"]
+            if family in seen_families and candidate["historical_wins"] == 0 and candidate["priority"] < 0.75:
+                pruned.append(
+                    {
+                        "id": candidate["id"],
+                        "family": family,
+                        "reason": "family_pruned_after_higher_priority_candidate",
+                    }
+                )
+                continue
+            selected.append(candidate)
+            seen_families.add(family)
+        return selected, pruned
 
 
 @dataclass(slots=True)
@@ -857,14 +963,14 @@ def _matmul_live_comparison(rows: list[dict[str, object]], mean_uplift: float) -
             f"{row['id']} | {row['shape']} | baseline={row['baseline_seconds']}s "
             f"({row['baseline_gflops']} GFLOPS) | candidate={row['candidate_seconds']}s "
             f"({row['candidate_gflops']} GFLOPS) | uplift={row['uplift_pct']}% | "
-            f"max_abs_error={row['max_abs_error']}"
+            f"winner={row['best_candidate_id']} | max_abs_error={row['max_abs_error']}"
         )
     lines.extend(
         [
             "",
             "## Interpretation",
             "",
-            "- Candidate uses a transpose-aware access pattern to reduce Python-level cache-unfriendly column access.",
+            "- The executor benchmarks a small generated family of CPU-local candidates and records the winner per fixture.",
             "- This is a real CPU microbenchmark, not a synthetic placeholder, but it is still a small replay harness rather than a GPU kernel runtime.",
         ]
     )
@@ -905,6 +1011,254 @@ def _matmul_transpose_candidate(a: list[list[float]], b: list[list[float]]) -> l
                 value += row_a[k] * row_b[k]
             out[i][j] = value
     return out
+
+
+def _matmul_ikj_candidate(a: list[list[float]], b: list[list[float]]) -> list[list[float]]:
+    rows = len(a)
+    cols = len(b[0])
+    depth = len(b)
+    out = [[0.0] * cols for _ in range(rows)]
+    for i in range(rows):
+        row_out = out[i]
+        row_a = a[i]
+        for k in range(depth):
+            aik = row_a[k]
+            row_b = b[k]
+            for j in range(cols):
+                row_out[j] += aik * row_b[j]
+    return out
+
+
+def _matmul_blocked_transpose_candidate(
+    a: list[list[float]],
+    b: list[list[float]],
+    *,
+    block: int = 16,
+) -> list[list[float]]:
+    rows = len(a)
+    cols = len(b[0])
+    depth = len(b)
+    b_transposed = [list(column) for column in zip(*b)]
+    out = [[0.0] * cols for _ in range(rows)]
+    for ii in range(0, rows, block):
+        for jj in range(0, cols, block):
+            for kk0 in range(0, depth, block):
+                for i in range(ii, min(ii + block, rows)):
+                    row_a = a[i]
+                    row_out = out[i]
+                    for j in range(jj, min(jj + block, cols)):
+                        row_b = b_transposed[j]
+                        value = 0.0
+                        for k in range(kk0, min(kk0 + block, depth)):
+                            value += row_a[k] * row_b[k]
+                        row_out[j] += value
+    return out
+
+
+def _matmul_blocked_transpose_8_candidate(
+    a: list[list[float]],
+    b: list[list[float]],
+) -> list[list[float]]:
+    return _matmul_blocked_transpose_candidate(a, b, block=8)
+
+
+def _matmul_ikj_unroll4_candidate(
+    a: list[list[float]],
+    b: list[list[float]],
+) -> list[list[float]]:
+    rows = len(a)
+    cols = len(b[0])
+    depth = len(b)
+    out = [[0.0] * cols for _ in range(rows)]
+    for i in range(rows):
+        row_out = out[i]
+        row_a = a[i]
+        for k in range(depth):
+            aik = row_a[k]
+            row_b = b[k]
+            j = 0
+            while j + 3 < cols:
+                row_out[j] += aik * row_b[j]
+                row_out[j + 1] += aik * row_b[j + 1]
+                row_out[j + 2] += aik * row_b[j + 2]
+                row_out[j + 3] += aik * row_b[j + 3]
+                j += 4
+            while j < cols:
+                row_out[j] += aik * row_b[j]
+                j += 1
+    return out
+
+
+def _matmul_transpose_unroll4_candidate(
+    a: list[list[float]],
+    b: list[list[float]],
+) -> list[list[float]]:
+    rows = len(a)
+    cols = len(b[0])
+    depth = len(b)
+    b_transposed = [list(column) for column in zip(*b)]
+    out = [[0.0] * cols for _ in range(rows)]
+    for i in range(rows):
+        row_a = a[i]
+        for j in range(cols):
+            row_b = b_transposed[j]
+            value = 0.0
+            k = 0
+            while k + 3 < depth:
+                value += (
+                    row_a[k] * row_b[k]
+                    + row_a[k + 1] * row_b[k + 1]
+                    + row_a[k + 2] * row_b[k + 2]
+                    + row_a[k + 3] * row_b[k + 3]
+                )
+                k += 4
+            while k < depth:
+                value += row_a[k] * row_b[k]
+                k += 1
+            out[i][j] = value
+    return out
+
+
+def _matmul_transpose_unroll8_candidate(
+    a: list[list[float]],
+    b: list[list[float]],
+) -> list[list[float]]:
+    rows = len(a)
+    cols = len(b[0])
+    depth = len(b)
+    b_transposed = [list(column) for column in zip(*b)]
+    out = [[0.0] * cols for _ in range(rows)]
+    for i in range(rows):
+        row_a = a[i]
+        for j in range(cols):
+            row_b = b_transposed[j]
+            value = 0.0
+            k = 0
+            while k + 7 < depth:
+                value += (
+                    row_a[k] * row_b[k]
+                    + row_a[k + 1] * row_b[k + 1]
+                    + row_a[k + 2] * row_b[k + 2]
+                    + row_a[k + 3] * row_b[k + 3]
+                    + row_a[k + 4] * row_b[k + 4]
+                    + row_a[k + 5] * row_b[k + 5]
+                    + row_a[k + 6] * row_b[k + 6]
+                    + row_a[k + 7] * row_b[k + 7]
+                )
+                k += 8
+            while k < depth:
+                value += row_a[k] * row_b[k]
+                k += 1
+            out[i][j] = value
+    return out
+
+
+def _matmul_candidate_catalog(
+    history_summary: dict[str, object] | None = None,
+) -> list[dict[str, object]]:
+    catalog = [
+        {
+            "id": "transpose_dot",
+            "name": "transpose-aware dot-product loop",
+            "family": "layout_transform",
+            "description": "Transpose B first so inner loops read contiguous memory.",
+            "fn": _matmul_transpose_candidate,
+            "priority": 1.0,
+        },
+        {
+            "id": "ikj_accumulate",
+            "name": "i-k-j accumulation loop",
+            "family": "loop_reordering",
+            "description": "Accumulate output rows while streaming through B row-major.",
+            "fn": _matmul_ikj_candidate,
+            "priority": 0.9,
+        },
+        {
+            "id": "blocked_transpose_16",
+            "name": "blocked transpose-aware loop (16)",
+            "family": "tiling",
+            "description": "Use transpose plus 16-wide block tiling to reduce cache-miss pressure.",
+            "fn": _matmul_blocked_transpose_candidate,
+            "priority": 0.7,
+        },
+        {
+            "id": "blocked_transpose_8",
+            "name": "blocked transpose-aware loop (8)",
+            "family": "tiling",
+            "description": "Use transpose plus 8-wide block tiling to reduce cache-miss pressure.",
+            "fn": _matmul_blocked_transpose_8_candidate,
+            "priority": 0.5,
+        },
+    ]
+    best_candidate_id = ""
+    if isinstance(history_summary, dict):
+        best_candidate_id = str(history_summary.get("best_matmul_candidate_id", "")).strip()
+
+    generated = []
+    if best_candidate_id.startswith("transpose"):
+        generated.extend(
+            [
+                {
+                    "id": "transpose_unroll8",
+                    "name": "transpose-aware unroll-8 loop",
+                    "family": "unrolling",
+                    "description": "Use transpose plus manual unroll-8 accumulation in the inner loop.",
+                    "fn": _matmul_transpose_unroll8_candidate,
+                    "priority": 0.95,
+                    "parent_id": "transpose_dot",
+                    "generated": True,
+                },
+                {
+                    "id": "transpose_unroll4",
+                    "name": "transpose-aware unroll-4 loop",
+                    "family": "unrolling",
+                    "description": "Use transpose plus manual unroll-4 accumulation in the inner loop.",
+                    "fn": _matmul_transpose_unroll4_candidate,
+                    "priority": 0.8,
+                    "parent_id": "transpose_dot",
+                    "generated": True,
+                },
+            ]
+        )
+    if best_candidate_id.startswith("ikj"):
+        generated.append(
+            {
+                "id": "ikj_unroll4",
+                "name": "i-k-j accumulation loop with j unroll-4",
+                "family": "loop_reordering",
+                "description": "Accumulate output rows row-major with an unrolled j loop.",
+                "fn": _matmul_ikj_unroll4_candidate,
+                "priority": 0.85,
+                "parent_id": "ikj_accumulate",
+                "generated": True,
+            }
+        )
+    if not generated:
+        generated.extend(
+            [
+                {
+                    "id": "transpose_unroll8",
+                    "name": "transpose-aware unroll-8 loop",
+                    "family": "unrolling",
+                    "description": "Use transpose plus manual unroll-8 accumulation in the inner loop.",
+                    "fn": _matmul_transpose_unroll8_candidate,
+                    "priority": 0.95,
+                    "parent_id": "transpose_dot",
+                    "generated": True,
+                },
+                {
+                    "id": "ikj_unroll4",
+                    "name": "i-k-j accumulation loop with j unroll-4",
+                    "family": "loop_reordering",
+                    "description": "Accumulate output rows row-major with an unrolled j loop.",
+                    "fn": _matmul_ikj_unroll4_candidate,
+                    "priority": 0.85,
+                    "parent_id": "ikj_accumulate",
+                    "generated": True,
+                },
+            ]
+        )
+    return catalog + generated
 
 
 def _time_call(fn) -> float:

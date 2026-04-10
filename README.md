@@ -38,6 +38,7 @@ This repository is the first scaffold for that loop, starting with ML/LLMs becau
 - `docs/CI.md`: layered CI strategy for tests, benchmark planning, and Codex lanes
 - `docs/CODEX_CI_ENV.md`: how to mirror local Codex provider config into GitHub Actions
 - `docs/RESEARCH_AGENDA.md`: which LLM/ML problems Noeris should pursue first
+- `docs/RESEARCH_MEMORY.md`: recommended memory and knowledge-graph shape for long-running benchmark research
 - `docs/VERIFICATION.md`: evidence rules and publishability gates
 - `docs/RESEARCH_LANDSCAPE.md`: external landscape and design implications
 - `docs/NAME_SHORTLIST.md`: naming directions under review
