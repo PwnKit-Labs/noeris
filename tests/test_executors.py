@@ -266,7 +266,7 @@ class ExecutorTests(unittest.TestCase):
         )
         self.assertEqual(
             len(results[0].artifact_payloads["candidate-catalog.json"]["selected_candidates"]),
-            4,
+            5,
         )
         self.assertEqual(results[0].artifact_payloads["candidate-proposals.json"]["source"], "none")
         self.assertIn("shape-focus.json", results[0].artifact_refs)
@@ -287,6 +287,16 @@ class ExecutorTests(unittest.TestCase):
             "loops_per_sample",
             results[0].artifact_payloads["raw-timing-results.json"]["rows"][0]["candidate_results"][0],
         )
+        self.assertIn(
+            "workload_tag",
+            results[0].artifact_payloads["raw-timing-results.json"]["rows"][0],
+        )
+        self.assertIn(
+            "workload_share",
+            results[0].artifact_payloads["raw-timing-results.json"]["rows"][0],
+        )
+        self.assertIn("weakest_workloads", results[0].artifact_payloads["shape-focus.json"])
+        self.assertIn("frontier-archive.json", results[0].artifact_refs)
         self.assertTrue(
             results[0].artifact_payloads["best-candidate-summary.json"]["best_overall_candidate_id"]
         )

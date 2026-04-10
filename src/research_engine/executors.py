@@ -138,11 +138,48 @@ MATMUL_FIXTURES = [
 ]
 
 LIVE_MATMUL_FIXTURES = [
-    {"id": "mm-live-1", "shape": (32, 32, 32), "dtype": "float64"},
-    {"id": "mm-live-2", "shape": (48, 48, 48), "dtype": "float64"},
-    {"id": "mm-live-3", "shape": (64, 64, 64), "dtype": "float64"},
-    {"id": "mm-live-4", "shape": (72, 72, 72), "dtype": "float64"},
-    {"id": "mm-live-5", "shape": (96, 96, 96), "dtype": "float64"},
+    {
+        "id": "mm-live-qkv",
+        "shape": (32, 96, 32),
+        "dtype": "float64",
+        "workload_tag": "attention_qkv",
+        "workload_share": 0.14,
+    },
+    {
+        "id": "mm-live-attn-out",
+        "shape": (96, 64, 96),
+        "dtype": "float64",
+        "workload_tag": "attention_out_proj",
+        "workload_share": 0.12,
+    },
+    {
+        "id": "mm-live-mlp-up",
+        "shape": (64, 256, 64),
+        "dtype": "float64",
+        "workload_tag": "mlp_up_proj",
+        "workload_share": 0.28,
+    },
+    {
+        "id": "mm-live-mlp-down",
+        "shape": (64, 64, 256),
+        "dtype": "float64",
+        "workload_tag": "mlp_down_proj",
+        "workload_share": 0.22,
+    },
+    {
+        "id": "mm-live-residual",
+        "shape": (128, 64, 32),
+        "dtype": "float64",
+        "workload_tag": "residual_adapter",
+        "workload_share": 0.10,
+    },
+    {
+        "id": "mm-live-control",
+        "shape": (96, 96, 96),
+        "dtype": "float64",
+        "workload_tag": "square_control",
+        "workload_share": 0.14,
+    },
 ]
 
 
@@ -630,7 +667,7 @@ class MatmulPythonExecutor(ExperimentExecutor):
 
     repetitions: int = 3
     warmup_repetitions: int = 1
-    max_candidates_per_run: int = 4
+    max_candidates_per_run: int = 5
     history_summary: dict[str, object] | None = None
     proposer: ResponsesApiClient | None = None
 
@@ -641,16 +678,26 @@ class MatmulPythonExecutor(ExperimentExecutor):
     ) -> list[ExperimentResult]:
         del topic
         rows = []
-        improvements = []
+        weighted_improvements = []
+        unweighted_improvements = []
         winner_counts: dict[str, int] = {}
+        winner_share_scores: dict[str, float] = {}
         selected_candidates, pruned_candidates, shape_focus, proposal = self._select_candidates()
         for fixture in LIVE_MATMUL_FIXTURES:
             row = self._run_fixture(fixture, selected_candidates)
             rows.append(row)
-            improvements.append(row["uplift_pct"] / 100)
+            uplift = row["uplift_pct"] / 100
+            share = float(row["workload_share"])
+            weighted_improvements.append(uplift * share)
+            unweighted_improvements.append(uplift)
             winner_counts[row["best_candidate_id"]] = winner_counts.get(row["best_candidate_id"], 0) + 1
+            winner_share_scores[row["best_candidate_id"]] = (
+                winner_share_scores.get(row["best_candidate_id"], 0.0) + share
+            )
 
-        mean_uplift = sum(improvements) / len(improvements)
+        total_share = sum(float(row["workload_share"]) for row in rows) or 1.0
+        mean_uplift = sum(weighted_improvements) / total_share
+        unweighted_mean_uplift = sum(unweighted_improvements) / len(unweighted_improvements)
         candidates = _matmul_candidate_catalog()
         hardware_profile = {
             "executor": "python_cpu_microbenchmark",
@@ -664,6 +711,8 @@ class MatmulPythonExecutor(ExperimentExecutor):
                     "id": row["id"],
                     "shape": row["shape"],
                     "dtype": row["dtype"],
+                    "workload_tag": row["workload_tag"],
+                    "workload_share": row["workload_share"],
                 }
                 for row in rows
             ],
@@ -677,6 +726,7 @@ class MatmulPythonExecutor(ExperimentExecutor):
                 "candidate_ids": [candidate["id"] for candidate in selected_candidates],
                 "repetitions": self.repetitions,
                 "warmup_repetitions": self.warmup_repetitions,
+                "aggregation": "workload_share_weighted_mean_uplift_pct",
             },
             "candidate-catalog.json": {
                 "baseline": "naive_ijk",
@@ -689,6 +739,7 @@ class MatmulPythonExecutor(ExperimentExecutor):
                         "priority": candidate["priority"],
                         "parent_id": candidate.get("parent_id"),
                         "generated": candidate.get("generated", False),
+                        "target_workloads": candidate.get("target_workloads", []),
                     }
                     for candidate in selected_candidates
                 ],
@@ -697,22 +748,47 @@ class MatmulPythonExecutor(ExperimentExecutor):
             "candidate-proposals.json": proposal,
             "shape-focus.json": shape_focus,
             "raw-timing-results.json": {
+                "aggregation": "workload_share_weighted_mean_uplift_pct",
                 "mean_uplift_pct": round(mean_uplift * 100, 2),
+                "unweighted_mean_uplift_pct": round(unweighted_mean_uplift * 100, 2),
                 "rows": rows,
             },
             "best-candidate-summary.json": {
                 "winner_counts": winner_counts,
+                "winner_share_scores": {
+                    candidate_id: round(score, 4)
+                    for candidate_id, score in winner_share_scores.items()
+                },
                 "best_overall_candidate_id": max(
-                    winner_counts,
-                    key=winner_counts.get,
-                    default="",
+                    winner_share_scores,
+                    key=lambda candidate_id: (
+                        winner_share_scores[candidate_id],
+                        winner_counts.get(candidate_id, 0),
+                    ),
+                    default=max(
+                        winner_counts,
+                        key=winner_counts.get,
+                        default="",
+                    ),
                 ),
+            },
+            "frontier-archive.json": {
+                "workload_winners": [
+                    {
+                        "workload_tag": row["workload_tag"],
+                        "workload_share": row["workload_share"],
+                        "best_candidate_id": row["best_candidate_id"],
+                        "runner_up_candidate_id": row["runner_up_candidate_id"],
+                        "runner_up_gap_pct": row["runner_up_gap_pct"],
+                    }
+                    for row in rows
+                ]
             },
             "baseline-comparison.md": _matmul_live_comparison(rows, mean_uplift),
         }
         summary = (
             f"Live matmul CPU benchmark completed on {len(rows)} fixtures. "
-            f"Mean throughput uplift={mean_uplift * 100:.2f}%."
+            f"Weighted throughput uplift={mean_uplift * 100:.2f}%."
         )
         return [
             ExperimentResult(
@@ -776,6 +852,8 @@ class MatmulPythonExecutor(ExperimentExecutor):
             "id": fixture["id"],
             "shape": f"{m}x{n}x{k}",
             "dtype": fixture["dtype"],
+            "workload_tag": fixture.get("workload_tag", ""),
+            "workload_share": float(fixture.get("workload_share", 1.0)),
             "baseline_seconds": round(baseline_time, 6),
             "baseline_loops_per_sample": baseline_measurement["loops_per_sample"],
             "candidate_seconds": best_candidate["candidate_seconds"],
@@ -812,12 +890,22 @@ class MatmulPythonExecutor(ExperimentExecutor):
         shape_winners = {}
         shape_challengers = {}
         weakest_shapes = []
+        workload_winners = {}
+        workload_challengers = {}
+        weakest_workloads = []
         best_candidate_id = ""
+        family_wins = {}
+        frontier_archive = []
         if isinstance(self.history_summary, dict):
             wins = self.history_summary.get("matmul_candidate_wins", {}) or {}
+            family_wins = self.history_summary.get("matmul_family_wins", {}) or {}
             shape_winners = self.history_summary.get("matmul_shape_winners", {}) or {}
             shape_challengers = self.history_summary.get("matmul_shape_challengers", {}) or {}
             weakest_shapes = self.history_summary.get("weakest_matmul_shapes", []) or []
+            workload_winners = self.history_summary.get("matmul_workload_winners", {}) or {}
+            workload_challengers = self.history_summary.get("matmul_workload_challengers", {}) or {}
+            weakest_workloads = self.history_summary.get("weakest_matmul_workloads", []) or []
+            frontier_archive = self.history_summary.get("matmul_frontier_archive", []) or []
             best_candidate_id = str(self.history_summary.get("best_matmul_candidate_id", "")).strip()
             if not weakest_shapes and shape_challengers:
                 weakest_shapes = sorted(
@@ -832,38 +920,82 @@ class MatmulPythonExecutor(ExperimentExecutor):
                     ],
                     key=lambda item: item.get("runner_up_gap_pct", 10**9),
                 )
-        proposal = self._propose_candidates(catalog, weakest_shapes)
+            if not weakest_workloads and workload_challengers:
+                weakest_workloads = sorted(
+                    [
+                        {
+                            "workload_tag": workload_tag,
+                            "runner_up_candidate_id": entry.get("latest_runner_up", ""),
+                            "runner_up_gap_pct": entry.get("latest_runner_up_gap_pct", 10**9),
+                        }
+                        for workload_tag, entry in workload_challengers.items()
+                        if isinstance(entry, dict)
+                    ],
+                    key=lambda item: item.get("runner_up_gap_pct", 10**9),
+                )
+        proposal = self._propose_candidates(catalog, weakest_shapes, weakest_workloads)
         proposed_ids = set(proposal.get("candidate_ids", []))
         top_weakest_shapes = [
             item for item in weakest_shapes[:3] if isinstance(item, dict)
+        ]
+        top_weakest_workloads = [
+            item for item in weakest_workloads[:3] if isinstance(item, dict)
         ]
         weak_shape_ids = {
             str(item.get("shape", "")).strip()
             for item in top_weakest_shapes
             if str(item.get("shape", "")).strip()
         }
+        weak_workload_ids = {
+            str(item.get("workload_tag", "")).strip()
+            for item in top_weakest_workloads
+            if str(item.get("workload_tag", "")).strip()
+        }
+        archive_candidate_ids = {
+            str(item.get("best_candidate_id", "")).strip()
+            for item in frontier_archive
+            if isinstance(item, dict) and str(item.get("best_candidate_id", "")).strip()
+        }
         for candidate in catalog:
             candidate["historical_wins"] = int(wins.get(candidate["id"], 0))
+            candidate["family_wins"] = int(family_wins.get(candidate["family"], 0))
             candidate["shape_bonus"] = sum(
                 int(shape_entry.get("winner_counts", {}).get(candidate["id"], 0))
                 for shape_entry in shape_winners.values()
                 if isinstance(shape_entry, dict)
+            )
+            candidate["workload_bonus"] = sum(
+                int(workload_entry.get("winner_counts", {}).get(candidate["id"], 0))
+                for workload_entry in workload_winners.values()
+                if isinstance(workload_entry, dict)
             )
             candidate["challenger_bonus"] = sum(
                 int(shape_entry.get("runner_up_counts", {}).get(candidate["id"], 0))
                 for shape_entry in shape_challengers.values()
                 if isinstance(shape_entry, dict)
             )
+            candidate["workload_challenger_bonus"] = sum(
+                int(workload_entry.get("runner_up_counts", {}).get(candidate["id"], 0))
+                for workload_entry in workload_challengers.values()
+                if isinstance(workload_entry, dict)
+            )
             candidate["target_shape_bonus"] = sum(
                 1
                 for shape in candidate.get("target_shapes", [])
                 if isinstance(shape, str) and shape in weak_shape_ids
+            )
+            candidate["target_workload_bonus"] = sum(
+                1
+                for workload_tag in candidate.get("target_workloads", [])
+                if isinstance(workload_tag, str) and workload_tag in weak_workload_ids
             )
             candidate["weak_shape_bonus"] = sum(
                 1
                 for item in weakest_shapes[:2]
                 if isinstance(item, dict) and item.get("runner_up_candidate_id") == candidate["id"]
             )
+            candidate["archive_bonus"] = 1 if candidate["id"] in archive_candidate_ids else 0
+            candidate["family_novelty_bonus"] = 1 if candidate["family_wins"] == 0 else 0
             candidate["lineage_bonus"] = (
                 1
                 if best_candidate_id
@@ -882,9 +1014,14 @@ class MatmulPythonExecutor(ExperimentExecutor):
             key=lambda candidate: (
                 -candidate["historical_wins"],
                 -candidate["shape_bonus"],
+                -candidate["workload_bonus"],
                 -candidate["target_shape_bonus"],
+                -candidate["target_workload_bonus"],
                 -candidate["challenger_bonus"],
+                -candidate["workload_challenger_bonus"],
                 -candidate["weak_shape_bonus"],
+                -candidate["archive_bonus"],
+                -candidate["family_novelty_bonus"],
                 -candidate["lineage_bonus"],
                 -candidate["proposal_bonus"],
                 -candidate["priority"],
@@ -892,7 +1029,28 @@ class MatmulPythonExecutor(ExperimentExecutor):
             ),
         )
 
+        if ranked:
+            selected.append(ranked[0])
+            seen_families.add(str(ranked[0]["family"]))
+
+        exploratory_candidate = next(
+            (
+                candidate
+                for candidate in ranked[1:]
+                if candidate["family_novelty_bonus"] > 0
+                or candidate["target_workload_bonus"] > 0
+                or candidate["archive_bonus"] == 0
+            ),
+            None,
+        )
+        if exploratory_candidate is not None and len(selected) < self.max_candidates_per_run:
+            if exploratory_candidate not in selected:
+                selected.append(exploratory_candidate)
+                seen_families.add(str(exploratory_candidate["family"]))
+
         for candidate in ranked:
+            if candidate in selected:
+                continue
             if len(selected) >= self.max_candidates_per_run:
                 pruned.append(
                     {
@@ -916,18 +1074,26 @@ class MatmulPythonExecutor(ExperimentExecutor):
             seen_families.add(family)
         shape_focus = {
             "weakest_shapes": top_weakest_shapes,
+            "weakest_workloads": top_weakest_workloads,
             "selection_reasons": [
                 {
                     "candidate_id": candidate["id"],
                     "historical_wins": candidate["historical_wins"],
+                    "family_wins": candidate["family_wins"],
                     "shape_bonus": candidate["shape_bonus"],
+                    "workload_bonus": candidate["workload_bonus"],
                     "target_shape_bonus": candidate["target_shape_bonus"],
+                    "target_workload_bonus": candidate["target_workload_bonus"],
                     "challenger_bonus": candidate["challenger_bonus"],
+                    "workload_challenger_bonus": candidate["workload_challenger_bonus"],
                     "weak_shape_bonus": candidate["weak_shape_bonus"],
+                    "archive_bonus": candidate["archive_bonus"],
+                    "family_novelty_bonus": candidate["family_novelty_bonus"],
                     "lineage_bonus": candidate["lineage_bonus"],
                     "proposal_bonus": candidate["proposal_bonus"],
                     "priority": candidate["priority"],
                     "target_shapes": candidate.get("target_shapes", []),
+                    "target_workloads": candidate.get("target_workloads", []),
                 }
                 for candidate in selected
             ],
@@ -938,6 +1104,7 @@ class MatmulPythonExecutor(ExperimentExecutor):
         self,
         catalog: list[dict[str, object]],
         weakest_shapes: list[dict[str, object]],
+        weakest_workloads: list[dict[str, object]],
     ) -> dict[str, object]:
         if self.proposer is None:
             return {
@@ -963,6 +1130,7 @@ class MatmulPythonExecutor(ExperimentExecutor):
                             else ""
                         ),
                         "weakest_shapes": weakest_shapes[:3],
+                        "weakest_workloads": weakest_workloads[:3] if isinstance(self.history_summary, dict) else [],
                         "available_candidates": [
                             {
                                 "id": candidate["id"],
@@ -970,6 +1138,7 @@ class MatmulPythonExecutor(ExperimentExecutor):
                                 "description": candidate["description"],
                                 "priority": candidate["priority"],
                                 "parent_id": candidate.get("parent_id"),
+                                "target_workloads": candidate.get("target_workloads", []),
                             }
                             for candidate in catalog
                         ],
@@ -1394,9 +1563,147 @@ def _matmul_transpose_rowpair_candidate(
     return out
 
 
+def _matmul_transpose_rowpair_unroll4_candidate(
+    a: list[list[float]],
+    b: list[list[float]],
+) -> list[list[float]]:
+    rows = len(a)
+    cols = len(b[0])
+    depth = len(b)
+    b_transposed = [list(column) for column in zip(*b)]
+    out = [[0.0] * cols for _ in range(rows)]
+    i = 0
+    while i + 1 < rows:
+        row_a0 = a[i]
+        row_a1 = a[i + 1]
+        for j in range(cols):
+            row_b = b_transposed[j]
+            value0 = 0.0
+            value1 = 0.0
+            k = 0
+            while k + 3 < depth:
+                b0 = row_b[k]
+                b1 = row_b[k + 1]
+                b2 = row_b[k + 2]
+                b3 = row_b[k + 3]
+                value0 += row_a0[k] * b0 + row_a0[k + 1] * b1 + row_a0[k + 2] * b2 + row_a0[k + 3] * b3
+                value1 += row_a1[k] * b0 + row_a1[k + 1] * b1 + row_a1[k + 2] * b2 + row_a1[k + 3] * b3
+                k += 4
+            while k < depth:
+                b_k = row_b[k]
+                value0 += row_a0[k] * b_k
+                value1 += row_a1[k] * b_k
+                k += 1
+            out[i][j] = value0
+            out[i + 1][j] = value1
+        i += 2
+    while i < rows:
+        row_a = a[i]
+        for j in range(cols):
+            row_b = b_transposed[j]
+            value = 0.0
+            for k in range(depth):
+                value += row_a[k] * row_b[k]
+            out[i][j] = value
+        i += 1
+    return out
+
+
+def _matmul_transpose_dual_col_candidate(
+    a: list[list[float]],
+    b: list[list[float]],
+) -> list[list[float]]:
+    rows = len(a)
+    cols = len(b[0])
+    depth = len(b)
+    b_transposed = [list(column) for column in zip(*b)]
+    out = [[0.0] * cols for _ in range(rows)]
+    for i in range(rows):
+        row_a = a[i]
+        j = 0
+        while j + 1 < cols:
+            row_b0 = b_transposed[j]
+            row_b1 = b_transposed[j + 1]
+            value0 = 0.0
+            value1 = 0.0
+            for k in range(depth):
+                a_k = row_a[k]
+                value0 += a_k * row_b0[k]
+                value1 += a_k * row_b1[k]
+            out[i][j] = value0
+            out[i][j + 1] = value1
+            j += 2
+        while j < cols:
+            row_b = b_transposed[j]
+            value = 0.0
+            for k in range(depth):
+                value += row_a[k] * row_b[k]
+            out[i][j] = value
+            j += 1
+    return out
+
+
+def _matmul_transpose_rowpair_dualcol_candidate(
+    a: list[list[float]],
+    b: list[list[float]],
+) -> list[list[float]]:
+    rows = len(a)
+    cols = len(b[0])
+    depth = len(b)
+    b_transposed = [list(column) for column in zip(*b)]
+    out = [[0.0] * cols for _ in range(rows)]
+    i = 0
+    while i + 1 < rows:
+        row_a0 = a[i]
+        row_a1 = a[i + 1]
+        j = 0
+        while j + 1 < cols:
+            row_b0 = b_transposed[j]
+            row_b1 = b_transposed[j + 1]
+            value00 = value01 = value10 = value11 = 0.0
+            for k in range(depth):
+                a0 = row_a0[k]
+                a1 = row_a1[k]
+                b0 = row_b0[k]
+                b1 = row_b1[k]
+                value00 += a0 * b0
+                value01 += a0 * b1
+                value10 += a1 * b0
+                value11 += a1 * b1
+            out[i][j] = value00
+            out[i][j + 1] = value01
+            out[i + 1][j] = value10
+            out[i + 1][j + 1] = value11
+            j += 2
+        while j < cols:
+            row_b = b_transposed[j]
+            value0 = 0.0
+            value1 = 0.0
+            for k in range(depth):
+                b_k = row_b[k]
+                value0 += row_a0[k] * b_k
+                value1 += row_a1[k] * b_k
+            out[i][j] = value0
+            out[i + 1][j] = value1
+            j += 1
+        i += 2
+    while i < rows:
+        row_a = a[i]
+        for j in range(cols):
+            row_b = b_transposed[j]
+            value = 0.0
+            for k in range(depth):
+                value += row_a[k] * row_b[k]
+            out[i][j] = value
+        i += 1
+    return out
+
+
 def _matmul_candidate_catalog(
     history_summary: dict[str, object] | None = None,
 ) -> list[dict[str, object]]:
+    wide_output_workloads = [fixture["workload_tag"] for fixture in LIVE_MATMUL_FIXTURES if fixture["shape"][1] >= fixture["shape"][0] * 2]
+    balanced_workloads = [fixture["workload_tag"] for fixture in LIVE_MATMUL_FIXTURES if fixture["shape"][0] >= 64 and fixture["shape"][2] >= 64]
     catalog = [
         {
             "id": "transpose_dot",
@@ -1433,6 +1740,7 @@ def _matmul_candidate_catalog(
     ]
     best_candidate_id = ""
     weak_shape_targets: list[str] = []
+    weak_workload_targets: list[str] = []
     if isinstance(history_summary, dict):
         best_candidate_id = str(history_summary.get("best_matmul_candidate_id", "")).strip()
         weak_shape_targets = [
@@ -1441,6 +1749,13 @@ def _matmul_candidate_catalog(
             if isinstance(item, dict)
             for shape in [str(item.get("shape", "")).strip()]
             if shape and _shape_min_dimension(shape) >= 64
+        ][:3]
+        weak_workload_targets = [
+            workload_tag
+            for item in history_summary.get("weakest_matmul_workloads", []) or []
+            if isinstance(item, dict)
+            for workload_tag in [str(item.get("workload_tag", "")).strip()]
+            if workload_tag
         ][:3]
 
     generated = []
@@ -1456,6 +1771,7 @@ def _matmul_candidate_catalog(
                     "priority": 0.95,
                     "parent_id": "transpose_dot",
                     "generated": True,
+                    "target_workloads": wide_output_workloads,
                 },
                 {
                     "id": "transpose_unroll16",
@@ -1466,6 +1782,7 @@ def _matmul_candidate_catalog(
                     "priority": 0.55,
                     "parent_id": "transpose_dot",
                     "generated": True,
+                    "target_workloads": wide_output_workloads,
                 },
                 {
                     "id": "transpose_unroll4",
@@ -1476,6 +1793,44 @@ def _matmul_candidate_catalog(
                     "priority": 0.8,
                     "parent_id": "transpose_dot",
                     "generated": True,
+                    "target_workloads": balanced_workloads,
+                },
+            ]
+        )
+        generated.extend(
+            [
+                {
+                    "id": "transpose_dual_col",
+                    "name": "transpose-aware dual-column sweep",
+                    "family": "column_pairing",
+                    "description": "Compute two output columns per pass to reuse each A row on wide-output workloads.",
+                    "fn": _matmul_transpose_dual_col_candidate,
+                    "priority": 0.78,
+                    "parent_id": "transpose_dot",
+                    "generated": True,
+                    "target_workloads": wide_output_workloads,
+                },
+                {
+                    "id": "transpose_rowpair_u4",
+                    "name": "transpose-aware row-pair sweep with k unroll-4",
+                    "family": "row_pairing",
+                    "description": "Pair output rows and unroll the k loop modestly to test a broader row-pair family.",
+                    "fn": _matmul_transpose_rowpair_unroll4_candidate,
+                    "priority": 0.74,
+                    "parent_id": "transpose_rowpair",
+                    "generated": True,
+                    "target_workloads": balanced_workloads,
+                },
+                {
+                    "id": "transpose_rowpair_dualcol",
+                    "name": "transpose-aware row/column pair sweep",
+                    "family": "pairwise_tiling",
+                    "description": "Pair both rows and columns to test a small register-blocked transpose family.",
+                    "fn": _matmul_transpose_rowpair_dualcol_candidate,
+                    "priority": 0.72,
+                    "parent_id": "transpose_rowpair",
+                    "generated": True,
+                    "target_workloads": wide_output_workloads,
                 },
             ]
         )
@@ -1491,6 +1846,7 @@ def _matmul_candidate_catalog(
                     "parent_id": "transpose_dot",
                     "generated": True,
                     "target_shapes": weak_shape_targets,
+                    "target_workloads": weak_workload_targets or balanced_workloads,
                 }
             )
     if best_candidate_id.startswith("ikj"):
@@ -1518,6 +1874,7 @@ def _matmul_candidate_catalog(
                     "priority": 0.95,
                     "parent_id": "transpose_dot",
                     "generated": True,
+                    "target_workloads": wide_output_workloads,
                 },
                 {
                     "id": "ikj_unroll4",
@@ -1528,6 +1885,7 @@ def _matmul_candidate_catalog(
                     "priority": 0.85,
                     "parent_id": "ikj_accumulate",
                     "generated": True,
+                    "target_workloads": ["mlp_down_proj", "residual_adapter"],
                 },
             ]
         )

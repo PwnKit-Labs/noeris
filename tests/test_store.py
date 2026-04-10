@@ -99,16 +99,40 @@ class RunStoreTests(unittest.TestCase):
             )
             record.memo.results[0].artifact_payloads["best-candidate-summary.json"] = {
                 "winner_counts": {"transpose_dot": 5, "ikj_accumulate": 0},
+                "winner_share_scores": {"transpose_dot": 0.7, "ikj_accumulate": 0.3},
                 "best_overall_candidate_id": "transpose_dot",
+            }
+            record.memo.results[0].artifact_payloads["frontier-archive.json"] = {
+                "workload_winners": [
+                    {
+                        "workload_tag": "mlp_up_proj",
+                        "workload_share": 0.28,
+                        "best_candidate_id": "transpose_dot",
+                        "runner_up_candidate_id": "ikj_accumulate",
+                        "runner_up_gap_pct": 3.2,
+                    }
+                ]
             }
             record.memo.results[0].artifact_payloads["raw-timing-results.json"] = {
                 "rows": [
                     {
                         "shape": "32x32x32",
+                        "workload_tag": "mlp_up_proj",
+                        "workload_share": 0.28,
                         "best_candidate_id": "transpose_dot",
                         "uplift_pct": 12.3,
                         "runner_up_candidate_id": "ikj_accumulate",
                         "runner_up_gap_pct": 3.2,
+                        "candidate_results": [
+                            {
+                                "candidate_id": "transpose_dot",
+                                "candidate_family": "layout_transform",
+                            },
+                            {
+                                "candidate_id": "ikj_accumulate",
+                                "candidate_family": "loop_reordering",
+                            },
+                        ],
                     }
                 ]
             }
@@ -118,8 +142,11 @@ class RunStoreTests(unittest.TestCase):
 
         self.assertEqual(summary["best_matmul_candidate_id"], "transpose_dot")
         self.assertEqual(summary["matmul_candidate_wins"]["transpose_dot"], 5)
+        self.assertEqual(summary["matmul_family_wins"]["layout_transform"], 1)
         self.assertIn("32x32x32", summary["matmul_shape_winners"])
         self.assertEqual(summary["weakest_matmul_shapes"][0]["shape"], "32x32x32")
+        self.assertEqual(summary["weakest_matmul_workloads"][0]["workload_tag"], "mlp_up_proj")
+        self.assertEqual(summary["matmul_frontier_archive"][0]["workload_tag"], "mlp_up_proj")
 
     def test_summarize_history_keeps_latest_shape_winner_from_newest_run(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -143,10 +170,22 @@ class RunStoreTests(unittest.TestCase):
                 "rows": [
                     {
                         "shape": "96x96x96",
+                        "workload_tag": "square_control",
+                        "workload_share": 0.14,
                         "best_candidate_id": "transpose_dot",
                         "uplift_pct": 24.5,
                         "runner_up_candidate_id": "transpose_unroll8",
                         "runner_up_gap_pct": 5.9,
+                        "candidate_results": [
+                            {
+                                "candidate_id": "transpose_dot",
+                                "candidate_family": "layout_transform",
+                            },
+                            {
+                                "candidate_id": "transpose_unroll8",
+                                "candidate_family": "unrolling",
+                            },
+                        ],
                     }
                 ]
             }
@@ -170,10 +209,22 @@ class RunStoreTests(unittest.TestCase):
                 "rows": [
                     {
                         "shape": "96x96x96",
+                        "workload_tag": "square_control",
+                        "workload_share": 0.14,
                         "best_candidate_id": "transpose_rowpair",
                         "uplift_pct": 26.2,
                         "runner_up_candidate_id": "transpose_dot",
                         "runner_up_gap_pct": 2.6,
+                        "candidate_results": [
+                            {
+                                "candidate_id": "transpose_rowpair",
+                                "candidate_family": "row_pairing",
+                            },
+                            {
+                                "candidate_id": "transpose_dot",
+                                "candidate_family": "layout_transform",
+                            },
+                        ],
                     }
                 ]
             }

@@ -209,8 +209,12 @@ class JsonFileRunStore:
             )
 
         matmul_candidate_wins: dict[str, int] = {}
+        matmul_family_wins: dict[str, int] = {}
         matmul_shape_winners: dict[str, dict[str, object]] = {}
         matmul_shape_challengers: dict[str, dict[str, object]] = {}
+        matmul_workload_winners: dict[str, dict[str, object]] = {}
+        matmul_workload_challengers: dict[str, dict[str, object]] = {}
+        matmul_frontier_archive: list[dict[str, object]] = []
         if benchmark_id == "matmul-speedup":
             for record in records:
                 for result in record.memo.results:
@@ -228,20 +232,58 @@ class JsonFileRunStore:
                         except (TypeError, ValueError):
                             continue
                     raw_rows = result.artifact_payloads.get("raw-timing-results.json", {}).get("rows", [])
+                    if not matmul_frontier_archive:
+                        archive_payload = result.artifact_payloads.get("frontier-archive.json", {})
+                        if isinstance(archive_payload, dict):
+                            workload_winners = archive_payload.get("workload_winners", [])
+                            if isinstance(workload_winners, list):
+                                matmul_frontier_archive = [
+                                    item for item in workload_winners if isinstance(item, dict)
+                                ]
                     if isinstance(raw_rows, list):
                         for row in raw_rows:
                             if not isinstance(row, dict):
                                 continue
                             shape = str(row.get("shape", "")).strip()
+                            workload_tag = str(row.get("workload_tag", "")).strip()
+                            workload_share = row.get("workload_share")
                             winner = str(row.get("best_candidate_id", "")).strip()
                             uplift = row.get("uplift_pct")
                             if not shape or not winner:
                                 continue
+                            candidate_result_rows = row.get("candidate_results", [])
+                            if not isinstance(candidate_result_rows, list):
+                                candidate_result_rows = []
+                            family_by_candidate = {
+                                str(candidate_row.get("candidate_id", "")).strip(): str(
+                                    candidate_row.get("candidate_family", "")
+                                ).strip()
+                                for candidate_row in candidate_result_rows
+                                if isinstance(candidate_row, dict)
+                            }
+                            winner_family = family_by_candidate.get(winner, "")
+                            if winner_family:
+                                matmul_family_wins[winner_family] = (
+                                    matmul_family_wins.get(winner_family, 0) + 1
+                                )
                             entry = matmul_shape_winners.setdefault(
                                 shape,
                                 {"winner_counts": {}, "latest_winner": winner, "latest_uplift_pct": uplift},
                             )
                             entry["winner_counts"][winner] = entry["winner_counts"].get(winner, 0) + 1
+                            if workload_tag:
+                                workload_entry = matmul_workload_winners.setdefault(
+                                    workload_tag,
+                                    {
+                                        "winner_counts": {},
+                                        "latest_winner": winner,
+                                        "latest_uplift_pct": uplift,
+                                        "latest_workload_share": workload_share,
+                                    },
+                                )
+                                workload_entry["winner_counts"][winner] = (
+                                    workload_entry["winner_counts"].get(winner, 0) + 1
+                                )
                             runner_up = str(row.get("runner_up_candidate_id", "")).strip()
                             runner_up_gap_pct = row.get("runner_up_gap_pct")
                             if runner_up:
@@ -256,6 +298,20 @@ class JsonFileRunStore:
                                 challenger_entry["runner_up_counts"][runner_up] = (
                                     challenger_entry["runner_up_counts"].get(runner_up, 0) + 1
                                 )
+                                if workload_tag:
+                                    workload_challenger_entry = matmul_workload_challengers.setdefault(
+                                        workload_tag,
+                                        {
+                                            "runner_up_counts": {},
+                                            "latest_runner_up": runner_up,
+                                            "latest_runner_up_gap_pct": runner_up_gap_pct,
+                                            "latest_workload_share": workload_share,
+                                        },
+                                    )
+                                    workload_challenger_entry["runner_up_counts"][runner_up] = (
+                                        workload_challenger_entry["runner_up_counts"].get(runner_up, 0)
+                                        + 1
+                                    )
 
         return {
             "benchmark_id": benchmark_id or (latest.benchmark_id if latest else ""),
@@ -276,6 +332,7 @@ class JsonFileRunStore:
                 for contradiction in (latest.memo.contradictions if latest else [])
             ],
             "matmul_candidate_wins": matmul_candidate_wins,
+            "matmul_family_wins": matmul_family_wins,
             "best_matmul_candidate_id": (
                 max(matmul_candidate_wins, key=matmul_candidate_wins.get)
                 if matmul_candidate_wins
@@ -284,6 +341,9 @@ class JsonFileRunStore:
             "best_benchmark_metric": _best_metric(records, benchmark_id),
             "matmul_shape_winners": matmul_shape_winners,
             "matmul_shape_challengers": matmul_shape_challengers,
+            "matmul_workload_winners": matmul_workload_winners,
+            "matmul_workload_challengers": matmul_workload_challengers,
+            "matmul_frontier_archive": matmul_frontier_archive,
             "weakest_matmul_shapes": sorted(
                 [
                     {
@@ -292,6 +352,18 @@ class JsonFileRunStore:
                         "runner_up_gap_pct": entry.get("latest_runner_up_gap_pct", 0),
                     }
                     for shape, entry in matmul_shape_challengers.items()
+                ],
+                key=lambda item: item.get("runner_up_gap_pct", 10**9),
+            ),
+            "weakest_matmul_workloads": sorted(
+                [
+                    {
+                        "workload_tag": workload_tag,
+                        "runner_up_candidate_id": entry.get("latest_runner_up", ""),
+                        "runner_up_gap_pct": entry.get("latest_runner_up_gap_pct", 0),
+                        "workload_share": entry.get("latest_workload_share"),
+                    }
+                    for workload_tag, entry in matmul_workload_challengers.items()
                 ],
                 key=lambda item: item.get("runner_up_gap_pct", 10**9),
             ),

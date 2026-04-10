@@ -98,9 +98,11 @@ What is real now:
 - token and latency accounting artifacts for live benchmark runs
 - real CPU benchmark execution for `matmul-speedup` via `--live-execution`
 - batched wall-clock timing for live matmul runs so small fixtures spend enough time per sample to reduce timer noise
+- workload-share-weighted live matmul scoring over downscaled training-like projection shapes instead of square-only control cases
 - source-confidence and contradiction structure in research memory and reports
 - cross-run history comparison for claims and confidence shifts
 - bounded `iterate` output that reports frontier deltas such as candidate-set changes and best-candidate changes
+- benchmark history can be restored inside GitHub iterate runs, and the iterate workflow can chain bounded follow-up runs under explicit continuation policies
 - persisted research runs and export bundles
 - verification gates around cycle completeness
 - offline benchmark executors for long-context, tool-use, and matmul lanes
