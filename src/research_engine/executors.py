@@ -667,7 +667,7 @@ class MatmulPythonExecutor(ExperimentExecutor):
 
     repetitions: int = 3
     warmup_repetitions: int = 1
-    max_candidates_per_run: int = 5
+    max_candidates_per_run: int = 7
     history_summary: dict[str, object] | None = None
     proposer: ResponsesApiClient | None = None
 
@@ -1028,6 +1028,7 @@ class MatmulPythonExecutor(ExperimentExecutor):
         selected = []
         pruned = []
         seen_families: set[str] = set()
+        slot_labels: list[dict[str, str]] = []
 
         ranked = sorted(
             catalog,
@@ -1051,26 +1052,44 @@ class MatmulPythonExecutor(ExperimentExecutor):
             ),
         )
 
-        if ranked:
-            selected.append(ranked[0])
-            seen_families.add(str(ranked[0]["family"]))
+        def _select_slot(
+            label: str,
+            predicate,
+        ) -> None:
+            if len(selected) >= self.max_candidates_per_run:
+                return
+            candidate = next(
+                (
+                    item
+                    for item in ranked
+                    if item not in selected and predicate(item)
+                ),
+                None,
+            )
+            if candidate is None:
+                return
+            selected.append(candidate)
+            seen_families.add(str(candidate["family"]))
+            slot_labels.append({"slot": label, "candidate_id": str(candidate["id"])})
 
-        exploratory_candidate = next(
-            (
-                candidate
-                for candidate in ranked[1:]
-                if candidate["novelty_bonus"] > 0
-                or candidate["family_novelty_bonus"] > 0
-                or candidate["pareto_bonus"] > 0
-                or candidate["target_workload_bonus"] > 0
-                or candidate["archive_bonus"] == 0
-            ),
-            None,
+        _select_slot("incumbent", lambda candidate: True)
+        _select_slot("pareto_specialist", lambda candidate: candidate["pareto_bonus"] > 0)
+        _select_slot(
+            "frontier_challenger",
+            lambda candidate: candidate["proposal_bonus"] > 0
+            or candidate["target_workload_bonus"] > 0
+            or candidate["weak_shape_bonus"] > 0,
         )
-        if exploratory_candidate is not None and len(selected) < self.max_candidates_per_run:
-            if exploratory_candidate not in selected:
-                selected.append(exploratory_candidate)
-                seen_families.add(str(exploratory_candidate["family"]))
+        _select_slot(
+            "novelty_1",
+            lambda candidate: candidate["novelty_bonus"] > 0
+            or candidate["family_novelty_bonus"] > 0,
+        )
+        _select_slot(
+            "novelty_2",
+            lambda candidate: candidate["novelty_bonus"] > 0
+            or candidate["family_novelty_bonus"] > 0,
+        )
 
         for candidate in ranked:
             if candidate in selected:
@@ -1096,9 +1115,11 @@ class MatmulPythonExecutor(ExperimentExecutor):
                 continue
             selected.append(candidate)
             seen_families.add(family)
+            slot_labels.append({"slot": "rank_fill", "candidate_id": str(candidate["id"])})
         shape_focus = {
             "weakest_shapes": top_weakest_shapes,
             "weakest_workloads": top_weakest_workloads,
+            "selection_slots": slot_labels,
             "selection_reasons": [
                 {
                     "candidate_id": candidate["id"],
@@ -1886,7 +1907,7 @@ _MATMUL_MUTATION_DESCRIPTORS = [
         "k_unroll": 1,
         "priority": 0.78,
         "parent_id": "transpose_dot",
-        "enabled_when": "transpose_only",
+        "enabled_when": "transpose_or_default",
         "target_workload_group": "wide_output",
     },
     {
@@ -1899,7 +1920,7 @@ _MATMUL_MUTATION_DESCRIPTORS = [
         "k_unroll": 1,
         "priority": 0.98,
         "parent_id": "transpose_dot",
-        "enabled_when": "transpose_with_weak_shapes",
+        "enabled_when": "transpose_or_default",
         "target_workload_group": "weak_or_balanced",
         "target_shape_mode": "weak_shapes",
     },
@@ -1913,7 +1934,7 @@ _MATMUL_MUTATION_DESCRIPTORS = [
         "k_unroll": 4,
         "priority": 0.74,
         "parent_id": "transpose_rowpair",
-        "enabled_when": "transpose_only",
+        "enabled_when": "transpose_or_default",
         "target_workload_group": "balanced",
     },
     {
@@ -1926,7 +1947,7 @@ _MATMUL_MUTATION_DESCRIPTORS = [
         "k_unroll": 1,
         "priority": 0.72,
         "parent_id": "transpose_rowpair",
-        "enabled_when": "transpose_only",
+        "enabled_when": "transpose_or_default",
         "target_workload_group": "wide_output",
     },
     {
@@ -1939,7 +1960,7 @@ _MATMUL_MUTATION_DESCRIPTORS = [
         "k_unroll": 4,
         "priority": 0.79,
         "parent_id": "transpose_dual_col",
-        "enabled_when": "transpose_only",
+        "enabled_when": "transpose_or_default",
         "target_workload_group": "wide_output",
     },
     {
@@ -1952,7 +1973,7 @@ _MATMUL_MUTATION_DESCRIPTORS = [
         "k_unroll": 8,
         "priority": 0.8,
         "parent_id": "transpose_rowpair",
-        "enabled_when": "transpose_only",
+        "enabled_when": "transpose_or_default",
         "target_workload_group": "balanced",
     },
     {
@@ -1965,7 +1986,7 @@ _MATMUL_MUTATION_DESCRIPTORS = [
         "k_unroll": 4,
         "priority": 0.83,
         "parent_id": "transpose_rowpair_dualcol",
-        "enabled_when": "transpose_only",
+        "enabled_when": "transpose_or_default",
         "target_workload_group": "wide_output",
     },
     {

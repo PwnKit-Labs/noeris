@@ -266,7 +266,7 @@ class ExecutorTests(unittest.TestCase):
         )
         self.assertEqual(
             len(results[0].artifact_payloads["candidate-catalog.json"]["selected_candidates"]),
-            5,
+            7,
         )
         self.assertEqual(results[0].artifact_payloads["candidate-proposals.json"]["source"], "none")
         self.assertIn("shape-focus.json", results[0].artifact_refs)
@@ -296,6 +296,7 @@ class ExecutorTests(unittest.TestCase):
             results[0].artifact_payloads["raw-timing-results.json"]["rows"][0],
         )
         self.assertIn("weakest_workloads", results[0].artifact_payloads["shape-focus.json"])
+        self.assertIn("selection_slots", results[0].artifact_payloads["shape-focus.json"])
         self.assertIn("frontier-archive.json", results[0].artifact_refs)
         self.assertIn("pareto-frontier.json", results[0].artifact_refs)
         self.assertTrue(results[0].artifact_payloads["pareto-frontier.json"]["candidate_ids"])
