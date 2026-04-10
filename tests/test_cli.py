@@ -166,6 +166,10 @@ class CliTests(unittest.TestCase):
         self.assertEqual(len(payload["runs"]), 2)
         self.assertTrue(payload["best_run_id"])
         self.assertIn(payload["outcome"], {"new_baseline", "improved", "regressed", "plateaued"})
+        self.assertIn("previous_frontier", payload)
+        self.assertIn("best_frontier", payload)
+        self.assertIn("frontier_delta", payload)
+        self.assertIn("added_candidates", payload["frontier_delta"])
 
     def test_sources_command_aggregates_provider_results(self) -> None:
         with (

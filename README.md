@@ -59,6 +59,7 @@ python -m research_engine.cli sources --topic "long-context reasoning"
 python -m research_engine.cli cycle --topic "long-context reasoning" --llm --max-results 1
 python -m research_engine.cli benchmark-run long-context-reasoning --llm --live-execution --max-results 1
 python -m research_engine.cli benchmark-run matmul-speedup
+python -m research_engine.cli iterate matmul-speedup --iterations 1 --llm --live-execution
 python -m research_engine.cli runs
 python -m research_engine.cli history --benchmark-id tool-use-reliability --limit 3
 python -m research_engine.cli export-run <run_id>
@@ -96,8 +97,10 @@ What is real now:
 - model-backed tool-use benchmark execution via the Responses API
 - token and latency accounting artifacts for live benchmark runs
 - real CPU benchmark execution for `matmul-speedup` via `--live-execution`
+- batched wall-clock timing for live matmul runs so small fixtures spend enough time per sample to reduce timer noise
 - source-confidence and contradiction structure in research memory and reports
 - cross-run history comparison for claims and confidence shifts
+- bounded `iterate` output that reports frontier deltas such as candidate-set changes and best-candidate changes
 - persisted research runs and export bundles
 - verification gates around cycle completeness
 - offline benchmark executors for long-context, tool-use, and matmul lanes

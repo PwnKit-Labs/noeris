@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from dataclasses import field
 import json
+from math import ceil
 import os
 import platform
 from random import Random
@@ -733,22 +734,24 @@ class MatmulPythonExecutor(ExperimentExecutor):
         seed = sum(ord(char) for char in fixture["id"])
         a = _generate_matrix(m, k, seed=seed)
         b = _generate_matrix(k, n, seed=seed + 1)
-        baseline_time = _measure_runtime(
+        baseline_measurement = _measure_runtime_stats(
             lambda: _matmul_ijk(a, b),
             repetitions=self.repetitions,
             warmups=self.warmup_repetitions,
         )
+        baseline_time = baseline_measurement["seconds"]
         baseline_result = _matmul_ijk(a, b)
         ops = 2 * m * n * k
         baseline_gflops = ops / baseline_time / 1_000_000_000
         candidate_rows = []
         for candidate in candidates:
             fn = candidate["fn"]
-            candidate_time = _measure_runtime(
+            candidate_measurement = _measure_runtime_stats(
                 lambda fn=fn: fn(a, b),
                 repetitions=self.repetitions,
                 warmups=self.warmup_repetitions,
             )
+            candidate_time = candidate_measurement["seconds"]
             candidate_result = fn(a, b)
             max_abs_error = _max_abs_diff(baseline_result, candidate_result)
             candidate_rows.append(
@@ -758,6 +761,7 @@ class MatmulPythonExecutor(ExperimentExecutor):
                     "candidate_family": candidate["family"],
                     "candidate_seconds": round(candidate_time, 6),
                     "candidate_gflops": round(ops / candidate_time / 1_000_000_000, 4),
+                    "loops_per_sample": candidate_measurement["loops_per_sample"],
                     "max_abs_error": round(max_abs_error, 12),
                 }
             )
@@ -773,6 +777,7 @@ class MatmulPythonExecutor(ExperimentExecutor):
             "shape": f"{m}x{n}x{k}",
             "dtype": fixture["dtype"],
             "baseline_seconds": round(baseline_time, 6),
+            "baseline_loops_per_sample": baseline_measurement["loops_per_sample"],
             "candidate_seconds": best_candidate["candidate_seconds"],
             "baseline_gflops": round(baseline_gflops, 4),
             "candidate_gflops": best_candidate["candidate_gflops"],
@@ -1550,10 +1555,34 @@ def _time_call(fn) -> float:
 
 
 def _measure_runtime(fn, *, repetitions: int, warmups: int) -> float:
+    return _measure_runtime_stats(
+        fn,
+        repetitions=repetitions,
+        warmups=warmups,
+    )["seconds"]
+
+
+def _measure_runtime_stats(
+    fn,
+    *,
+    repetitions: int,
+    warmups: int,
+    min_sample_seconds: float = 0.01,
+) -> dict[str, float | int]:
     for _ in range(warmups):
         fn()
-    samples = [_time_call(fn) for _ in range(repetitions)]
-    return median(samples)
+    estimate = max(_time_call(fn), 1e-9)
+    loops_per_sample = max(1, ceil(min_sample_seconds / estimate))
+
+    def batched_call() -> None:
+        for _ in range(loops_per_sample):
+            fn()
+
+    samples = [_time_call(batched_call) / loops_per_sample for _ in range(repetitions)]
+    return {
+        "seconds": median(samples),
+        "loops_per_sample": loops_per_sample,
+    }
 
 
 def _max_abs_diff(left: list[list[float]], right: list[list[float]]) -> float:

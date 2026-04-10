@@ -279,6 +279,14 @@ class ExecutorTests(unittest.TestCase):
         )
         self.assertIn("selection_reasons", results[0].artifact_payloads["shape-focus.json"])
         self.assertIn("runner_up_candidate_id", results[0].artifact_payloads["raw-timing-results.json"]["rows"][0])
+        self.assertIn(
+            "baseline_loops_per_sample",
+            results[0].artifact_payloads["raw-timing-results.json"]["rows"][0],
+        )
+        self.assertIn(
+            "loops_per_sample",
+            results[0].artifact_payloads["raw-timing-results.json"]["rows"][0]["candidate_results"][0],
+        )
         self.assertTrue(
             results[0].artifact_payloads["best-candidate-summary.json"]["best_overall_candidate_id"]
         )

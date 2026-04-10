@@ -376,6 +376,11 @@ def main(argv: list[str] | None = None) -> int:
             benchmark_id=benchmark.benchmark_id,
             limit=20,
         )
+        previous_frontier = _extract_frontier_snapshot(
+            store,
+            benchmark_id=benchmark.benchmark_id,
+            run_id=str(history_before.get("latest_run_id", "")).strip(),
+        )
         try:
             pipeline = build_pipeline(
                 use_llm=args.llm,
@@ -390,6 +395,7 @@ def main(argv: list[str] | None = None) -> int:
         runs = []
         best_metric = None
         best_run_id = ""
+        best_record = None
         for _ in range(iterations):
             topic = ResearchTopic(
                 name=benchmark.name.lower(),
@@ -420,6 +426,7 @@ def main(argv: list[str] | None = None) -> int:
             if best_metric is None or metric > best_metric:
                 best_metric = metric
                 best_run_id = record.run_id
+                best_record = record
         previous_best_metric = history_before.get("best_benchmark_metric")
         if previous_best_metric is None:
             outcome = "new_baseline"
@@ -429,6 +436,10 @@ def main(argv: list[str] | None = None) -> int:
             outcome = "regressed"
         else:
             outcome = "plateaued"
+        best_frontier = _extract_frontier_snapshot_from_record(
+            best_record,
+            benchmark_id=benchmark.benchmark_id,
+        )
         print(
             json.dumps(
                 {
@@ -438,6 +449,12 @@ def main(argv: list[str] | None = None) -> int:
                     "best_run_id": best_run_id,
                     "best_metric": best_metric,
                     "outcome": outcome,
+                    "previous_frontier": previous_frontier,
+                    "best_frontier": best_frontier,
+                    "frontier_delta": _build_frontier_delta(
+                        previous_frontier=previous_frontier,
+                        best_frontier=best_frontier,
+                    ),
                     "runs": runs,
                 },
                 indent=2,
@@ -531,6 +548,86 @@ def _extract_benchmark_metric(record) -> float:
     if record.benchmark_id == "tool-use-reliability":
         return float(payloads.get("tool-selection-summary.json", {}).get("terminal_first_success_rate", 0.0))
     return 0.0
+
+
+def _extract_frontier_snapshot(
+    store: JsonFileRunStore,
+    *,
+    benchmark_id: str,
+    run_id: str,
+) -> dict[str, object]:
+    if not run_id:
+        return {}
+    try:
+        record = store.load(run_id)
+    except FileNotFoundError:
+        return {}
+    return _extract_frontier_snapshot_from_record(record, benchmark_id=benchmark_id)
+
+
+def _extract_frontier_snapshot_from_record(
+    record,
+    *,
+    benchmark_id: str,
+) -> dict[str, object]:
+    if record is None or not record.memo.results:
+        return {}
+    payloads = record.memo.results[0].artifact_payloads
+    snapshot: dict[str, object] = {
+        "run_id": record.run_id,
+        "metric": _extract_benchmark_metric(record),
+    }
+    if benchmark_id == "matmul-speedup":
+        snapshot.update(
+            {
+                "best_candidate_id": payloads.get("best-candidate-summary.json", {}).get(
+                    "best_overall_candidate_id",
+                    "",
+                ),
+                "selected_candidate_ids": [
+                    candidate.get("id", "")
+                    for candidate in payloads.get("candidate-catalog.json", {}).get(
+                        "selected_candidates",
+                        [],
+                    )
+                    if isinstance(candidate, dict) and candidate.get("id")
+                ],
+                "proposal_source": payloads.get("candidate-proposals.json", {}).get("source", ""),
+            }
+        )
+    return snapshot
+
+
+def _build_frontier_delta(
+    *,
+    previous_frontier: dict[str, object],
+    best_frontier: dict[str, object],
+) -> dict[str, object]:
+    previous_candidates = {
+        candidate_id
+        for candidate_id in previous_frontier.get("selected_candidate_ids", [])
+        if isinstance(candidate_id, str) and candidate_id
+    }
+    best_candidates = {
+        candidate_id
+        for candidate_id in best_frontier.get("selected_candidate_ids", [])
+        if isinstance(candidate_id, str) and candidate_id
+    }
+    previous_best_candidate_id = str(previous_frontier.get("best_candidate_id", "")).strip()
+    best_candidate_id = str(best_frontier.get("best_candidate_id", "")).strip()
+    return {
+        "best_candidate_changed": (
+            previous_best_candidate_id != best_candidate_id
+            if previous_best_candidate_id or best_candidate_id
+            else False
+        ),
+        "previous_best_candidate_id": previous_best_candidate_id,
+        "best_candidate_id": best_candidate_id,
+        "candidate_set_changed": previous_candidates != best_candidates,
+        "added_candidates": sorted(best_candidates - previous_candidates),
+        "dropped_candidates": sorted(previous_candidates - best_candidates),
+        "proposal_source": best_frontier.get("proposal_source", ""),
+    }
 
 
 if __name__ == "__main__":
