@@ -1,0 +1,79 @@
+name: Benchmark Iterate
+
+on:
+  workflow_dispatch:
+    inputs:
+      benchmark_id:
+        description: "Benchmark id to iterate on"
+        required: false
+        default: "matmul-speedup"
+      iterations:
+        description: "Number of bounded iterations"
+        required: false
+        default: "2"
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  benchmark-iterate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+      AZURE_OPENAI_BASE_URL: ${{ vars.AZURE_OPENAI_BASE_URL }}
+      AZURE_OPENAI_MODEL: ${{ vars.AZURE_OPENAI_MODEL }}
+      AZURE_OPENAI_WIRE_API: ${{ vars.AZURE_OPENAI_WIRE_API }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package
+        run: python -m pip install -e .
+
+      - name: Run bounded benchmark iteration
+        run: |
+          python -m research_engine.cli iterate \
+            "${{ github.event.inputs.benchmark_id || 'matmul-speedup' }}" \
+            --iterations "${{ github.event.inputs.iterations || '2' }}" \
+            --llm \
+            --live-execution > iterate-run.json
+
+      - name: Render iteration summary
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(Path("iterate-run.json").read_text())
+          lines = [
+              f"# Benchmark Iterate: {payload['benchmark_id']}",
+              "",
+              f"- Iterations: `{payload['iterations']}`",
+              f"- Best run id: `{payload['best_run_id']}`",
+              f"- Best metric: `{payload['best_metric']}`",
+              "",
+              "## Runs",
+              "",
+          ]
+          for run in payload["runs"]:
+              lines.append(
+                  f"- `{run['run_id']}` | metric=`{run['metric']}` | bundle=`{run['bundle_dir']}`"
+              )
+          Path("iterate-report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+          PY
+
+      - name: Upload iteration artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-iterate-${{ github.run_id }}
+          path: |
+            iterate-run.json
+            iterate-report.md
+            .noeris/runs/*.json
+            .noeris/artifacts/**

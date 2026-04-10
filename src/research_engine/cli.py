@@ -184,6 +184,37 @@ def build_parser() -> argparse.ArgumentParser:
         help="use a real model-backed executor where available instead of the offline deterministic executor",
     )
 
+    iterate_parser = subparsers.add_parser(
+        "iterate",
+        help="run a bounded benchmark iteration loop and report the best result",
+    )
+    iterate_parser.add_argument(
+        "benchmark_id",
+        help="identifier of the benchmark goal to iterate on",
+    )
+    iterate_parser.add_argument(
+        "--iterations",
+        type=int,
+        default=2,
+        help="number of bounded benchmark iterations to run",
+    )
+    iterate_parser.add_argument(
+        "--llm",
+        action="store_true",
+        help="use the configured Responses API provider for benchmark planning/proposal where supported",
+    )
+    iterate_parser.add_argument(
+        "--max-results",
+        type=int,
+        default=3,
+        help="max live source results per provider when --llm is enabled",
+    )
+    iterate_parser.add_argument(
+        "--live-execution",
+        action="store_true",
+        help="use a real model-backed executor where available instead of the offline deterministic executor",
+    )
+
     return parser
 
 
@@ -338,6 +369,66 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         return 0
+    if args.command == "iterate":
+        benchmark = get_benchmark(args.benchmark_id)
+        try:
+            pipeline = build_pipeline(
+                use_llm=args.llm,
+                max_results=args.max_results,
+                live_execution=args.live_execution,
+                benchmark_id=benchmark.benchmark_id,
+            )
+        except LlmConfigurationError as exc:
+            print(json.dumps({"error": str(exc)}, indent=2))
+            return 1
+        store = JsonFileRunStore()
+        iterations = max(1, args.iterations)
+        runs = []
+        best_metric = None
+        best_run_id = ""
+        for _ in range(iterations):
+            topic = ResearchTopic(
+                name=benchmark.name.lower(),
+                objective=benchmark.goal,
+                benchmark_id=benchmark.benchmark_id,
+                constraints=[
+                    f"benchmark_id:{benchmark.benchmark_id}",
+                    f"success_metric:{benchmark.success_metric}",
+                    f"category:{benchmark.category}",
+                    f"ci_lane:{benchmark.ci_lane}",
+                ],
+            )
+            record = pipeline.run_record_for(
+                topic=topic,
+                benchmark_id=benchmark.benchmark_id,
+            )
+            path = store.save(record)
+            bundle_dir = export_run_bundle(record, output_dir=".noeris/artifacts")
+            metric = _extract_benchmark_metric(record)
+            runs.append(
+                {
+                    "run_id": record.run_id,
+                    "path": str(path),
+                    "bundle_dir": str(bundle_dir),
+                    "metric": metric,
+                }
+            )
+            if best_metric is None or metric > best_metric:
+                best_metric = metric
+                best_run_id = record.run_id
+        print(
+            json.dumps(
+                {
+                    "benchmark_id": benchmark.benchmark_id,
+                    "iterations": iterations,
+                    "best_run_id": best_run_id,
+                    "best_metric": best_metric,
+                    "runs": runs,
+                },
+                indent=2,
+            )
+        )
+        return 0
 
     try:
         pipeline = build_pipeline(
@@ -413,6 +504,18 @@ def build_pipeline(
             ),
         )
     return ResearchPipeline(**kwargs)
+
+
+def _extract_benchmark_metric(record) -> float:
+    result = record.memo.results[0]
+    payloads = result.artifact_payloads
+    if record.benchmark_id == "matmul-speedup":
+        return float(payloads.get("raw-timing-results.json", {}).get("mean_uplift_pct", 0.0))
+    if record.benchmark_id == "long-context-reasoning":
+        return float(payloads.get("candidate-metrics.json", {}).get("accuracy", 0.0))
+    if record.benchmark_id == "tool-use-reliability":
+        return float(payloads.get("tool-selection-summary.json", {}).get("terminal_first_success_rate", 0.0))
+    return 0.0
 
 
 if __name__ == "__main__":

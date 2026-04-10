@@ -152,6 +152,20 @@ class CliTests(unittest.TestCase):
         )
         self.assertTrue(payload["bundle_dir"].endswith(payload["run_id"]))
 
+    def test_iterate_command_runs_multiple_benchmark_iterations(self) -> None:
+        with _temp_workspace():
+            exit_code, payload = _run_cli_json(
+                "iterate",
+                "matmul-speedup",
+                "--iterations",
+                "2",
+            )
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["benchmark_id"], "matmul-speedup")
+        self.assertEqual(payload["iterations"], 2)
+        self.assertEqual(len(payload["runs"]), 2)
+        self.assertTrue(payload["best_run_id"])
+
     def test_sources_command_aggregates_provider_results(self) -> None:
         with (
             patch("research_engine.cli.UrllibHttpClient", return_value=object()),
