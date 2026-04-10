@@ -1778,35 +1778,7 @@ def _matmul_transpose_rowpair_dualcol_candidate(
     return out
 
 
-def _matmul_ikj_param_candidate(
-    a: list[list[float]],
-    b: list[list[float]],
-    *,
-    row_block: int,
-    j_unroll: int,
-) -> list[list[float]]:
-    rows = len(a)
-    cols = len(b[0])
-    depth = len(b)
-    out = [[0.0] * cols for _ in range(rows)]
-    for ii in range(0, rows, row_block):
-        active_rows = min(row_block, rows - ii)
-        for k in range(depth):
-            a_vals = [a[ii + r][k] for r in range(active_rows)]
-            row_b = b[k]
-            j = 0
-            while j + j_unroll - 1 < cols:
-                for r in range(active_rows):
-                    a_val = a_vals[r]
-                    row_out = out[ii + r]
-                    for offset in range(j_unroll):
-                        row_out[j + offset] += a_val * row_b[j + offset]
-                j += j_unroll
-            while j < cols:
-                for r in range(active_rows):
-                    out[ii + r][j] += a_vals[r] * row_b[j]
-                j += 1
-    return out
+_COMPILED_KERNEL_CACHE: dict[tuple, object] = {}
 
 
 def _make_ikj_param_candidate(
@@ -1820,58 +1792,15 @@ def _make_ikj_param_candidate(
     key = (row_block, j_unroll)
     if key in specialized:
         return specialized[key]
-
-    def generated(a: list[list[float]], b: list[list[float]]) -> list[list[float]]:
-        return _matmul_ikj_param_candidate(
-            a,
-            b,
-            row_block=row_block,
-            j_unroll=j_unroll,
-        )
-
-    return generated
-
-
-def _matmul_transpose_param_candidate(
-    a: list[list[float]],
-    b: list[list[float]],
-    *,
-    row_block: int,
-    col_block: int,
-    k_unroll: int,
-) -> list[list[float]]:
-    rows = len(a)
-    cols = len(b[0])
-    depth = len(b)
-    b_transposed = [list(column) for column in zip(*b)]
-    out = [[0.0] * cols for _ in range(rows)]
-    for ii in range(0, rows, row_block):
-        active_rows = min(row_block, rows - ii)
-        for jj in range(0, cols, col_block):
-            active_cols = min(col_block, cols - jj)
-            values = [[0.0] * active_cols for _ in range(active_rows)]
-            k = 0
-            while k + k_unroll - 1 < depth:
-                for offset in range(k_unroll):
-                    kk = k + offset
-                    b_values = [b_transposed[jj + col][kk] for col in range(active_cols)]
-                    for row in range(active_rows):
-                        a_value = a[ii + row][kk]
-                        for col, b_value in enumerate(b_values):
-                            values[row][col] += a_value * b_value
-                k += k_unroll
-            while k < depth:
-                b_values = [b_transposed[jj + col][k] for col in range(active_cols)]
-                for row in range(active_rows):
-                    a_value = a[ii + row][k]
-                    for col, b_value in enumerate(b_values):
-                        values[row][col] += a_value * b_value
-                k += 1
-            for row in range(active_rows):
-                row_out = out[ii + row]
-                for col in range(active_cols):
-                    row_out[jj + col] = values[row][col]
-    return out
+    cache_key = ("ikj", row_block, j_unroll)
+    if cache_key in _COMPILED_KERNEL_CACHE:
+        return _COMPILED_KERNEL_CACHE[cache_key]
+    source = _generate_ikj_kernel_source(row_block, j_unroll)
+    ns: dict[str, object] = {}
+    exec(source, ns)  # noqa: S102
+    fn = ns["_kernel"]
+    _COMPILED_KERNEL_CACHE[cache_key] = fn
+    return fn
 
 
 def _make_transpose_param_candidate(
@@ -1893,17 +1822,216 @@ def _make_transpose_param_candidate(
     key = (row_block, col_block, k_unroll)
     if key in specialized:
         return specialized[key]
+    cache_key = ("transpose", row_block, col_block, k_unroll)
+    if cache_key in _COMPILED_KERNEL_CACHE:
+        return _COMPILED_KERNEL_CACHE[cache_key]
+    source = _generate_transpose_kernel_source(row_block, col_block, k_unroll)
+    ns: dict[str, object] = {}
+    exec(source, ns)  # noqa: S102
+    fn = ns["_kernel"]
+    _COMPILED_KERNEL_CACHE[cache_key] = fn
+    return fn
 
-    def generated(a: list[list[float]], b: list[list[float]]) -> list[list[float]]:
-        return _matmul_transpose_param_candidate(
-            a,
-            b,
-            row_block=row_block,
-            col_block=col_block,
-            k_unroll=k_unroll,
-        )
 
-    return generated
+def _generate_transpose_kernel_source(rb: int, cb: int, ku: int) -> str:
+    """Generate a specialized transpose matmul kernel as Python source.
+
+    The generated code uses direct indexing with no list comprehensions or
+    enumerate in the inner loop, making it structurally identical to the
+    hand-written specializations.
+    """
+    L: list[str] = []
+
+    def emit(indent: int, line: str) -> None:
+        L.append("    " * indent + line)
+
+    emit(0, "def _kernel(a, b):")
+    emit(1, "rows = len(a)")
+    emit(1, "cols = len(b[0])")
+    emit(1, "depth = len(b)")
+    emit(1, "bt = [list(c) for c in zip(*b)]")
+    emit(1, "out = [[0.0] * cols for _ in range(rows)]")
+
+    # --- main row loop ---
+    if rb > 1:
+        emit(1, "i = 0")
+        emit(1, f"while i + {rb - 1} < rows:")
+        d = 2
+        for r in range(rb):
+            emit(d, f"ar{r} = a[i{' + ' + str(r) if r else ''}]")
+    else:
+        emit(1, "for i in range(rows):")
+        d = 2
+        emit(d, "ar0 = a[i]")
+
+    # --- main col loop ---
+    if cb > 1:
+        emit(d, "j = 0")
+        emit(d, f"while j + {cb - 1} < cols:")
+        cd = d + 1
+        for c in range(cb):
+            emit(cd, f"bc{c} = bt[j{' + ' + str(c) if c else ''}]")
+    else:
+        emit(d, "for j in range(cols):")
+        cd = d + 1
+        emit(cd, "bc0 = bt[j]")
+
+    # accumulators
+    accs = [f"v{r}{c}" for r in range(rb) for c in range(cb)]
+    emit(cd, f"{' = '.join(accs)} = 0.0")
+
+    # --- k loop ---
+    if ku > 1:
+        emit(cd, "k = 0")
+        emit(cd, f"while k + {ku - 1} < depth:")
+        kd = cd + 1
+        for u in range(ku):
+            ke = f"k + {u}" if u else "k"
+            for r in range(rb):
+                emit(kd, f"a{r}_{u} = ar{r}[{ke}]")
+            for c in range(cb):
+                emit(kd, f"b{c}_{u} = bc{c}[{ke}]")
+            for r in range(rb):
+                for c in range(cb):
+                    emit(kd, f"v{r}{c} += a{r}_{u} * b{c}_{u}")
+        emit(cd, f"    k += {ku}")
+        # k remainder
+        emit(cd, "while k < depth:")
+        kd2 = cd + 1
+        for r in range(rb):
+            emit(kd2, f"ak{r} = ar{r}[k]")
+        for c in range(cb):
+            emit(kd2, f"bk{c} = bc{c}[k]")
+        for r in range(rb):
+            for c in range(cb):
+                emit(kd2, f"v{r}{c} += ak{r} * bk{c}")
+        emit(cd, "    k += 1")
+    else:
+        emit(cd, "for k in range(depth):")
+        kd = cd + 1
+        for r in range(rb):
+            emit(kd, f"ak{r} = ar{r}[k]")
+        for c in range(cb):
+            emit(kd, f"bk{c} = bc{c}[k]")
+        for r in range(rb):
+            for c in range(cb):
+                emit(kd, f"v{r}{c} += ak{r} * bk{c}")
+
+    # store results
+    for r in range(rb):
+        for c in range(cb):
+            ie = f"i + {r}" if r else "i"
+            je = f"j + {c}" if c else "j"
+            emit(cd, f"out[{ie}][{je}] = v{r}{c}")
+
+    # --- col remainder ---
+    if cb > 1:
+        emit(d, f"    j += {cb}")
+        emit(d, "while j < cols:")
+        crd = d + 1
+        emit(crd, "bc0 = bt[j]")
+        raccs = [f"vr{r}" for r in range(rb)]
+        emit(crd, f"{' = '.join(raccs)} = 0.0")
+        emit(crd, "for k in range(depth):")
+        emit(crd + 1, "bk = bc0[k]")
+        for r in range(rb):
+            emit(crd + 1, f"vr{r} += ar{r}[k] * bk")
+        for r in range(rb):
+            ie = f"i + {r}" if r else "i"
+            emit(crd, f"out[{ie}][j] = vr{r}")
+        emit(d, "    j += 1")
+
+    # --- row remainder ---
+    if rb > 1:
+        emit(1, f"    i += {rb}")
+        emit(1, "while i < rows:")
+        emit(2, "ar0 = a[i]")
+        emit(2, "for j in range(cols):")
+        emit(3, "bc0 = bt[j]")
+        emit(3, "v = 0.0")
+        emit(3, "for k in range(depth):")
+        emit(4, "v += ar0[k] * bc0[k]")
+        emit(3, "out[i][j] = v")
+        emit(2, "i += 1")
+
+    emit(1, "return out")
+    return "\n".join(L)
+
+
+def _generate_ikj_kernel_source(rb: int, ju: int) -> str:
+    """Generate a specialized ikj matmul kernel as Python source.
+
+    The generated code caches output row references and uses direct
+    indexing with unrolled j loops — no list comprehensions or enumerate.
+    """
+    L: list[str] = []
+
+    def emit(indent: int, line: str) -> None:
+        L.append("    " * indent + line)
+
+    emit(0, "def _kernel(a, b):")
+    emit(1, "rows = len(a)")
+    emit(1, "cols = len(b[0])")
+    emit(1, "depth = len(b)")
+    emit(1, "out = [[0.0] * cols for _ in range(rows)]")
+
+    # --- main row loop ---
+    if rb > 1:
+        emit(1, "i = 0")
+        emit(1, f"while i + {rb - 1} < rows:")
+        d = 2
+        for r in range(rb):
+            emit(d, f"or{r} = out[i{' + ' + str(r) if r else ''}]")
+    else:
+        emit(1, "for i in range(rows):")
+        d = 2
+        emit(d, "or0 = out[i]")
+
+    # k loop
+    emit(d, "for k in range(depth):")
+    kd = d + 1
+    for r in range(rb):
+        emit(kd, f"a{r} = a[i{' + ' + str(r) if r else ''}][k]")
+    emit(kd, "bk = b[k]")
+
+    # --- j loop ---
+    if ju > 1:
+        emit(kd, "j = 0")
+        emit(kd, f"while j + {ju - 1} < cols:")
+        jd = kd + 1
+        for u in range(ju):
+            emit(jd, f"bj{u} = bk[j{' + ' + str(u) if u else ''}]")
+        for r in range(rb):
+            for u in range(ju):
+                je = f"j + {u}" if u else "j"
+                emit(jd, f"or{r}[{je}] += a{r} * bj{u}")
+        emit(kd, f"    j += {ju}")
+        # j remainder
+        emit(kd, "while j < cols:")
+        emit(kd + 1, "bj = bk[j]")
+        for r in range(rb):
+            emit(kd + 1, f"or{r}[j] += a{r} * bj")
+        emit(kd, "    j += 1")
+    else:
+        emit(kd, "for j in range(cols):")
+        emit(kd + 1, "bj = bk[j]")
+        for r in range(rb):
+            emit(kd + 1, f"or{r}[j] += a{r} * bj")
+
+    # --- row remainder ---
+    if rb > 1:
+        emit(1, f"    i += {rb}")
+        emit(1, "while i < rows:")
+        emit(2, "or0 = out[i]")
+        emit(2, "for k in range(depth):")
+        emit(3, "a0 = a[i][k]")
+        emit(3, "bk = b[k]")
+        emit(3, "for j in range(cols):")
+        emit(4, "or0[j] += a0 * bk[j]")
+        emit(2, "i += 1")
+
+    emit(1, "return out")
+    return "\n".join(L)
 
 
 _MATMUL_BASE_CANDIDATES = [
