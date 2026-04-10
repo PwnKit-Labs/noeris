@@ -1,48 +1,70 @@
 # Noeris
 
-Working codename for a benchmark-first ML/LLM research engine.
+Benchmark-first autonomous ML/LLM research engine.
 
-The name is intentionally provisional and suitable for a private repo. The repository exists to make the product thesis concrete before locking a company or product name.
+Noeris runs bounded experiments, measures real outcomes, and chains follow-up runs autonomously. It is not a chatbot or a summarizer. It discovers things by running them.
 
-## Thesis
+## What It Does
 
-Most "deep research" products stop at browsing and synthesis. The harder and more valuable loop is:
+1. Discover fresh sources (arXiv, GitHub) for a standing benchmark.
+2. Build structured claims, contradictions, and open questions.
+3. Propose bounded hypotheses ranked by evidence strength.
+4. Convert hypotheses into benchmark-shaped experiment specs.
+5. Run real executors (CPU microbenchmarks, model-backed evals).
+6. Persist evidence, artifacts, and frontier deltas.
+7. Auto-chain follow-up runs when the frontier moves or the metric improves.
 
-1. Read fresh papers, repos, benchmarks, and evals.
-2. Build a structured view of claims, methods, and open questions.
-3. Propose underexplored hypotheses.
-4. Run bounded experiments.
-5. Publish evidence-backed conclusions with full replay.
+## Current Empirical Lanes
 
-This repository is the first scaffold for that loop, starting with ML/LLMs because the data, code, and evals are public and the feedback cycles are faster than most other research domains.
+### matmul-speedup
 
-## V1 Scope
+Real CPU microbenchmark lane. Measures workload-share-weighted throughput uplift of generated kernel candidates against a naive baseline.
 
-- ML/LLM-first, not "research on any subject"
-- Evidence-first, not chat-first
-- Reproducible experiment specs, not just idea generation
-- Prior-art graph and contradiction detection
-- Research memos with artifact trails
-- Separate from core PwnKit product, but incubatable under a PwnKit Labs umbrella
+What works now:
+
+- Parameterized transpose kernel generator over `(row_block, col_block, k_unroll)` grid
+- Parameterized ikj kernel generator over `(row_block, j_unroll)` grid
+- ~55 generated mutation candidates across two kernel families
+- LLM proposer that can suggest novel kernel configurations not in the catalog
+- Explicit incumbent / Pareto / challenger / novelty slotting (7 candidates per run)
+- Cross-run learning: param-to-workload win correlations fed back to the proposer
+- Workload-share-weighted scoring over downscaled training-like projection shapes
+- Auto-chaining CI workflow with configurable continuation policies
+- Scheduled twice-daily autonomous search sessions (20 chains x 3 iterations)
+
+Current best candidate: `transpose_rowpair_dualcol` (2x2 register-blocked transpose).
+
+**Reliability note:** Metrics vary ~8% CoV across GitHub Actions runs due to shared-tenancy CPU variance. The signal is in which candidates consistently win, not in absolute uplift numbers.
+
+### long-context-reasoning
+
+Model-backed eval lane via the Responses API. Measures accuracy on needle-in-haystack retrieval fixtures with baseline (truncated) vs candidate (full context) conditions.
+
+### tool-use-reliability
+
+Model-backed eval lane comparing terminal-first vs structured execution modes on stateful multi-step tasks.
 
 ## Repository Layout
 
-- `src/research_engine/`: minimal Python package for the core loop
-- `docs/THESIS.md`: product thesis and wedge
-- `docs/ARCHITECTURE.md`: first-pass system design
-- `docs/ROADMAP.md`: staged roadmap
-- `docs/COMPANY_PLAN.md`: company path, wedge, and org/brand recommendation
-- `docs/ORG_AND_REPO.md`: where this should live organizationally
-- `docs/TECHNICAL_START.md`: where to start technically and what not to do yet
-- `docs/BENCHMARKS.md`: standing research goals and CI benchmark shape
-- `docs/CI.md`: layered CI strategy for tests, benchmark planning, and Codex lanes
-- `docs/CODEX_CI_ENV.md`: how to mirror local Codex provider config into GitHub Actions
-- `docs/RESEARCH_AGENDA.md`: which LLM/ML problems Noeris should pursue first
-- `docs/RESEARCH_MEMORY.md`: recommended memory and knowledge-graph shape for long-running benchmark research
-- `docs/VERIFICATION.md`: evidence rules and publishability gates
-- `docs/RESEARCH_LANDSCAPE.md`: external landscape and design implications
-- `docs/NAME_SHORTLIST.md`: naming directions under review
-- `tests/`: initial regression coverage for the loop scaffold
+```
+src/research_engine/
+  cli.py            CLI entry point
+  pipeline.py       Core research cycle orchestration
+  models.py         Data models (claims, hypotheses, experiment specs)
+  ingestion.py      Live source discovery (arXiv, GitHub)
+  llm.py            Model-backed claim extraction and hypothesis generation
+  executors.py      Benchmark executors (matmul CPU, long-context, tool-use)
+  benchmarks.py     Benchmark definitions and scoring
+  store.py          Run persistence and history
+  export.py         Run export bundles
+  agenda.py         Research agenda and standing goals
+  defaults.py       Seed components for offline mode
+  codex_config.py   Codex CI provider mirroring
+  components.py     Component protocol definitions
+tests/              Regression coverage (61 tests)
+docs/               Design docs, thesis, roadmap
+.github/workflows/  CI and benchmark automation
+```
 
 ## Quick Start
 
@@ -50,86 +72,69 @@ This repository is the first scaffold for that loop, starting with ML/LLMs becau
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -e .
-python -m research_engine.cli thesis
-python -m research_engine.cli architecture
-python -m research_engine.cli agenda
+
+# Offline (no API keys needed)
 python -m research_engine.cli benchmarks
-python -m research_engine.cli ci-env
-python -m research_engine.cli sources --topic "long-context reasoning"
-python -m research_engine.cli cycle --topic "long-context reasoning" --llm --max-results 1
-python -m research_engine.cli benchmark-run long-context-reasoning --llm --live-execution --max-results 1
 python -m research_engine.cli benchmark-run matmul-speedup
-python -m research_engine.cli iterate matmul-speedup --iterations 1 --llm --live-execution
+
+# With LLM provider configured
+python -m research_engine.cli iterate matmul-speedup --iterations 3 --llm --live-execution
+python -m research_engine.cli cycle --topic "long-context reasoning" --llm --max-results 3
+
+# Inspect results
 python -m research_engine.cli runs
-python -m research_engine.cli history --benchmark-id tool-use-reliability --limit 3
+python -m research_engine.cli history --benchmark-id matmul-speedup --limit 5
 python -m research_engine.cli export-run <run_id>
-python -m unittest discover -s tests
 ```
 
-## What Noeris Is
+## CI
 
-Noeris is not a general "deep research" chatbot.
+| Workflow | Trigger | Purpose |
+|---|---|---|
+| CI | Push + PR | Unit tests, benchmark registry validation |
+| Benchmark Iterate | Twice daily + manual | Autonomous kernel search with auto-chaining |
+| Benchmark Plans | Weekly + manual | Offline benchmark planning validation |
+| Codex Research | Weekly + manual | LLM-backed source discovery and research notes |
 
-It is a benchmark-first research loop:
+## Roadmap
 
-1. Discover fresh sources for a standing benchmark.
-2. Build structured claims and open questions.
-3. Propose bounded hypotheses.
-4. Convert them into benchmark-shaped experiment specs.
-5. Run an executor.
-6. Persist evidence, artifacts, and next actions.
+### Done
 
-The intended product shape is:
+- [x] Product thesis and research object schema
+- [x] Live source discovery (arXiv Atom API, GitHub REST API)
+- [x] Model-backed claim extraction and hypothesis generation via Responses API
+- [x] Model-backed long-context and tool-use benchmark execution
+- [x] Real CPU matmul microbenchmark with workload-weighted scoring
+- [x] Parameterized kernel grid search (transpose + ikj families)
+- [x] LLM-proposed novel kernel configurations
+- [x] Cross-run learning (param-to-workload correlations)
+- [x] Persisted research runs with export bundles
+- [x] Auto-chaining CI with configurable continuation policies
+- [x] Scheduled autonomous search sessions
+- [x] Source confidence, contradiction detection, and evidence ranking
+- [x] Cross-run history comparison for claims and confidence shifts
+- [x] Verification gates around cycle completeness
 
-- research planning grounded in fresh sources
-- benchmark-specific execution lanes
-- artifact-backed verification and replay
+### Next
 
-## Current Status
+- [ ] Reduce metric noise (pin runner type, increase repetitions, or use relative-only scoring)
+- [ ] Broader and harder-to-saturate live fixture sets
+- [ ] Ranked hypothesis selection beyond single-pass generation
+- [ ] Richer benchmark-specific experiment templates
+- [ ] Persist structured contradictions across runs
+- [ ] Real training / eval runtime orchestration
+- [ ] Failure replay UX
 
-The repo has crossed from pure scaffold into an early working loop.
+### Later
 
-What is real now:
+- [ ] GPU kernel benchmarks (CUDA/Triton)
+- [ ] Multi-benchmark cross-pollination (insights from one lane inform another)
+- [ ] Research memo publication pipeline
+- [ ] External eval harness integration (lm-eval, inspect)
 
-- live source discovery from arXiv and GitHub
-- model-backed claim extraction and hypothesis generation via the Responses API
-- model-backed long-context benchmark execution via the Responses API
-- model-backed tool-use benchmark execution via the Responses API
-- token and latency accounting artifacts for live benchmark runs
-- real CPU benchmark execution for `matmul-speedup` via `--live-execution`
-- batched wall-clock timing for live matmul runs so small fixtures spend enough time per sample to reduce timer noise
-- workload-share-weighted live matmul scoring over downscaled training-like projection shapes instead of square-only control cases
-- source-confidence and contradiction structure in research memory and reports
-- cross-run history comparison for claims and confidence shifts
-- bounded `iterate` output that reports frontier deltas such as candidate-set changes and best-candidate changes
-- benchmark history can be restored inside GitHub iterate runs, and the iterate workflow can chain bounded follow-up runs under explicit continuation policies
-- persisted research runs and export bundles
-- verification gates around cycle completeness
-- offline benchmark executors for long-context, tool-use, and matmul lanes
+## Design Principles
 
-What is still incomplete:
-
-- ranked hypothesis selection beyond single-pass generation
-- real training / eval runtime orchestration
-- stronger failure reporting and replay UX
-- broader and harder-to-saturate live fixture sets
-
-Current empirical lanes:
-
-- `matmul-speedup`: deterministic offline systems executor with benchmark artifacts
-- `matmul-speedup`: optional real CPU microbenchmark execution with artifact-backed measurements
-- `long-context-reasoning`: live-source + model-backed planning, with optional live model-backed eval execution
-- `tool-use-reliability`: live-source + model-backed planning, with optional live model-backed terminal-first vs structured evaluation
-
-## Current Recommendation
-
-- Keep this as a private repo for now.
-- Incubate it as a separate project under a `PwnKit Labs` umbrella.
-- Start with post-training, evaluation, and agent-system research before touching pre-training.
-
-## Immediate Next Steps
-
-- persist structured contradictions and source confidence
-- broaden the live fixture sets so benchmark lanes are harder to saturate
-- add richer benchmark-specific experiment templates and ranking
-- keep the benchmark surface narrow and high-signal instead of expanding scope too early
+- **Evidence-first, not chat-first.** Every claim has an artifact trail.
+- **Benchmark-shaped.** If it can't be turned into a benchmark, a bounded experiment, and a required artifact contract, it's not yet a good focus area.
+- **Narrow and high-signal.** Better to deeply explore a small surface than to skim many.
+- **Reproducible.** Experiment specs, not just idea generation. Artifact bundles, not just summaries.

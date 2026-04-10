@@ -1,41 +1,57 @@
 # Roadmap
 
-## Phase 0: Thesis and Scaffold
+## Phase 0: Thesis and Scaffold (done)
 
-- lock product thesis
-- define research object schema
-- define cycle contract
-- establish repo skeleton
+- [x] lock product thesis
+- [x] define research object schema
+- [x] define cycle contract
+- [x] establish repo skeleton
 
-## Phase 1: Source And Planning
+## Phase 1: Source And Planning (done)
 
-- arXiv and repo ingestion
-- basic deduplication and normalization
-- model-backed claim extraction
-- model-backed bounded hypothesis generation
+- [x] arXiv and repo ingestion
+- [x] basic deduplication and normalization
+- [x] model-backed claim extraction
+- [x] model-backed bounded hypothesis generation
+- [x] source confidence and contradiction detection
+- [x] evidence-weighted hypothesis ranking
 
-## Phase 2: Benchmark-First Execution
+## Phase 2: Benchmark-First Execution (done)
 
-- long-context executor
-- tool-use executor
-- matmul runtime path
-- artifact capture and comparison
+- [x] long-context executor (offline + model-backed)
+- [x] tool-use executor (offline + model-backed)
+- [x] matmul runtime path (offline + real CPU microbenchmark)
+- [x] artifact capture and comparison
+- [x] workload-share-weighted scoring
+- [x] parameterized kernel grid search (transpose + ikj families)
+- [x] LLM-proposed novel kernel configurations
+- [x] cross-run learning fed back to proposer
 
-## Phase 3: Research Memory
+## Phase 3: Continuous Discovery (active)
 
-- claim graph
-- method graph
-- contradiction and gap detection
-- topic timelines and source freshness
+- [x] auto-chaining CI with configurable continuation policies
+- [x] scheduled twice-daily autonomous search sessions
+- [x] cross-run history comparison for claims and confidence shifts
+- [ ] reduce metric noise (pin runner type, increase repetitions, relative-only scoring)
+- [ ] broader and harder-to-saturate live fixture sets
+- [ ] persist structured contradictions across runs
 
-## Phase 4: Research Output
+## Phase 4: Research Memory (planned)
 
-- ranked hypotheses
-- evidence-backed research memos
-- review and replay UI
+- [ ] claim graph persistence across sessions
+- [ ] method graph
+- [ ] topic timelines and source freshness tracking
+- [ ] ranked hypothesis selection beyond single-pass generation
 
-## Phase 5: Continuous Discovery
+## Phase 5: Research Output (planned)
 
-- standing topics
-- daily/weekly digests
-- automatic follow-up experiment generation
+- [ ] evidence-backed research memos with full replay
+- [ ] failure replay UX
+- [ ] research memo publication pipeline
+
+## Phase 6: Scale (later)
+
+- [ ] GPU kernel benchmarks (CUDA/Triton)
+- [ ] real training / eval runtime orchestration
+- [ ] multi-benchmark cross-pollination
+- [ ] external eval harness integration (lm-eval, inspect)
