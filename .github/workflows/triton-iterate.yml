@@ -1,0 +1,176 @@
+name: Triton Iterate
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+    - cron: "0 15 * * *"
+  workflow_dispatch:
+    inputs:
+      gpu:
+        description: "GPU type for Modal execution"
+        required: false
+        default: "A100"
+      configs_per_run:
+        description: "Max configs to benchmark per iteration"
+        required: false
+        default: "8"
+      shapes:
+        description: "Shape set: tiny, standard, full"
+        required: false
+        default: "standard"
+      use_llm:
+        description: "Use LLM proposer for novel configs"
+        required: false
+        default: "true"
+      auto_chain_runs_remaining:
+        description: "Follow-up runs to auto-dispatch (scheduled runs default to 10)"
+        required: false
+        default: "0"
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  triton-iterate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      actions: write
+      contents: read
+    env:
+      AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+      AZURE_OPENAI_BASE_URL: ${{ vars.AZURE_OPENAI_BASE_URL }}
+      AZURE_OPENAI_MODEL: ${{ vars.AZURE_OPENAI_MODEL }}
+      AZURE_OPENAI_WIRE_API: ${{ vars.AZURE_OPENAI_WIRE_API }}
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package and Modal
+        run: |
+          python -m pip install -e .
+          python -m pip install modal
+
+      - name: Restore config database
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import shutil
+          import subprocess
+          import tempfile
+          from pathlib import Path
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          current_run_id = os.environ["GITHUB_RUN_ID"]
+          db_path = Path(".noeris/triton-configs.json")
+          db_path.parent.mkdir(parents=True, exist_ok=True)
+
+          runs = json.loads(
+              subprocess.check_output(
+                  ["gh", "-R", repository, "run", "list",
+                   "--workflow", "Triton Iterate", "--branch", "main",
+                   "-L", "10", "--json", "databaseId,conclusion"],
+                  text=True,
+              )
+          )
+
+          for run in runs:
+              run_id = str(run.get("databaseId", "")).strip()
+              if not run_id or run_id == current_run_id or run.get("conclusion") != "success":
+                  continue
+              artifact_name = f"triton-iterate-{run_id}"
+              with tempfile.TemporaryDirectory() as temp_dir:
+                  try:
+                      subprocess.run(
+                          ["gh", "-R", repository, "run", "download", run_id,
+                           "-n", artifact_name, "-D", temp_dir],
+                          check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                      )
+                  except subprocess.CalledProcessError:
+                      continue
+                  source_db = Path(temp_dir) / ".noeris" / "triton-configs.json"
+                  if source_db.exists():
+                      shutil.copy2(source_db, db_path)
+                      print(json.dumps({"restored_from_run": run_id}))
+                      break
+          else:
+              print(json.dumps({"restored_from_run": None}))
+          PY
+
+      - name: Run Triton kernel search
+        run: |
+          python -m research_engine.cli triton-iterate \
+            --gpu "${{ github.event.inputs.gpu || 'A100' }}" \
+            --configs-per-run "${{ github.event.inputs.configs_per_run || '8' }}" \
+            --shapes "${{ github.event.inputs.shapes || 'standard' }}" \
+            --db-path .noeris/triton-configs.json \
+            ${{ (github.event.inputs.use_llm || 'true') == 'true' && '--llm' || '' }} \
+            > triton-iterate-run.json
+
+      - name: Evaluate auto-chain
+        id: auto_chain
+        env:
+          NOERIS_AUTO_CHAIN_RUNS_REMAINING: ${{ github.event.inputs.auto_chain_runs_remaining || '10' }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          payload = json.loads(Path("triton-iterate-run.json").read_text())
+          remaining = int(os.environ["NOERIS_AUTO_CHAIN_RUNS_REMAINING"])
+          best_tflops = payload.get("best_avg_tflops", 0)
+          configs_tested = payload.get("configs_tested", 0)
+
+          # Chain if we tested configs and have remaining budget
+          should_dispatch = remaining > 0 and configs_tested > 0
+          next_remaining = max(remaining - 1, 0) if should_dispatch else remaining
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"should_dispatch={'true' if should_dispatch else 'false'}\n")
+              f.write(f"next_remaining={next_remaining}\n")
+
+          decision = {
+              "should_dispatch": should_dispatch,
+              "remaining_before": remaining,
+              "next_remaining": next_remaining,
+              "best_avg_tflops": best_tflops,
+              "configs_tested": configs_tested,
+          }
+          Path("auto-chain-decision.json").write_text(json.dumps(decision, indent=2) + "\n")
+          print(json.dumps(decision, indent=2))
+          PY
+
+      - name: Auto-dispatch next iteration
+        if: ${{ steps.auto_chain.outputs.should_dispatch == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NOERIS_GPU: ${{ github.event.inputs.gpu || 'A100' }}
+          NOERIS_CONFIGS: ${{ github.event.inputs.configs_per_run || '8' }}
+          NOERIS_SHAPES: ${{ github.event.inputs.shapes || 'standard' }}
+          NOERIS_LLM: ${{ github.event.inputs.use_llm || 'true' }}
+          NOERIS_NEXT_REMAINING: ${{ steps.auto_chain.outputs.next_remaining }}
+        run: |
+          gh workflow run triton-iterate.yml \
+            -f gpu="$NOERIS_GPU" \
+            -f configs_per_run="$NOERIS_CONFIGS" \
+            -f shapes="$NOERIS_SHAPES" \
+            -f use_llm="$NOERIS_LLM" \
+            -f auto_chain_runs_remaining="$NOERIS_NEXT_REMAINING"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: triton-iterate-${{ github.run_id }}
+          path: |
+            triton-iterate-run.json
+            auto-chain-decision.json
+            .noeris/triton-configs.json

@@ -22,6 +22,13 @@ from .ingestion import (
     UrllibHttpClient,
 )
 from .llm import LlmConfigurationError, LlmHypothesisPlanner, LlmResearchMemory, ResponsesApiClient
+from .triton_kernels import (
+    MATMUL_SHAPE_BUCKETS,
+    ConfigDatabase,
+    config_id,
+    propose_triton_configs,
+    select_configs_for_run,
+)
 from .models import ResearchTopic
 from .pipeline import ResearchPipeline
 from .store import JsonFileRunStore
@@ -213,6 +220,43 @@ def build_parser() -> argparse.ArgumentParser:
         "--live-execution",
         action="store_true",
         help="use a real model-backed executor where available instead of the offline deterministic executor",
+    )
+
+    triton_parser = subparsers.add_parser(
+        "triton-iterate",
+        help="run Triton kernel search: generate configs, benchmark on GPU, record to config database",
+    )
+    triton_parser.add_argument(
+        "--configs-per-run",
+        type=int,
+        default=8,
+        help="max configs to benchmark per iteration",
+    )
+    triton_parser.add_argument(
+        "--gpu",
+        default="A100",
+        help="GPU type for Modal execution (A100, H100, T4)",
+    )
+    triton_parser.add_argument(
+        "--llm",
+        action="store_true",
+        help="use the LLM proposer to suggest novel configs",
+    )
+    triton_parser.add_argument(
+        "--local",
+        action="store_true",
+        help="run locally instead of via Modal (requires local GPU + triton)",
+    )
+    triton_parser.add_argument(
+        "--shapes",
+        default="standard",
+        choices=["tiny", "standard", "full"],
+        help="shape set to benchmark: tiny (2), standard (6), full (10)",
+    )
+    triton_parser.add_argument(
+        "--db-path",
+        default=".noeris/triton-configs.json",
+        help="path to the shape-indexed config database",
     )
 
     return parser
@@ -462,6 +506,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
 
+    if args.command == "triton-iterate":
+        return _run_triton_iterate(args)
+
     try:
         pipeline = build_pipeline(
             use_llm=args.llm,
@@ -478,6 +525,116 @@ def main(argv: list[str] | None = None) -> int:
         constraints=args.constraint,
     )
     print(json.dumps(pipeline.run_cycle_dict(topic), indent=2))
+    return 0
+
+
+def _run_triton_iterate(args) -> int:
+    """Run the Triton kernel search loop."""
+    from .modal_runner import run_benchmark_local, run_benchmark_modal
+
+    db = ConfigDatabase(path=args.db_path)
+    hardware = args.gpu
+
+    # Select shape set
+    if args.shapes == "tiny":
+        shapes = MATMUL_SHAPE_BUCKETS[:2]
+    elif args.shapes == "full":
+        shapes = MATMUL_SHAPE_BUCKETS
+    else:
+        shapes = MATMUL_SHAPE_BUCKETS[:6]
+
+    # Get LLM-proposed configs if enabled
+    proposed_configs: list[dict[str, int]] = []
+    proposal_result: dict = {"source": "none"}
+    if args.llm:
+        try:
+            client = ResponsesApiClient.from_environment()
+            proposal_result = propose_triton_configs(
+                proposer=client,
+                database=db,
+                hardware=hardware,
+                target_shapes=shapes,
+            )
+            proposed_configs = proposal_result.get("configs", [])
+        except LlmConfigurationError as exc:
+            proposal_result = {"source": "llm_config_error", "error": str(exc)}
+
+    # Select configs for this run
+    configs = select_configs_for_run(
+        database=db,
+        hardware=hardware,
+        shapes=[{"M": s["M"], "N": s["N"], "K": s["K"]} for s in shapes],
+        max_configs=args.configs_per_run,
+        proposed_configs=proposed_configs,
+    )
+
+    # Run benchmarks
+    run_fn = run_benchmark_local if args.local else run_benchmark_modal
+    results = []
+    best_tflops = 0.0
+    best_config_id = ""
+
+    for config in configs:
+        cid = config_id(config)
+        if args.local:
+            result = run_fn(config, shapes=shapes)
+        else:
+            result = run_fn(config, shapes=shapes, gpu=args.gpu)
+
+        config_results = []
+        if result.success:
+            for shape_result in result.results:
+                if shape_result.get("correct"):
+                    shape_info = {
+                        "M": int(shape_result["shape"].split("x")[0]),
+                        "N": int(shape_result["shape"].split("x")[1]),
+                        "K": int(shape_result["shape"].split("x")[2]),
+                    }
+                    is_new_best = db.record_result(
+                        shape=shape_info,
+                        hardware=result.hardware.get("gpu", hardware),
+                        config=config,
+                        tflops=shape_result.get("tflops", 0),
+                        ms=shape_result.get("ms", 0),
+                        correct=True,
+                        run_id=cid,
+                    )
+                    config_results.append({
+                        **shape_result,
+                        "new_best": is_new_best,
+                    })
+
+            avg_tflops = 0.0
+            correct_results = [r for r in result.results if r.get("correct") and r.get("tflops")]
+            if correct_results:
+                avg_tflops = sum(r["tflops"] for r in correct_results) / len(correct_results)
+
+            if avg_tflops > best_tflops:
+                best_tflops = avg_tflops
+                best_config_id = cid
+
+        results.append({
+            "config_id": cid,
+            "config": config,
+            "success": result.success,
+            "error": result.error,
+            "shape_results": config_results,
+        })
+
+    db.save()
+
+    # Build output
+    output = {
+        "benchmark": "triton-matmul",
+        "hardware": hardware,
+        "configs_tested": len(configs),
+        "best_config_id": best_config_id,
+        "best_avg_tflops": round(best_tflops, 2),
+        "proposal": proposal_result,
+        "results": results,
+        "database_insights": db.get_insights(hardware=hardware),
+    }
+    print(json.dumps(output, indent=2))
     return 0
 
 

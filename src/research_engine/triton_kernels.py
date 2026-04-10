@@ -493,6 +493,156 @@ class ConfigDatabase:
 # Config selection with frontier awareness
 # ---------------------------------------------------------------------------
 
+_TRITON_CONFIG_PROPOSAL_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "configs": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "BLOCK_SIZE_M": {"type": "integer"},
+                    "BLOCK_SIZE_N": {"type": "integer"},
+                    "BLOCK_SIZE_K": {"type": "integer"},
+                    "GROUP_SIZE_M": {"type": "integer"},
+                    "num_warps": {"type": "integer"},
+                    "num_stages": {"type": "integer"},
+                    "rationale": {"type": "string"},
+                },
+                "required": [
+                    "BLOCK_SIZE_M", "BLOCK_SIZE_N", "BLOCK_SIZE_K",
+                    "GROUP_SIZE_M", "num_warps", "num_stages", "rationale",
+                ],
+            },
+        },
+        "global_rationale": {"type": "string"},
+    },
+    "required": ["configs", "global_rationale"],
+}
+
+
+def propose_triton_configs(
+    *,
+    proposer,  # ResponsesApiClient
+    database: ConfigDatabase | None = None,
+    hardware: str = "",
+    target_shapes: list[dict[str, int]] | None = None,
+    max_proposals: int = 4,
+) -> dict[str, Any]:
+    """Ask the LLM to propose novel Triton matmul configs.
+
+    Uses cross-run insights from the ConfigDatabase to guide proposals.
+    This is the core of the LLM-guided search: the proposer sees what
+    worked on which shapes and suggests new configs to try.
+    """
+    insights = []
+    if database is not None:
+        insights = database.get_insights(hardware=hardware)
+
+    prompt_data: dict[str, Any] = {
+        "task": "Propose novel Triton matmul kernel configurations",
+        "param_space": {
+            "BLOCK_SIZE_M": "power of 2, 16-256",
+            "BLOCK_SIZE_N": "power of 2, 16-256",
+            "BLOCK_SIZE_K": "power of 2, 16-128",
+            "GROUP_SIZE_M": "4-16, controls L2 cache reuse of A tiles",
+            "num_warps": "1-8, warps per thread block",
+            "num_stages": "2-5, software pipeline depth for hiding latency",
+        },
+        "hardware_constraints": {
+            "shared_memory_per_sm": "192 KB on A100, tiles must fit",
+            "rule": "BLOCK_M * BLOCK_K * 2 * num_stages + BLOCK_K * BLOCK_N * 2 * num_stages < 192000",
+        },
+        "target_shapes": target_shapes or [s for s in MATMUL_SHAPE_BUCKETS[:6]],
+    }
+    if insights:
+        prompt_data["cross_run_insights"] = insights
+    curated_ids = [config_id(c) for c in TRITON_MATMUL_CURATED_CONFIGS]
+    prompt_data["already_tested"] = curated_ids
+
+    try:
+        import json as _json
+        payload = proposer.generate_json(
+            schema_name="triton_config_proposals",
+            schema=_TRITON_CONFIG_PROPOSAL_SCHEMA,
+            instructions=(
+                "You are proposing Triton GPU matmul kernel configurations. "
+                "Each config specifies tile sizes and scheduling params that get compiled "
+                "into a specialized GPU kernel. Different shapes have different optimal configs. "
+                "Use the cross_run_insights to understand what has worked before and propose "
+                "configs that explore promising unexplored regions of the parameter space. "
+                f"Return at most {max_proposals} configs. Keep rationale to one sentence each."
+            ),
+            prompt=_json.dumps(prompt_data, indent=2),
+            max_output_tokens=600,
+            reasoning_effort="low",
+            text_verbosity="low",
+        )
+    except Exception as exc:
+        return {
+            "source": "responses_api_error",
+            "configs": [],
+            "global_rationale": "",
+            "error": type(exc).__name__,
+            "detail": str(exc)[:240],
+        }
+
+    configs = []
+    for item in payload.get("configs", []):
+        if not isinstance(item, dict) or len(configs) >= max_proposals:
+            break
+        config = _sanitize_triton_config(item)
+        if config is not None:
+            configs.append(config)
+
+    return {
+        "source": "responses_api",
+        "configs": configs,
+        "global_rationale": " ".join(str(payload.get("global_rationale", "")).split()),
+    }
+
+
+def _sanitize_triton_config(item: dict) -> dict[str, int] | None:
+    """Validate and clamp a proposed Triton config."""
+    try:
+        bm = _clamp_pow2(int(item.get("BLOCK_SIZE_M", 0)), 16, 256)
+        bn = _clamp_pow2(int(item.get("BLOCK_SIZE_N", 0)), 16, 256)
+        bk = _clamp_pow2(int(item.get("BLOCK_SIZE_K", 0)), 16, 128)
+        gm = max(1, min(int(item.get("GROUP_SIZE_M", 8)), 16))
+        nw = _clamp_pow2(int(item.get("num_warps", 4)), 1, 8)
+        ns = max(2, min(int(item.get("num_stages", 3)), 5))
+    except (TypeError, ValueError):
+        return None
+
+    # Shared memory sanity check (rough: 2 bytes per element, A + B tiles)
+    shmem = (bm * bk + bk * bn) * 2 * ns
+    if shmem > 192_000:
+        return None
+
+    return {
+        "BLOCK_SIZE_M": bm,
+        "BLOCK_SIZE_N": bn,
+        "BLOCK_SIZE_K": bk,
+        "GROUP_SIZE_M": gm,
+        "num_warps": nw,
+        "num_stages": ns,
+    }
+
+
+def _clamp_pow2(value: int, low: int, high: int) -> int:
+    """Clamp to nearest power of 2 within bounds."""
+    value = max(low, min(value, high))
+    # Round to nearest power of 2
+    p = 1
+    while p * 2 <= value:
+        p *= 2
+    if abs(p - value) > abs(p * 2 - value) and p * 2 <= high:
+        p *= 2
+    return max(low, min(p, high))
+
+
 def select_configs_for_run(
     *,
     database: ConfigDatabase | None = None,
