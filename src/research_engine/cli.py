@@ -385,6 +385,12 @@ def build_pipeline(
         kwargs["research_memory"] = LlmResearchMemory(client=client, max_sources=max_results * 2)
         kwargs["hypothesis_planner"] = LlmHypothesisPlanner(client=client)
     if live_execution:
+        matmul_history = None
+        if benchmark_id == "matmul-speedup":
+            matmul_history = JsonFileRunStore().summarize_history(
+                benchmark_id="matmul-speedup",
+                limit=20,
+            )
         kwargs["experiment_executor"] = DefaultExperimentExecutor(
             long_context_executor=(
                 LongContextResponsesExecutor(client=client)
@@ -397,7 +403,7 @@ def build_pipeline(
                 else DefaultExperimentExecutor().tool_use_executor
             ),
             matmul_executor=(
-                MatmulPythonExecutor()
+                MatmulPythonExecutor(history_summary=matmul_history)
                 if benchmark_id == "matmul-speedup"
                 else DefaultExperimentExecutor().matmul_executor
             ),
