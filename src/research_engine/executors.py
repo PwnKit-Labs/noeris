@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from dataclasses import field
+import json
 import os
 import platform
 from random import Random
+from statistics import median
 from time import perf_counter
 
 from .components import ExperimentExecutor
@@ -625,9 +627,11 @@ class MatmulOfflineExecutor(ExperimentExecutor):
 class MatmulPythonExecutor(ExperimentExecutor):
     """Real CPU microbenchmark for the matmul benchmark lane."""
 
-    repetitions: int = 2
+    repetitions: int = 3
+    warmup_repetitions: int = 1
     max_candidates_per_run: int = 4
     history_summary: dict[str, object] | None = None
+    proposer: ResponsesApiClient | None = None
 
     def run(
         self,
@@ -638,7 +642,7 @@ class MatmulPythonExecutor(ExperimentExecutor):
         rows = []
         improvements = []
         winner_counts: dict[str, int] = {}
-        selected_candidates, pruned_candidates, shape_focus = self._select_candidates()
+        selected_candidates, pruned_candidates, shape_focus, proposal = self._select_candidates()
         for fixture in LIVE_MATMUL_FIXTURES:
             row = self._run_fixture(fixture, selected_candidates)
             rows.append(row)
@@ -671,6 +675,7 @@ class MatmulPythonExecutor(ExperimentExecutor):
                 "baseline": "naive_ijk",
                 "candidate_ids": [candidate["id"] for candidate in selected_candidates],
                 "repetitions": self.repetitions,
+                "warmup_repetitions": self.warmup_repetitions,
             },
             "candidate-catalog.json": {
                 "baseline": "naive_ijk",
@@ -688,6 +693,7 @@ class MatmulPythonExecutor(ExperimentExecutor):
                 ],
                 "pruned_candidates": pruned_candidates,
             },
+            "candidate-proposals.json": proposal,
             "shape-focus.json": shape_focus,
             "raw-timing-results.json": {
                 "mean_uplift_pct": round(mean_uplift * 100, 2),
@@ -727,14 +733,22 @@ class MatmulPythonExecutor(ExperimentExecutor):
         seed = sum(ord(char) for char in fixture["id"])
         a = _generate_matrix(m, k, seed=seed)
         b = _generate_matrix(k, n, seed=seed + 1)
-        baseline_time = min(_time_call(lambda: _matmul_ijk(a, b)) for _ in range(self.repetitions))
+        baseline_time = _measure_runtime(
+            lambda: _matmul_ijk(a, b),
+            repetitions=self.repetitions,
+            warmups=self.warmup_repetitions,
+        )
         baseline_result = _matmul_ijk(a, b)
         ops = 2 * m * n * k
         baseline_gflops = ops / baseline_time / 1_000_000_000
         candidate_rows = []
         for candidate in candidates:
             fn = candidate["fn"]
-            candidate_time = min(_time_call(lambda fn=fn: fn(a, b)) for _ in range(self.repetitions))
+            candidate_time = _measure_runtime(
+                lambda fn=fn: fn(a, b),
+                repetitions=self.repetitions,
+                warmups=self.warmup_repetitions,
+            )
             candidate_result = fn(a, b)
             max_abs_error = _max_abs_diff(baseline_result, candidate_result)
             candidate_rows.append(
@@ -787,7 +801,7 @@ class MatmulPythonExecutor(ExperimentExecutor):
             "candidate_results": candidate_rows,
         }
 
-    def _select_candidates(self) -> tuple[list[dict[str, object]], list[dict[str, object]], dict[str, object]]:
+    def _select_candidates(self) -> tuple[list[dict[str, object]], list[dict[str, object]], dict[str, object], dict[str, object]]:
         catalog = _matmul_candidate_catalog(self.history_summary)
         wins = {}
         shape_winners = {}
@@ -811,6 +825,8 @@ class MatmulPythonExecutor(ExperimentExecutor):
                     ],
                     key=lambda item: item.get("runner_up_gap_pct", 10**9),
                 )
+        proposal = self._propose_candidates(catalog, weakest_shapes)
+        proposed_ids = set(proposal.get("candidate_ids", []))
         for candidate in catalog:
             candidate["historical_wins"] = int(wins.get(candidate["id"], 0))
             candidate["shape_bonus"] = sum(
@@ -828,6 +844,7 @@ class MatmulPythonExecutor(ExperimentExecutor):
                 for item in weakest_shapes[:2]
                 if isinstance(item, dict) and item.get("runner_up_candidate_id") == candidate["id"]
             )
+            candidate["proposal_bonus"] = 1 if candidate["id"] in proposed_ids else 0
 
         selected = []
         pruned = []
@@ -840,6 +857,7 @@ class MatmulPythonExecutor(ExperimentExecutor):
                 -candidate["shape_bonus"],
                 -candidate["challenger_bonus"],
                 -candidate["weak_shape_bonus"],
+                -candidate["proposal_bonus"],
                 -candidate["priority"],
                 candidate["id"],
             ),
@@ -876,12 +894,84 @@ class MatmulPythonExecutor(ExperimentExecutor):
                     "shape_bonus": candidate["shape_bonus"],
                     "challenger_bonus": candidate["challenger_bonus"],
                     "weak_shape_bonus": candidate["weak_shape_bonus"],
+                    "proposal_bonus": candidate["proposal_bonus"],
                     "priority": candidate["priority"],
                 }
                 for candidate in selected
             ],
         }
-        return selected, pruned, shape_focus
+        return selected, pruned, shape_focus, proposal
+
+    def _propose_candidates(
+        self,
+        catalog: list[dict[str, object]],
+        weakest_shapes: list[dict[str, object]],
+    ) -> dict[str, object]:
+        if self.proposer is None:
+            return {
+                "source": "none",
+                "candidate_ids": [],
+                "rationale_by_candidate": {},
+            }
+        try:
+            payload = self.proposer.generate_json(
+                schema_name="matmul_candidate_batch",
+                schema=_MATMUL_CANDIDATE_PROPOSAL_SCHEMA,
+                instructions=(
+                    "Choose the most promising next batch of implementable matmul candidate families. "
+                    "Only choose from the provided candidate ids. Favor candidates that attack the weakest shapes "
+                    "or mutate the current best family in a bounded way."
+                ),
+                prompt=json.dumps(
+                    {
+                        "best_candidate_id": (
+                            self.history_summary.get("best_matmul_candidate_id", "")
+                            if isinstance(self.history_summary, dict)
+                            else ""
+                        ),
+                        "weakest_shapes": weakest_shapes[:3],
+                        "available_candidates": [
+                            {
+                                "id": candidate["id"],
+                                "family": candidate["family"],
+                                "description": candidate["description"],
+                                "priority": candidate["priority"],
+                                "parent_id": candidate.get("parent_id"),
+                            }
+                            for candidate in catalog
+                        ],
+                    },
+                    indent=2,
+                ),
+                max_output_tokens=180,
+                reasoning_effort="low",
+                text_verbosity="low",
+            )
+        except Exception as exc:
+            return {
+                "source": "responses_api_error",
+                "candidate_ids": [],
+                "rationale_by_candidate": {},
+                "error": type(exc).__name__,
+            }
+        allowed = {candidate["id"] for candidate in catalog}
+        candidate_ids = [
+            candidate_id
+            for candidate_id in payload.get("candidate_ids", [])
+            if isinstance(candidate_id, str) and candidate_id in allowed
+        ][: self.max_candidates_per_run]
+        rationale_by_candidate = {
+            item["candidate_id"]: " ".join(str(item["rationale"]).split())
+            for item in (payload.get("candidate_rationales") or [])
+            if isinstance(item, dict)
+            and item.get("candidate_id") in allowed
+            and isinstance(item.get("rationale"), str)
+        }
+        return {
+            "source": "responses_api",
+            "candidate_ids": candidate_ids,
+            "rationale_by_candidate": rationale_by_candidate,
+        }
 
 
 @dataclass(slots=True)
@@ -1359,10 +1449,42 @@ def _matmul_candidate_catalog(
     return catalog + generated
 
 
+_MATMUL_CANDIDATE_PROPOSAL_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "candidate_ids": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+        "candidate_rationales": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "candidate_id": {"type": "string"},
+                    "rationale": {"type": "string"},
+                },
+                "required": ["candidate_id", "rationale"],
+            },
+        },
+    },
+    "required": ["candidate_ids", "candidate_rationales"],
+}
+
+
 def _time_call(fn) -> float:
     started = perf_counter()
     fn()
     return perf_counter() - started
+
+
+def _measure_runtime(fn, *, repetitions: int, warmups: int) -> float:
+    for _ in range(warmups):
+        fn()
+    samples = [_time_call(fn) for _ in range(repetitions)]
+    return median(samples)
 
 
 def _max_abs_diff(left: list[list[float]], right: list[list[float]]) -> float:

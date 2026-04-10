@@ -268,6 +268,7 @@ class ExecutorTests(unittest.TestCase):
             len(results[0].artifact_payloads["candidate-catalog.json"]["selected_candidates"]),
             4,
         )
+        self.assertEqual(results[0].artifact_payloads["candidate-proposals.json"]["source"], "none")
         self.assertIn("shape-focus.json", results[0].artifact_refs)
         self.assertTrue(results[0].artifact_payloads["candidate-catalog.json"]["pruned_candidates"])
         self.assertTrue(
@@ -303,6 +304,7 @@ class ExecutorTests(unittest.TestCase):
             pipeline.experiment_executor.matmul_executor.history_summary["best_matmul_candidate_id"],
             "transpose_dot",
         )
+        self.assertIsNone(pipeline.experiment_executor.matmul_executor.proposer)
 
     def test_matmul_executor_uses_history_to_seed_generated_candidates(self) -> None:
         executor = MatmulPythonExecutor(
@@ -320,12 +322,47 @@ class ExecutorTests(unittest.TestCase):
             },
         )
 
-        selected, _, shape_focus = executor._select_candidates()
+        selected, _, shape_focus, proposal = executor._select_candidates()
         selected_ids = {candidate["id"] for candidate in selected}
 
         self.assertIn("transpose_unroll8", selected_ids)
         self.assertNotIn("transpose_unroll16", selected_ids)
         self.assertEqual(shape_focus["weakest_shapes"][0]["shape"], "64x64x64")
+        self.assertEqual(proposal["source"], "none")
+
+    def test_matmul_executor_includes_llm_proposals_when_available(self) -> None:
+        fake_client = _FakeResponsesClient()
+
+        def fake_proposal(**kwargs):
+            return ResponsesJsonResult(
+                data={
+                    "candidate_ids": ["transpose_unroll8", "transpose_unroll4"],
+                    "candidate_rationales": [
+                        {
+                            "candidate_id": "transpose_unroll8",
+                            "rationale": "Best challenger on weak shapes.",
+                        },
+                        {
+                            "candidate_id": "transpose_unroll4",
+                            "rationale": "Secondary mutation worth comparing.",
+                        },
+                    ],
+                },
+                raw_response={"usage": {"input_tokens": 10, "output_tokens": 10, "total_tokens": 20}},
+            )
+
+        fake_client.generate_json_result = fake_proposal
+        executor = MatmulPythonExecutor(
+            repetitions=1,
+            history_summary={"best_matmul_candidate_id": "transpose_dot"},
+            proposer=fake_client,
+        )
+
+        selected, _, _, proposal = executor._select_candidates()
+
+        self.assertEqual(proposal["source"], "responses_api")
+        self.assertIn("transpose_unroll8", proposal["candidate_ids"])
+        self.assertTrue(any(candidate["proposal_bonus"] for candidate in selected))
 
 
 if __name__ == "__main__":

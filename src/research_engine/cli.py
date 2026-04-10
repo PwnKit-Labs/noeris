@@ -370,9 +370,10 @@ def build_pipeline(
 
     kwargs = {}
     client = None
+    llm_planning_enabled = use_llm and benchmark_id != "matmul-speedup"
     if use_llm or (live_execution and benchmark_id in {"long-context-reasoning", "tool-use-reliability"}):
         client = ResponsesApiClient.from_environment()
-    if use_llm:
+    if llm_planning_enabled:
         kwargs["source_provider"] = CompositeSourceProvider(
             providers=[
                 ArxivAtomSourceProvider(client=UrllibHttpClient(), max_results=max_results),
@@ -403,7 +404,10 @@ def build_pipeline(
                 else DefaultExperimentExecutor().tool_use_executor
             ),
             matmul_executor=(
-                MatmulPythonExecutor(history_summary=matmul_history)
+                MatmulPythonExecutor(
+                    history_summary=matmul_history,
+                    proposer=client if use_llm and client is not None else None,
+                )
                 if benchmark_id == "matmul-speedup"
                 else DefaultExperimentExecutor().matmul_executor
             ),
