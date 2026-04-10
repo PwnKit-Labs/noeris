@@ -638,7 +638,7 @@ class MatmulPythonExecutor(ExperimentExecutor):
         rows = []
         improvements = []
         winner_counts: dict[str, int] = {}
-        selected_candidates, pruned_candidates = self._select_candidates()
+        selected_candidates, pruned_candidates, shape_focus = self._select_candidates()
         for fixture in LIVE_MATMUL_FIXTURES:
             row = self._run_fixture(fixture, selected_candidates)
             rows.append(row)
@@ -688,6 +688,7 @@ class MatmulPythonExecutor(ExperimentExecutor):
                 ],
                 "pruned_candidates": pruned_candidates,
             },
+            "shape-focus.json": shape_focus,
             "raw-timing-results.json": {
                 "mean_uplift_pct": round(mean_uplift * 100, 2),
                 "rows": rows,
@@ -786,15 +787,30 @@ class MatmulPythonExecutor(ExperimentExecutor):
             "candidate_results": candidate_rows,
         }
 
-    def _select_candidates(self) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    def _select_candidates(self) -> tuple[list[dict[str, object]], list[dict[str, object]], dict[str, object]]:
         catalog = _matmul_candidate_catalog(self.history_summary)
         wins = {}
         shape_winners = {}
         shape_challengers = {}
+        weakest_shapes = []
         if isinstance(self.history_summary, dict):
             wins = self.history_summary.get("matmul_candidate_wins", {}) or {}
             shape_winners = self.history_summary.get("matmul_shape_winners", {}) or {}
             shape_challengers = self.history_summary.get("matmul_shape_challengers", {}) or {}
+            weakest_shapes = self.history_summary.get("weakest_matmul_shapes", []) or []
+            if not weakest_shapes and shape_challengers:
+                weakest_shapes = sorted(
+                    [
+                        {
+                            "shape": shape,
+                            "runner_up_candidate_id": entry.get("latest_runner_up", ""),
+                            "runner_up_gap_pct": entry.get("latest_runner_up_gap_pct", 10**9),
+                        }
+                        for shape, entry in shape_challengers.items()
+                        if isinstance(entry, dict)
+                    ],
+                    key=lambda item: item.get("runner_up_gap_pct", 10**9),
+                )
         for candidate in catalog:
             candidate["historical_wins"] = int(wins.get(candidate["id"], 0))
             candidate["shape_bonus"] = sum(
@@ -807,6 +823,11 @@ class MatmulPythonExecutor(ExperimentExecutor):
                 for shape_entry in shape_challengers.values()
                 if isinstance(shape_entry, dict)
             )
+            candidate["weak_shape_bonus"] = sum(
+                1
+                for item in weakest_shapes[:2]
+                if isinstance(item, dict) and item.get("runner_up_candidate_id") == candidate["id"]
+            )
 
         selected = []
         pruned = []
@@ -818,6 +839,7 @@ class MatmulPythonExecutor(ExperimentExecutor):
                 -candidate["historical_wins"],
                 -candidate["shape_bonus"],
                 -candidate["challenger_bonus"],
+                -candidate["weak_shape_bonus"],
                 -candidate["priority"],
                 candidate["id"],
             ),
@@ -845,7 +867,21 @@ class MatmulPythonExecutor(ExperimentExecutor):
                 continue
             selected.append(candidate)
             seen_families.add(family)
-        return selected, pruned
+        shape_focus = {
+            "weakest_shapes": weakest_shapes[:3],
+            "selection_reasons": [
+                {
+                    "candidate_id": candidate["id"],
+                    "historical_wins": candidate["historical_wins"],
+                    "shape_bonus": candidate["shape_bonus"],
+                    "challenger_bonus": candidate["challenger_bonus"],
+                    "weak_shape_bonus": candidate["weak_shape_bonus"],
+                    "priority": candidate["priority"],
+                }
+                for candidate in selected
+            ],
+        }
+        return selected, pruned, shape_focus
 
 
 @dataclass(slots=True)

@@ -268,6 +268,7 @@ class ExecutorTests(unittest.TestCase):
             len(results[0].artifact_payloads["candidate-catalog.json"]["selected_candidates"]),
             4,
         )
+        self.assertIn("shape-focus.json", results[0].artifact_refs)
         self.assertTrue(results[0].artifact_payloads["candidate-catalog.json"]["pruned_candidates"])
         self.assertTrue(
             any(
@@ -275,6 +276,7 @@ class ExecutorTests(unittest.TestCase):
                 for candidate in results[0].artifact_payloads["candidate-catalog.json"]["selected_candidates"]
             )
         )
+        self.assertIn("selection_reasons", results[0].artifact_payloads["shape-focus.json"])
         self.assertIn("runner_up_candidate_id", results[0].artifact_payloads["raw-timing-results.json"]["rows"][0])
         self.assertTrue(
             results[0].artifact_payloads["best-candidate-summary.json"]["best_overall_candidate_id"]
@@ -318,11 +320,12 @@ class ExecutorTests(unittest.TestCase):
             },
         )
 
-        selected, _ = executor._select_candidates()
+        selected, _, shape_focus = executor._select_candidates()
         selected_ids = {candidate["id"] for candidate in selected}
 
         self.assertIn("transpose_unroll8", selected_ids)
         self.assertNotIn("transpose_unroll16", selected_ids)
+        self.assertEqual(shape_focus["weakest_shapes"][0]["shape"], "64x64x64")
 
 
 if __name__ == "__main__":
