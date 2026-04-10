@@ -11,6 +11,10 @@ on:
         description: "Number of bounded iterations"
         required: false
         default: "2"
+      auto_chain_runs_remaining:
+        description: "How many follow-up workflow runs to auto-dispatch after this one"
+        required: false
+        default: "0"
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -20,7 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
-      actions: read
+      actions: write
       contents: read
     env:
       AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
@@ -165,6 +169,7 @@ jobs:
           from pathlib import Path
 
           payload = json.loads(Path("iterate-run.json").read_text())
+          auto_chain_runs_remaining = int("${{ github.event.inputs.auto_chain_runs_remaining || '0' }}")
           lines = [
               f"# Benchmark Iterate: {payload['benchmark_id']}",
               "",
@@ -173,6 +178,7 @@ jobs:
               f"- Best run id: `{payload['best_run_id']}`",
               f"- Best metric: `{payload['best_metric']}`",
               f"- Outcome: `{payload['outcome']}`",
+              f"- Auto chain runs remaining after this dispatch: `{max(auto_chain_runs_remaining - 1, 0)}`",
               "",
           ]
           best_frontier = payload.get("best_frontier") or {}
@@ -211,6 +217,57 @@ jobs:
                   f"- `{run['run_id']}` | metric=`{run['metric']}` | bundle=`{run['bundle_dir']}`"
               )
           Path("iterate-report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+          PY
+
+      - name: Auto-dispatch next benchmark iteration
+        if: ${{ (github.event.inputs.auto_chain_runs_remaining || '0') != '0' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NOERIS_BENCHMARK_ID: ${{ github.event.inputs.benchmark_id || 'matmul-speedup' }}
+          NOERIS_ITERATIONS: ${{ github.event.inputs.iterations || '2' }}
+          NOERIS_AUTO_CHAIN_RUNS_REMAINING: ${{ github.event.inputs.auto_chain_runs_remaining || '0' }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          remaining = int(os.environ["NOERIS_AUTO_CHAIN_RUNS_REMAINING"])
+          if remaining <= 0:
+              raise SystemExit(0)
+
+          next_remaining = remaining - 1
+          payload = json.loads(Path("iterate-run.json").read_text())
+          subprocess.run(
+              [
+                  "gh",
+                  "-R",
+                  os.environ["GITHUB_REPOSITORY"],
+                  "workflow",
+                  "run",
+                  "benchmark-iterate.yml",
+                  "-f",
+                  f"benchmark_id={os.environ['NOERIS_BENCHMARK_ID']}",
+                  "-f",
+                  f"iterations={os.environ['NOERIS_ITERATIONS']}",
+                  "-f",
+                  f"auto_chain_runs_remaining={next_remaining}",
+              ],
+              check=True,
+          )
+          print(
+              json.dumps(
+                  {
+                      "benchmark_id": payload["benchmark_id"],
+                      "current_run_id": os.environ["GITHUB_RUN_ID"],
+                      "outcome": payload["outcome"],
+                      "dispatched_next_run": True,
+                      "next_auto_chain_runs_remaining": next_remaining,
+                  },
+                  indent=2,
+              )
+          )
           PY
 
       - name: Upload iteration artifacts
