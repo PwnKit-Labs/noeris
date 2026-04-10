@@ -121,6 +121,75 @@ class RunStoreTests(unittest.TestCase):
         self.assertIn("32x32x32", summary["matmul_shape_winners"])
         self.assertEqual(summary["weakest_matmul_shapes"][0]["shape"], "32x32x32")
 
+    def test_summarize_history_keeps_latest_shape_winner_from_newest_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = JsonFileRunStore(Path(temp_dir))
+
+            older = ResearchPipeline().run_record_for(
+                topic=ResearchTopic(
+                    name="matrix multiplication speedup",
+                    objective="discover validated kernel-level speedups",
+                    benchmark_id="matmul-speedup",
+                    constraints=["benchmark_id:matmul-speedup"],
+                ),
+                benchmark_id="matmul-speedup",
+            )
+            older.created_at = "2026-04-10T09:00:00Z"
+            older.memo.results[0].artifact_payloads["best-candidate-summary.json"] = {
+                "winner_counts": {"transpose_dot": 1},
+                "best_overall_candidate_id": "transpose_dot",
+            }
+            older.memo.results[0].artifact_payloads["raw-timing-results.json"] = {
+                "rows": [
+                    {
+                        "shape": "96x96x96",
+                        "best_candidate_id": "transpose_dot",
+                        "uplift_pct": 24.5,
+                        "runner_up_candidate_id": "transpose_unroll8",
+                        "runner_up_gap_pct": 5.9,
+                    }
+                ]
+            }
+            store.save(older)
+
+            newer = ResearchPipeline().run_record_for(
+                topic=ResearchTopic(
+                    name="matrix multiplication speedup",
+                    objective="discover validated kernel-level speedups",
+                    benchmark_id="matmul-speedup",
+                    constraints=["benchmark_id:matmul-speedup"],
+                ),
+                benchmark_id="matmul-speedup",
+            )
+            newer.created_at = "2026-04-10T10:00:00Z"
+            newer.memo.results[0].artifact_payloads["best-candidate-summary.json"] = {
+                "winner_counts": {"transpose_rowpair": 1},
+                "best_overall_candidate_id": "transpose_rowpair",
+            }
+            newer.memo.results[0].artifact_payloads["raw-timing-results.json"] = {
+                "rows": [
+                    {
+                        "shape": "96x96x96",
+                        "best_candidate_id": "transpose_rowpair",
+                        "uplift_pct": 26.2,
+                        "runner_up_candidate_id": "transpose_dot",
+                        "runner_up_gap_pct": 2.6,
+                    }
+                ]
+            }
+            store.save(newer)
+
+            summary = store.summarize_history(benchmark_id="matmul-speedup")
+
+        self.assertEqual(
+            summary["matmul_shape_winners"]["96x96x96"]["latest_winner"],
+            "transpose_rowpair",
+        )
+        self.assertEqual(
+            summary["matmul_shape_challengers"]["96x96x96"]["latest_runner_up"],
+            "transpose_dot",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

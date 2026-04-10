@@ -179,6 +179,47 @@ class ResponsesClientTests(unittest.TestCase):
         self.assertEqual(request_body["reasoning"]["effort"], "low")
         self.assertEqual(request_body["text"]["verbosity"], "low")
 
+    def test_generate_json_reads_output_text_from_message_content_when_top_level_missing(self) -> None:
+        http_client = _FakeHttpClient(
+            {
+                "output": [
+                    {"type": "reasoning", "summary": []},
+                    {
+                        "type": "message",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": '{"ok": true}',
+                            }
+                        ],
+                    },
+                ]
+            }
+        )
+        client = ResponsesApiClient(
+            config=ResponsesProviderConfig(
+                provider_name="azure",
+                api_key="azure-key",
+                base_url="https://example-resource.openai.azure.com/openai/v1",
+                model="gpt-5.4",
+            ),
+            http_client=http_client,
+        )
+
+        payload = client.generate_json(
+            schema_name="probe",
+            schema={
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {"ok": {"type": "boolean"}},
+                "required": ["ok"],
+            },
+            instructions="system",
+            prompt="user",
+        )
+
+        self.assertTrue(payload["ok"])
+
 
 class LlmPlannerTests(unittest.TestCase):
     def test_research_memory_sanitizes_unknown_sources(self) -> None:

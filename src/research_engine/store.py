@@ -242,8 +242,6 @@ class JsonFileRunStore:
                                 {"winner_counts": {}, "latest_winner": winner, "latest_uplift_pct": uplift},
                             )
                             entry["winner_counts"][winner] = entry["winner_counts"].get(winner, 0) + 1
-                            entry["latest_winner"] = winner
-                            entry["latest_uplift_pct"] = uplift
                             runner_up = str(row.get("runner_up_candidate_id", "")).strip()
                             runner_up_gap_pct = row.get("runner_up_gap_pct")
                             if runner_up:
@@ -258,8 +256,6 @@ class JsonFileRunStore:
                                 challenger_entry["runner_up_counts"][runner_up] = (
                                     challenger_entry["runner_up_counts"].get(runner_up, 0) + 1
                                 )
-                                challenger_entry["latest_runner_up"] = runner_up
-                                challenger_entry["latest_runner_up_gap_pct"] = runner_up_gap_pct
 
         return {
             "benchmark_id": benchmark_id or (latest.benchmark_id if latest else ""),

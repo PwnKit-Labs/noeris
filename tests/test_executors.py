@@ -312,6 +312,13 @@ class ExecutorTests(unittest.TestCase):
             history_summary={
                 "best_matmul_candidate_id": "transpose_dot",
                 "matmul_candidate_wins": {"transpose_dot": 3},
+                "weakest_matmul_shapes": [
+                    {
+                        "shape": "96x96x96",
+                        "runner_up_candidate_id": "transpose_unroll8",
+                        "runner_up_gap_pct": 5.0,
+                    }
+                ],
                 "matmul_shape_challengers": {
                     "64x64x64": {
                         "runner_up_counts": {"transpose_unroll8": 2},
@@ -326,8 +333,9 @@ class ExecutorTests(unittest.TestCase):
         selected_ids = {candidate["id"] for candidate in selected}
 
         self.assertIn("transpose_unroll8", selected_ids)
+        self.assertIn("transpose_rowpair", selected_ids)
         self.assertNotIn("transpose_unroll16", selected_ids)
-        self.assertEqual(shape_focus["weakest_shapes"][0]["shape"], "64x64x64")
+        self.assertEqual(shape_focus["weakest_shapes"][0]["shape"], "96x96x96")
         self.assertEqual(proposal["source"], "none")
 
     def test_matmul_executor_includes_llm_proposals_when_available(self) -> None:

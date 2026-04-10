@@ -807,11 +807,13 @@ class MatmulPythonExecutor(ExperimentExecutor):
         shape_winners = {}
         shape_challengers = {}
         weakest_shapes = []
+        best_candidate_id = ""
         if isinstance(self.history_summary, dict):
             wins = self.history_summary.get("matmul_candidate_wins", {}) or {}
             shape_winners = self.history_summary.get("matmul_shape_winners", {}) or {}
             shape_challengers = self.history_summary.get("matmul_shape_challengers", {}) or {}
             weakest_shapes = self.history_summary.get("weakest_matmul_shapes", []) or []
+            best_candidate_id = str(self.history_summary.get("best_matmul_candidate_id", "")).strip()
             if not weakest_shapes and shape_challengers:
                 weakest_shapes = sorted(
                     [
@@ -827,6 +829,14 @@ class MatmulPythonExecutor(ExperimentExecutor):
                 )
         proposal = self._propose_candidates(catalog, weakest_shapes)
         proposed_ids = set(proposal.get("candidate_ids", []))
+        top_weakest_shapes = [
+            item for item in weakest_shapes[:3] if isinstance(item, dict)
+        ]
+        weak_shape_ids = {
+            str(item.get("shape", "")).strip()
+            for item in top_weakest_shapes
+            if str(item.get("shape", "")).strip()
+        }
         for candidate in catalog:
             candidate["historical_wins"] = int(wins.get(candidate["id"], 0))
             candidate["shape_bonus"] = sum(
@@ -839,10 +849,22 @@ class MatmulPythonExecutor(ExperimentExecutor):
                 for shape_entry in shape_challengers.values()
                 if isinstance(shape_entry, dict)
             )
+            candidate["target_shape_bonus"] = sum(
+                1
+                for shape in candidate.get("target_shapes", [])
+                if isinstance(shape, str) and shape in weak_shape_ids
+            )
             candidate["weak_shape_bonus"] = sum(
                 1
                 for item in weakest_shapes[:2]
                 if isinstance(item, dict) and item.get("runner_up_candidate_id") == candidate["id"]
+            )
+            candidate["lineage_bonus"] = (
+                1
+                if best_candidate_id
+                and isinstance(candidate.get("parent_id"), str)
+                and candidate.get("parent_id") == best_candidate_id
+                else 0
             )
             candidate["proposal_bonus"] = 1 if candidate["id"] in proposed_ids else 0
 
@@ -855,8 +877,10 @@ class MatmulPythonExecutor(ExperimentExecutor):
             key=lambda candidate: (
                 -candidate["historical_wins"],
                 -candidate["shape_bonus"],
+                -candidate["target_shape_bonus"],
                 -candidate["challenger_bonus"],
                 -candidate["weak_shape_bonus"],
+                -candidate["lineage_bonus"],
                 -candidate["proposal_bonus"],
                 -candidate["priority"],
                 candidate["id"],
@@ -877,25 +901,28 @@ class MatmulPythonExecutor(ExperimentExecutor):
             if family in seen_families and candidate["historical_wins"] == 0 and candidate["priority"] < 0.75:
                 pruned.append(
                     {
-                    "id": candidate["id"],
-                    "family": family,
-                    "reason": "family_pruned_after_higher_priority_candidate",
-                }
-            )
+                        "id": candidate["id"],
+                        "family": family,
+                        "reason": "family_pruned_after_higher_priority_candidate",
+                    }
+                )
                 continue
             selected.append(candidate)
             seen_families.add(family)
         shape_focus = {
-            "weakest_shapes": weakest_shapes[:3],
+            "weakest_shapes": top_weakest_shapes,
             "selection_reasons": [
                 {
                     "candidate_id": candidate["id"],
                     "historical_wins": candidate["historical_wins"],
                     "shape_bonus": candidate["shape_bonus"],
+                    "target_shape_bonus": candidate["target_shape_bonus"],
                     "challenger_bonus": candidate["challenger_bonus"],
                     "weak_shape_bonus": candidate["weak_shape_bonus"],
+                    "lineage_bonus": candidate["lineage_bonus"],
                     "proposal_bonus": candidate["proposal_bonus"],
                     "priority": candidate["priority"],
+                    "target_shapes": candidate.get("target_shapes", []),
                 }
                 for candidate in selected
             ],
@@ -920,7 +947,8 @@ class MatmulPythonExecutor(ExperimentExecutor):
                 instructions=(
                     "Choose the most promising next batch of implementable matmul candidate families. "
                     "Only choose from the provided candidate ids. Favor candidates that attack the weakest shapes "
-                    "or mutate the current best family in a bounded way."
+                    "or mutate the current best family in a bounded way. "
+                    "Return at most four ids and keep global_rationale to one short sentence."
                 ),
                 prompt=json.dumps(
                     {
@@ -943,7 +971,7 @@ class MatmulPythonExecutor(ExperimentExecutor):
                     },
                     indent=2,
                 ),
-                max_output_tokens=180,
+                max_output_tokens=320,
                 reasoning_effort="low",
                 text_verbosity="low",
             )
@@ -953,6 +981,7 @@ class MatmulPythonExecutor(ExperimentExecutor):
                 "candidate_ids": [],
                 "global_rationale": "",
                 "error": type(exc).__name__,
+                "detail": " ".join(str(exc).split())[:240],
             }
         allowed = {candidate["id"] for candidate in catalog}
         candidate_ids = [
@@ -1324,6 +1353,42 @@ def _matmul_transpose_unroll16_candidate(
     return out
 
 
+def _matmul_transpose_rowpair_candidate(
+    a: list[list[float]],
+    b: list[list[float]],
+) -> list[list[float]]:
+    rows = len(a)
+    cols = len(b[0])
+    depth = len(b)
+    b_transposed = [list(column) for column in zip(*b)]
+    out = [[0.0] * cols for _ in range(rows)]
+    i = 0
+    while i + 1 < rows:
+        row_a0 = a[i]
+        row_a1 = a[i + 1]
+        for j in range(cols):
+            row_b = b_transposed[j]
+            value0 = 0.0
+            value1 = 0.0
+            for k in range(depth):
+                b_k = row_b[k]
+                value0 += row_a0[k] * b_k
+                value1 += row_a1[k] * b_k
+            out[i][j] = value0
+            out[i + 1][j] = value1
+        i += 2
+    while i < rows:
+        row_a = a[i]
+        for j in range(cols):
+            row_b = b_transposed[j]
+            value = 0.0
+            for k in range(depth):
+                value += row_a[k] * row_b[k]
+            out[i][j] = value
+        i += 1
+    return out
+
+
 def _matmul_candidate_catalog(
     history_summary: dict[str, object] | None = None,
 ) -> list[dict[str, object]]:
@@ -1362,8 +1427,16 @@ def _matmul_candidate_catalog(
         },
     ]
     best_candidate_id = ""
+    weak_shape_targets: list[str] = []
     if isinstance(history_summary, dict):
         best_candidate_id = str(history_summary.get("best_matmul_candidate_id", "")).strip()
+        weak_shape_targets = [
+            shape
+            for item in history_summary.get("weakest_matmul_shapes", []) or []
+            if isinstance(item, dict)
+            for shape in [str(item.get("shape", "")).strip()]
+            if shape and _shape_min_dimension(shape) >= 64
+        ][:3]
 
     generated = []
     if best_candidate_id.startswith("transpose"):
@@ -1401,6 +1474,20 @@ def _matmul_candidate_catalog(
                 },
             ]
         )
+        if weak_shape_targets:
+            generated.append(
+                {
+                    "id": "transpose_rowpair",
+                    "name": "transpose-aware row-pair sweep",
+                    "family": "row_pairing",
+                    "description": "Reuse each transposed B row across two output rows to cut interpreter overhead on larger square shapes.",
+                    "fn": _matmul_transpose_rowpair_candidate,
+                    "priority": 0.98,
+                    "parent_id": "transpose_dot",
+                    "generated": True,
+                    "target_shapes": weak_shape_targets,
+                }
+            )
     if best_candidate_id.startswith("ikj"):
         generated.append(
             {
@@ -1475,6 +1562,13 @@ def _max_abs_diff(left: list[list[float]], right: list[list[float]]) -> float:
         for cell_left, cell_right in zip(row_left, row_right):
             value = max(value, abs(cell_left - cell_right))
     return value
+
+
+def _shape_min_dimension(shape: str) -> int:
+    try:
+        return min(int(part) for part in shape.lower().split("x"))
+    except ValueError:
+        return 0
 
 
 def _tool_use_rows_from_payload(payload: dict[str, object]) -> list[dict[str, object]]:
