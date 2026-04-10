@@ -15,6 +15,14 @@ on:
         description: "How many follow-up workflow runs to auto-dispatch after this one"
         required: false
         default: "0"
+      auto_chain_policy:
+        description: "Auto-dispatch policy: never, always, improve_or_frontier, improve_only, frontier_only"
+        required: false
+        default: "improve_or_frontier"
+      min_metric_delta:
+        description: "Minimum metric improvement required for improve-based chaining"
+        required: false
+        default: "0.25"
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -162,6 +170,92 @@ jobs:
             --llm \
             --live-execution > iterate-run.json
 
+      - name: Evaluate auto-chain policy
+        id: auto_chain
+        env:
+          NOERIS_BENCHMARK_ID: ${{ github.event.inputs.benchmark_id || 'matmul-speedup' }}
+          NOERIS_ITERATIONS: ${{ github.event.inputs.iterations || '2' }}
+          NOERIS_AUTO_CHAIN_RUNS_REMAINING: ${{ github.event.inputs.auto_chain_runs_remaining || '0' }}
+          NOERIS_AUTO_CHAIN_POLICY: ${{ github.event.inputs.auto_chain_policy || 'improve_or_frontier' }}
+          NOERIS_MIN_METRIC_DELTA: ${{ github.event.inputs.min_metric_delta || '0.25' }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          payload = json.loads(Path("iterate-run.json").read_text())
+          remaining = int(os.environ["NOERIS_AUTO_CHAIN_RUNS_REMAINING"])
+          policy = os.environ["NOERIS_AUTO_CHAIN_POLICY"]
+          min_metric_delta = float(os.environ["NOERIS_MIN_METRIC_DELTA"])
+          previous_best_metric = payload.get("previous_best_metric")
+          best_metric = payload.get("best_metric")
+          metric_delta = None
+          if isinstance(previous_best_metric, (int, float)) and isinstance(best_metric, (int, float)):
+              metric_delta = round(best_metric - previous_best_metric, 4)
+
+          frontier_delta = payload.get("frontier_delta") or {}
+          frontier_changed = bool(
+              frontier_delta.get("best_candidate_changed")
+              or frontier_delta.get("candidate_set_changed")
+          )
+          meaningful_improvement = bool(
+              payload.get("outcome") == "improved"
+              and metric_delta is not None
+              and metric_delta >= min_metric_delta
+          )
+
+          should_dispatch = False
+          reason = "remaining_exhausted"
+          if remaining > 0:
+              if policy == "never":
+                  reason = "policy_never"
+              elif policy == "always":
+                  should_dispatch = True
+                  reason = "policy_always"
+              elif policy == "improve_or_frontier":
+                  should_dispatch = meaningful_improvement or frontier_changed
+                  reason = (
+                      "meaningful_improvement"
+                      if meaningful_improvement
+                      else "frontier_changed"
+                      if frontier_changed
+                      else "no_meaningful_change"
+                  )
+              elif policy == "improve_only":
+                  should_dispatch = meaningful_improvement
+                  reason = "meaningful_improvement" if meaningful_improvement else "no_meaningful_improvement"
+              elif policy == "frontier_only":
+                  should_dispatch = frontier_changed
+                  reason = "frontier_changed" if frontier_changed else "no_frontier_change"
+              else:
+                  reason = f"unknown_policy:{policy}"
+
+          next_remaining = max(remaining - 1, 0) if should_dispatch else remaining
+          decision = {
+              "benchmark_id": payload["benchmark_id"],
+              "policy": policy,
+              "remaining_before": remaining,
+              "next_auto_chain_runs_remaining": next_remaining,
+              "should_dispatch": should_dispatch,
+              "reason": reason,
+              "min_metric_delta": min_metric_delta,
+              "metric_delta": metric_delta,
+              "outcome": payload.get("outcome"),
+              "frontier_changed": frontier_changed,
+              "meaningful_improvement": meaningful_improvement,
+          }
+          Path("auto-chain-decision.json").write_text(
+              json.dumps(decision, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"should_dispatch={'true' if should_dispatch else 'false'}\n")
+              output.write(f"next_remaining={next_remaining}\n")
+              output.write(f"reason={reason}\n")
+          print(json.dumps(decision, indent=2))
+          PY
+
       - name: Render iteration summary
         run: |
           python - <<'PY'
@@ -169,7 +263,7 @@ jobs:
           from pathlib import Path
 
           payload = json.loads(Path("iterate-run.json").read_text())
-          auto_chain_runs_remaining = int("${{ github.event.inputs.auto_chain_runs_remaining || '0' }}")
+          decision = json.loads(Path("auto-chain-decision.json").read_text())
           lines = [
               f"# Benchmark Iterate: {payload['benchmark_id']}",
               "",
@@ -178,7 +272,17 @@ jobs:
               f"- Best run id: `{payload['best_run_id']}`",
               f"- Best metric: `{payload['best_metric']}`",
               f"- Outcome: `{payload['outcome']}`",
-              f"- Auto chain runs remaining after this dispatch: `{max(auto_chain_runs_remaining - 1, 0)}`",
+              "",
+              "## Auto Chain",
+              "",
+              f"- Policy: `{decision['policy']}`",
+              f"- Should dispatch next run: `{decision['should_dispatch']}`",
+              f"- Reason: `{decision['reason']}`",
+              f"- Metric delta: `{decision['metric_delta']}`",
+              f"- Minimum metric delta: `{decision['min_metric_delta']}`",
+              f"- Frontier changed: `{decision['frontier_changed']}`",
+              f"- Meaningful improvement: `{decision['meaningful_improvement']}`",
+              f"- Remaining after this step: `{decision['next_auto_chain_runs_remaining']}`",
               "",
           ]
           best_frontier = payload.get("best_frontier") or {}
@@ -220,12 +324,14 @@ jobs:
           PY
 
       - name: Auto-dispatch next benchmark iteration
-        if: ${{ (github.event.inputs.auto_chain_runs_remaining || '0') != '0' }}
+        if: ${{ steps.auto_chain.outputs.should_dispatch == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
           NOERIS_BENCHMARK_ID: ${{ github.event.inputs.benchmark_id || 'matmul-speedup' }}
           NOERIS_ITERATIONS: ${{ github.event.inputs.iterations || '2' }}
-          NOERIS_AUTO_CHAIN_RUNS_REMAINING: ${{ github.event.inputs.auto_chain_runs_remaining || '0' }}
+          NOERIS_AUTO_CHAIN_POLICY: ${{ github.event.inputs.auto_chain_policy || 'improve_or_frontier' }}
+          NOERIS_MIN_METRIC_DELTA: ${{ github.event.inputs.min_metric_delta || '0.25' }}
+          NOERIS_AUTO_CHAIN_NEXT_REMAINING: ${{ steps.auto_chain.outputs.next_remaining }}
         run: |
           python - <<'PY'
           import json
@@ -233,12 +339,8 @@ jobs:
           import subprocess
           from pathlib import Path
 
-          remaining = int(os.environ["NOERIS_AUTO_CHAIN_RUNS_REMAINING"])
-          if remaining <= 0:
-              raise SystemExit(0)
-
-          next_remaining = remaining - 1
           payload = json.loads(Path("iterate-run.json").read_text())
+          next_remaining = int(os.environ["NOERIS_AUTO_CHAIN_NEXT_REMAINING"])
           subprocess.run(
               [
                   "gh",
@@ -253,6 +355,10 @@ jobs:
                   f"iterations={os.environ['NOERIS_ITERATIONS']}",
                   "-f",
                   f"auto_chain_runs_remaining={next_remaining}",
+                  "-f",
+                  f"auto_chain_policy={os.environ['NOERIS_AUTO_CHAIN_POLICY']}",
+                  "-f",
+                  f"min_metric_delta={os.environ['NOERIS_MIN_METRIC_DELTA']}",
               ],
               check=True,
           )
@@ -277,5 +383,6 @@ jobs:
           path: |
             iterate-run.json
             iterate-report.md
+            auto-chain-decision.json
             .noeris/runs/*.json
             .noeris/artifacts/**
