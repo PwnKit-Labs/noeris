@@ -698,6 +698,7 @@ class MatmulPythonExecutor(ExperimentExecutor):
         total_share = sum(float(row["workload_share"]) for row in rows) or 1.0
         mean_uplift = sum(weighted_improvements) / total_share
         unweighted_mean_uplift = sum(unweighted_improvements) / len(unweighted_improvements)
+        pareto_frontier = _build_matmul_pareto_frontier(rows)
         candidates = _matmul_candidate_catalog()
         hardware_profile = {
             "executor": "python_cpu_microbenchmark",
@@ -759,6 +760,7 @@ class MatmulPythonExecutor(ExperimentExecutor):
                     candidate_id: round(score, 4)
                     for candidate_id, score in winner_share_scores.items()
                 },
+                "pareto_candidate_ids": pareto_frontier["candidate_ids"],
                 "best_overall_candidate_id": max(
                     winner_share_scores,
                     key=lambda candidate_id: (
@@ -784,6 +786,7 @@ class MatmulPythonExecutor(ExperimentExecutor):
                     for row in rows
                 ]
             },
+            "pareto-frontier.json": pareto_frontier,
             "baseline-comparison.md": _matmul_live_comparison(rows, mean_uplift),
         }
         summary = (
@@ -896,6 +899,7 @@ class MatmulPythonExecutor(ExperimentExecutor):
         best_candidate_id = ""
         family_wins = {}
         frontier_archive = []
+        pareto_candidate_ids: list[str] = []
         if isinstance(self.history_summary, dict):
             wins = self.history_summary.get("matmul_candidate_wins", {}) or {}
             family_wins = self.history_summary.get("matmul_family_wins", {}) or {}
@@ -906,6 +910,7 @@ class MatmulPythonExecutor(ExperimentExecutor):
             workload_challengers = self.history_summary.get("matmul_workload_challengers", {}) or {}
             weakest_workloads = self.history_summary.get("weakest_matmul_workloads", []) or []
             frontier_archive = self.history_summary.get("matmul_frontier_archive", []) or []
+            pareto_candidate_ids = self.history_summary.get("matmul_pareto_candidate_ids", []) or []
             best_candidate_id = str(self.history_summary.get("best_matmul_candidate_id", "")).strip()
             if not weakest_shapes and shape_challengers:
                 weakest_shapes = sorted(
@@ -956,6 +961,11 @@ class MatmulPythonExecutor(ExperimentExecutor):
             for item in frontier_archive
             if isinstance(item, dict) and str(item.get("best_candidate_id", "")).strip()
         }
+        historical_pareto_ids = {
+            str(candidate_id).strip()
+            for candidate_id in pareto_candidate_ids
+            if isinstance(candidate_id, str) and str(candidate_id).strip()
+        }
         for candidate in catalog:
             candidate["historical_wins"] = int(wins.get(candidate["id"], 0))
             candidate["family_wins"] = int(family_wins.get(candidate["family"], 0))
@@ -995,6 +1005,7 @@ class MatmulPythonExecutor(ExperimentExecutor):
                 if isinstance(item, dict) and item.get("runner_up_candidate_id") == candidate["id"]
             )
             candidate["archive_bonus"] = 1 if candidate["id"] in archive_candidate_ids else 0
+            candidate["pareto_bonus"] = 1 if candidate["id"] in historical_pareto_ids else 0
             candidate["family_novelty_bonus"] = 1 if candidate["family_wins"] == 0 else 0
             candidate["lineage_bonus"] = (
                 1
@@ -1021,6 +1032,7 @@ class MatmulPythonExecutor(ExperimentExecutor):
                 -candidate["workload_challenger_bonus"],
                 -candidate["weak_shape_bonus"],
                 -candidate["archive_bonus"],
+                -candidate["pareto_bonus"],
                 -candidate["family_novelty_bonus"],
                 -candidate["lineage_bonus"],
                 -candidate["proposal_bonus"],
@@ -1038,6 +1050,7 @@ class MatmulPythonExecutor(ExperimentExecutor):
                 candidate
                 for candidate in ranked[1:]
                 if candidate["family_novelty_bonus"] > 0
+                or candidate["pareto_bonus"] > 0
                 or candidate["target_workload_bonus"] > 0
                 or candidate["archive_bonus"] == 0
             ),
@@ -1088,6 +1101,7 @@ class MatmulPythonExecutor(ExperimentExecutor):
                     "workload_challenger_bonus": candidate["workload_challenger_bonus"],
                     "weak_shape_bonus": candidate["weak_shape_bonus"],
                     "archive_bonus": candidate["archive_bonus"],
+                    "pareto_bonus": candidate["pareto_bonus"],
                     "family_novelty_bonus": candidate["family_novelty_bonus"],
                     "lineage_bonus": candidate["lineage_bonus"],
                     "proposal_bonus": candidate["proposal_bonus"],
@@ -1980,6 +1994,62 @@ def _shape_min_dimension(shape: str) -> int:
         return min(int(part) for part in shape.lower().split("x"))
     except ValueError:
         return 0
+
+
+def _build_matmul_pareto_frontier(rows: list[dict[str, object]]) -> dict[str, object]:
+    winners: dict[str, dict[str, object]] = {}
+    near_frontier: dict[str, dict[str, object]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        workload_tag = str(row.get("workload_tag", "")).strip()
+        workload_share = float(row.get("workload_share", 0.0) or 0.0)
+        winner_id = str(row.get("best_candidate_id", "")).strip()
+        runner_up_id = str(row.get("runner_up_candidate_id", "")).strip()
+        runner_up_gap_pct = float(row.get("runner_up_gap_pct", 0.0) or 0.0)
+        if workload_tag and winner_id:
+            entry = winners.setdefault(
+                winner_id,
+                {"workload_tags": [], "workload_share_won": 0.0},
+            )
+            entry["workload_tags"].append(workload_tag)
+            entry["workload_share_won"] += workload_share
+        if workload_tag and runner_up_id and runner_up_gap_pct <= 5.0:
+            entry = near_frontier.setdefault(
+                runner_up_id,
+                {"workload_tags": [], "closest_gap_pct": runner_up_gap_pct},
+            )
+            entry["workload_tags"].append(workload_tag)
+            entry["closest_gap_pct"] = min(entry["closest_gap_pct"], runner_up_gap_pct)
+
+    candidate_ids = list(winners.keys())
+    for candidate_id in sorted(
+        near_frontier,
+        key=lambda item: (
+            near_frontier[item]["closest_gap_pct"],
+            item,
+        ),
+    ):
+        if candidate_id not in candidate_ids:
+            candidate_ids.append(candidate_id)
+
+    candidates = []
+    for candidate_id in candidate_ids:
+        winner_entry = winners.get(candidate_id, {"workload_tags": [], "workload_share_won": 0.0})
+        near_entry = near_frontier.get(candidate_id, {"workload_tags": [], "closest_gap_pct": None})
+        candidates.append(
+            {
+                "candidate_id": candidate_id,
+                "workload_tags_won": sorted(winner_entry["workload_tags"]),
+                "workload_share_won": round(float(winner_entry["workload_share_won"]), 4),
+                "near_frontier_workloads": sorted(near_entry["workload_tags"]),
+                "closest_runner_up_gap_pct": near_entry["closest_gap_pct"],
+            }
+        )
+    return {
+        "candidate_ids": candidate_ids,
+        "candidates": candidates,
+    }
 
 
 def _tool_use_rows_from_payload(payload: dict[str, object]) -> list[dict[str, object]]:

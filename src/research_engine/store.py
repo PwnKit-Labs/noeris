@@ -215,12 +215,19 @@ class JsonFileRunStore:
         matmul_workload_winners: dict[str, dict[str, object]] = {}
         matmul_workload_challengers: dict[str, dict[str, object]] = {}
         matmul_frontier_archive: list[dict[str, object]] = []
+        matmul_pareto_candidate_ids: list[str] = []
         if benchmark_id == "matmul-speedup":
             for record in records:
                 for result in record.memo.results:
                     payload = result.artifact_payloads.get("best-candidate-summary.json")
                     if not isinstance(payload, dict):
                         continue
+                    if not matmul_pareto_candidate_ids:
+                        pareto_ids = payload.get("pareto_candidate_ids", [])
+                        if isinstance(pareto_ids, list):
+                            matmul_pareto_candidate_ids = [
+                                item for item in pareto_ids if isinstance(item, str) and item
+                            ]
                     winner_counts = payload.get("winner_counts", {})
                     if not isinstance(winner_counts, dict):
                         continue
@@ -344,6 +351,7 @@ class JsonFileRunStore:
             "matmul_workload_winners": matmul_workload_winners,
             "matmul_workload_challengers": matmul_workload_challengers,
             "matmul_frontier_archive": matmul_frontier_archive,
+            "matmul_pareto_candidate_ids": matmul_pareto_candidate_ids,
             "weakest_matmul_shapes": sorted(
                 [
                     {

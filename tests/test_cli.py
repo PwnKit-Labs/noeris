@@ -170,6 +170,7 @@ class CliTests(unittest.TestCase):
         self.assertIn("best_frontier", payload)
         self.assertIn("frontier_delta", payload)
         self.assertIn("added_candidates", payload["frontier_delta"])
+        self.assertIn("added_pareto_candidates", payload["frontier_delta"])
         self.assertIn("workload_changes", payload["frontier_delta"])
 
     def test_sources_command_aggregates_provider_results(self) -> None:

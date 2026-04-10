@@ -597,6 +597,10 @@ def _extract_frontier_snapshot_from_record(
                     "workload_winners",
                     [],
                 ),
+                "pareto_candidate_ids": payloads.get("pareto-frontier.json", {}).get(
+                    "candidate_ids",
+                    [],
+                ),
             }
         )
     return snapshot
@@ -615,6 +619,16 @@ def _build_frontier_delta(
     best_candidates = {
         candidate_id
         for candidate_id in best_frontier.get("selected_candidate_ids", [])
+        if isinstance(candidate_id, str) and candidate_id
+    }
+    previous_pareto = {
+        candidate_id
+        for candidate_id in previous_frontier.get("pareto_candidate_ids", [])
+        if isinstance(candidate_id, str) and candidate_id
+    }
+    best_pareto = {
+        candidate_id
+        for candidate_id in best_frontier.get("pareto_candidate_ids", [])
         if isinstance(candidate_id, str) and candidate_id
     }
     previous_best_candidate_id = str(previous_frontier.get("best_candidate_id", "")).strip()
@@ -653,6 +667,9 @@ def _build_frontier_delta(
         "candidate_set_changed": previous_candidates != best_candidates,
         "added_candidates": sorted(best_candidates - previous_candidates),
         "dropped_candidates": sorted(previous_candidates - best_candidates),
+        "pareto_frontier_changed": previous_pareto != best_pareto,
+        "added_pareto_candidates": sorted(best_pareto - previous_pareto),
+        "dropped_pareto_candidates": sorted(previous_pareto - best_pareto),
         "workload_frontier_changed": bool(workload_changes),
         "workload_changes": workload_changes,
         "proposal_source": best_frontier.get("proposal_source", ""),

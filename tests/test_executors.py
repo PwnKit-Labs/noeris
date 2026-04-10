@@ -297,6 +297,8 @@ class ExecutorTests(unittest.TestCase):
         )
         self.assertIn("weakest_workloads", results[0].artifact_payloads["shape-focus.json"])
         self.assertIn("frontier-archive.json", results[0].artifact_refs)
+        self.assertIn("pareto-frontier.json", results[0].artifact_refs)
+        self.assertTrue(results[0].artifact_payloads["pareto-frontier.json"]["candidate_ids"])
         self.assertTrue(
             results[0].artifact_payloads["best-candidate-summary.json"]["best_overall_candidate_id"]
         )
