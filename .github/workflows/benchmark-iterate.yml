@@ -20,6 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
+      actions: read
       contents: read
     env:
       AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
@@ -35,6 +36,119 @@ jobs:
 
       - name: Install package
         run: python -m pip install -e .
+
+      - name: Restore prior benchmark history
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NOERIS_BENCHMARK_ID: ${{ github.event.inputs.benchmark_id || 'matmul-speedup' }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import shutil
+          import subprocess
+          import tempfile
+          from pathlib import Path
+
+          benchmark_id = os.environ["NOERIS_BENCHMARK_ID"]
+          current_run_id = os.environ["GITHUB_RUN_ID"]
+          ref_name = os.environ["GITHUB_REF_NAME"]
+          repository = os.environ["GITHUB_REPOSITORY"]
+          workspace_runs = Path(".noeris/runs")
+          workspace_runs.mkdir(parents=True, exist_ok=True)
+
+          runs = json.loads(
+              subprocess.check_output(
+                  [
+                      "gh",
+                      "-R",
+                      repository,
+                      "run",
+                      "list",
+                      "--workflow",
+                      "Benchmark Iterate",
+                      "--branch",
+                      ref_name,
+                      "-L",
+                      "20",
+                      "--json",
+                      "databaseId,conclusion",
+                  ],
+                  text=True,
+              )
+          )
+
+          restored_paths: list[Path] = []
+          for run in runs:
+              run_id = str(run.get("databaseId", "")).strip()
+              if not run_id or run_id == current_run_id or run.get("conclusion") != "success":
+                  continue
+              artifact_name = f"benchmark-iterate-{run_id}"
+              with tempfile.TemporaryDirectory() as temp_dir:
+                  try:
+                      subprocess.run(
+                          [
+                              "gh",
+                              "-R",
+                              repository,
+                              "run",
+                              "download",
+                              run_id,
+                              "-n",
+                              artifact_name,
+                              "-D",
+                              temp_dir,
+                          ],
+                          check=True,
+                          stdout=subprocess.DEVNULL,
+                          stderr=subprocess.DEVNULL,
+                      )
+                  except subprocess.CalledProcessError:
+                      continue
+
+                  extracted_root = Path(temp_dir)
+                  iterate_run_candidates = list(extracted_root.rglob("iterate-run.json"))
+                  if not iterate_run_candidates:
+                      continue
+                  iterate_run_path = iterate_run_candidates[0]
+                  payload = json.loads(iterate_run_path.read_text())
+                  if payload.get("benchmark_id") != benchmark_id:
+                      continue
+
+                  for source_path in sorted(extracted_root.rglob(".noeris/runs/*.json")):
+                      target_path = workspace_runs / source_path.name
+                      if target_path.exists():
+                          continue
+                      shutil.copy2(source_path, target_path)
+                      restored_paths.append(target_path)
+                      if len(restored_paths) >= 20:
+                          break
+              if len(restored_paths) >= 20:
+                  break
+
+          if restored_paths:
+              print(
+                  json.dumps(
+                      {
+                          "benchmark_id": benchmark_id,
+                          "restored_run_count": len(restored_paths),
+                          "restored_run_ids": [path.stem for path in restored_paths],
+                      },
+                      indent=2,
+                  )
+              )
+          else:
+              print(
+                  json.dumps(
+                      {
+                          "benchmark_id": benchmark_id,
+                          "restored_run_count": 0,
+                          "restored_run_ids": [],
+                      },
+                      indent=2,
+                  )
+              )
+          PY
 
       - name: Run bounded benchmark iteration
         run: |
@@ -55,12 +169,43 @@ jobs:
               f"# Benchmark Iterate: {payload['benchmark_id']}",
               "",
               f"- Iterations: `{payload['iterations']}`",
+              f"- Previous best metric: `{payload['previous_best_metric']}`",
               f"- Best run id: `{payload['best_run_id']}`",
               f"- Best metric: `{payload['best_metric']}`",
-              "",
-              "## Runs",
+              f"- Outcome: `{payload['outcome']}`",
               "",
           ]
+          best_frontier = payload.get("best_frontier") or {}
+          if best_frontier:
+              lines.extend(
+                  [
+                      "## Frontier",
+                      "",
+                      f"- Best candidate: `{best_frontier.get('best_candidate_id', '')}`",
+                      f"- Proposal source: `{best_frontier.get('proposal_source', '')}`",
+                      f"- Selected candidates: `{', '.join(best_frontier.get('selected_candidate_ids', []))}`",
+                      "",
+                  ]
+              )
+          frontier_delta = payload.get("frontier_delta") or {}
+          if frontier_delta:
+              lines.extend(
+                  [
+                      "## Frontier Delta",
+                      "",
+                      f"- Best candidate changed: `{frontier_delta.get('best_candidate_changed', False)}`",
+                      f"- Candidate set changed: `{frontier_delta.get('candidate_set_changed', False)}`",
+                      f"- Added candidates: `{', '.join(frontier_delta.get('added_candidates', [])) or 'none'}`",
+                      f"- Dropped candidates: `{', '.join(frontier_delta.get('dropped_candidates', [])) or 'none'}`",
+                      "",
+                  ]
+              )
+          lines.extend(
+              [
+              "## Runs",
+              "",
+              ]
+          )
           for run in payload["runs"]:
               lines.append(
                   f"- `{run['run_id']}` | metric=`{run['metric']}` | bundle=`{run['bundle_dir']}`"
