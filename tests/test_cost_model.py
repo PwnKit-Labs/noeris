@@ -10,13 +10,14 @@ from tests import _pathfix  # noqa: F401
 from research_engine.cost_model import (
     CostModel,
     extract_features,
+    encode_features,
     FEATURE_NAMES,
 )
 
 
 class FeatureExtractionTests(unittest.TestCase):
     def test_matmul_features_have_fixed_width(self) -> None:
-        features = extract_features(
+        raw = extract_features(
             shape={"M": 2048, "N": 2048, "K": 2048},
             config={
                 "BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 128, "BLOCK_SIZE_K": 32,
@@ -25,31 +26,33 @@ class FeatureExtractionTests(unittest.TestCase):
             hardware="NVIDIA A100-SXM4-40GB",
             operator="matmul",
         )
+        features = encode_features(raw)
         self.assertEqual(len(features), len(FEATURE_NAMES))
         self.assertTrue(all(isinstance(f, float) for f in features))
 
     def test_rmsnorm_features_have_fixed_width(self) -> None:
-        features = extract_features(
+        raw = extract_features(
             shape={"n_rows": 4096, "hidden_dim": 4096},
             config={"BLOCK_SIZE": 2048, "num_warps": 8, "num_stages": 1},
             hardware="NVIDIA A100-SXM4-40GB",
             operator="rmsnorm",
         )
+        features = encode_features(raw)
         self.assertEqual(len(features), len(FEATURE_NAMES))
 
     def test_attention_features_include_causal(self) -> None:
-        non_causal = extract_features(
+        non_causal = encode_features(extract_features(
             shape={"batch": 1, "heads": 32, "seq_len": 4096, "head_dim": 128, "is_causal": False},
             config={"BLOCK_M": 64, "BLOCK_N": 64, "num_warps": 4, "num_stages": 3},
             hardware="NVIDIA A100-SXM4-40GB",
             operator="attention",
-        )
-        causal = extract_features(
+        ))
+        causal = encode_features(extract_features(
             shape={"batch": 1, "heads": 32, "seq_len": 4096, "head_dim": 128, "is_causal": True},
             config={"BLOCK_M": 64, "BLOCK_N": 64, "num_warps": 4, "num_stages": 3},
             hardware="NVIDIA A100-SXM4-40GB",
             operator="attention",
-        )
+        ))
         # The only difference should be the is_causal flag in shape slot 4
         self.assertNotEqual(non_causal, causal)
 

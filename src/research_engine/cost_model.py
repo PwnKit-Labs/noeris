@@ -64,6 +64,10 @@ OPERATOR_IDS = {
     "attention": 5,
 }
 
+# Number of slots for each categorical encoding
+_N_OPERATORS = len(OPERATOR_IDS)   # 6
+_N_HARDWARE = len(HARDWARE_IDS)    # 8
+
 
 def _hardware_id(hw_name: str) -> int:
     return HARDWARE_IDS.get(hw_name, 0)
@@ -73,11 +77,18 @@ def _operator_id(op_name: str) -> int:
     return OPERATOR_IDS.get(op_name, -1)
 
 
-# Canonical feature vector layout. The cost model uses a fixed-width vector
-# so it can be a single regressor rather than per-operator models.
+# Canonical feature vector layout after one-hot encoding of categoricals.
+#
+# extract_features() returns a "raw" vector with integer operator_id and
+# hardware_id in positions 0 and 1. _encode_categoricals() replaces those two
+# integers with one-hot segments before the data reaches the regressor.
+#
+# FEATURE_NAMES reflects the *encoded* layout seen by the regressor.
 FEATURE_NAMES = [
-    "operator_id",
-    "hardware_id",
+    # One-hot operator (6 slots, one per OPERATOR_IDS entry)
+    *[f"op_{name}" for name in OPERATOR_IDS],
+    # One-hot hardware (8 slots, one per HARDWARE_IDS entry)
+    *[f"hw_{name}" for name in HARDWARE_IDS],
     # Shape dims (5 slots, operator-specific semantics, padded with 0)
     "shape_0", "shape_1", "shape_2", "shape_3", "shape_4",
     "log_shape_prod",   # log of all non-zero shape dims multiplied
@@ -90,7 +101,34 @@ FEATURE_NAMES = [
     "log_tile_area",
     "log_num_warps_total",
     "log_num_stages",
+    "log_tile_coverage",
 ]
+
+
+def encode_features(raw: list[float]) -> list[float]:
+    """Public alias for _encode_categoricals — converts raw extract_features()
+    output to the one-hot encoded vector that matches FEATURE_NAMES."""
+    return _encode_categoricals(raw)
+
+
+def _encode_categoricals(raw: list[float]) -> list[float]:
+    """Replace the leading (operator_id, hardware_id) integers with one-hot vectors.
+
+    The raw feature vector produced by extract_features() has integer IDs at
+    positions 0 (operator_id) and 1 (hardware_id).  This function expands them
+    into binary indicator columns so that GBR does not treat operator/hardware
+    identity as ordinal.
+
+    Output length = _N_OPERATORS + _N_HARDWARE + (len(raw) - 2).
+    """
+    op_id = int(raw[0])
+    hw_id = int(raw[1])
+    rest = raw[2:]
+
+    op_onehot = [1.0 if i == op_id else 0.0 for i in range(_N_OPERATORS)]
+    hw_onehot = [1.0 if i == hw_id else 0.0 for i in range(_N_HARDWARE)]
+
+    return op_onehot + hw_onehot + rest
 
 
 def extract_features(
@@ -152,6 +190,7 @@ def extract_features(
 
     bm = max(config_vals[0], 1)
     bn = max(config_vals[1], 1)
+    bk = max(config_vals[2], 1)
     bs = max(config_vals[6], 1)
     nw = max(config_vals[4], 1)
     ns = max(config_vals[5], 1)
@@ -160,6 +199,25 @@ def extract_features(
     log_num_warps = math.log(nw)
     log_stages = math.log(ns)
 
+    # log_tile_coverage: captures whether a tile fits in SRAM in one pass.
+    # For memory-bound reductions (rmsnorm, softmax, layernorm, cross_entropy):
+    #   ratio = BLOCK_SIZE / max(n_cols or hidden_dim, 1)
+    # For compute-bound (matmul, attention):
+    #   ratio = (BLOCK_M * BLOCK_K) / max_shape_dim
+    # Clamped to [-10, 0] (negative means multi-pass; 0 means one-pass).
+    if operator in ("matmul", "attention"):
+        max_shape_dim = max(shape_padded) if shape_padded else 1
+        tile_num = bm * bk
+        denom = max(max_shape_dim, 1)
+    else:
+        n_cols_dim = shape.get("n_cols", shape.get("hidden_dim", 0))
+        tile_num = bs
+        denom = max(n_cols_dim, 1)
+    log_tile_coverage = max(math.log(tile_num / denom), -10.0)
+
+    # NOTE: positions 0 and 1 (op_id, hw_id) are integers here. They are
+    # expanded to one-hot vectors by _encode_categoricals() before the
+    # regressor sees them. FEATURE_NAMES describes the *encoded* layout.
     return [
         float(op_id),
         float(hw_id),
@@ -171,6 +229,7 @@ def extract_features(
         log_tile_area,
         log_num_warps,
         log_stages,
+        log_tile_coverage,
     ]
 
 
@@ -232,13 +291,13 @@ class CostModel:
                     metric = result.get("tflops") or result.get("gb_per_s") or 0
                     if metric <= 0:
                         continue
-                    features = extract_features(
+                    raw = extract_features(
                         shape=shape,
                         config=config,
                         hardware=hardware,
                         operator=operator,
                     )
-                    X.append(features)
+                    X.append(_encode_categoricals(raw))
                     y.append(float(metric))
                     op_targets.setdefault(_operator_id(operator), []).append(float(metric))
 
@@ -305,12 +364,13 @@ class CostModel:
         hardware: str,
         operator: str,
     ) -> float:
-        features = extract_features(
+        raw = extract_features(
             shape=shape,
             config=config,
             hardware=hardware,
             operator=operator,
         )
+        features = _encode_categoricals(raw)
         if self.regressor is not None:
             try:
                 return float(self.regressor.predict([features])[0])
@@ -327,7 +387,7 @@ class CostModel:
         if not items:
             return []
         features = [
-            extract_features(shape=s, config=c, hardware=h, operator=o)
+            _encode_categoricals(extract_features(shape=s, config=c, hardware=h, operator=o))
             for s, c, h, o in items
         ]
         if self.regressor is not None:
