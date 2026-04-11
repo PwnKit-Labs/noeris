@@ -576,7 +576,7 @@ def propose_triton_configs(
                 f"Return at most {max_proposals} configs. Keep rationale to one sentence each."
             ),
             prompt=_json.dumps(prompt_data, indent=2),
-            max_output_tokens=600,
+            max_output_tokens=1200,
             reasoning_effort="low",
             text_verbosity="low",
         )
