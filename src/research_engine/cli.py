@@ -312,6 +312,11 @@ def build_parser() -> argparse.ArgumentParser:
     ablation_parser.add_argument("--warm-up", action="store_true",
                                   help="Warm up database with N iterations before measuring")
     ablation_parser.add_argument("--warm-up-iterations", type=int, default=3)
+    ablation_parser.add_argument(
+        "--fast",
+        action="store_true",
+        help="Use persistent Modal session (one warm container across all iterations)",
+    )
     ablation_parser.add_argument("--output", default=".noeris/ablation-report.json")
 
     return parser
@@ -591,18 +596,33 @@ def main(argv: list[str] | None = None) -> int:
 
 def _run_ablation(args) -> int:
     """Run cross-run learning ablation: with database vs without."""
-    from .ablation import run_ablation, run_multi_trial_ablation
+    from .ablation import (
+        run_ablation,
+        run_fast_multi_trial_ablation,
+        run_multi_trial_ablation,
+    )
 
     if getattr(args, "trials", 1) > 1:
-        report = run_multi_trial_ablation(
-            operator=args.operator,
-            gpu=args.gpu,
-            trials=args.trials,
-            iterations=args.iterations,
-            configs_per_run=args.configs_per_run,
-            use_llm=not args.no_llm,
-            shapes_set=args.shapes,
-        )
+        if getattr(args, "fast", False):
+            report = run_fast_multi_trial_ablation(
+                operator=args.operator,
+                gpu=args.gpu,
+                trials=args.trials,
+                iterations=args.iterations,
+                configs_per_run=args.configs_per_run,
+                use_llm=not args.no_llm,
+                shapes_set=args.shapes,
+            )
+        else:
+            report = run_multi_trial_ablation(
+                operator=args.operator,
+                gpu=args.gpu,
+                trials=args.trials,
+                iterations=args.iterations,
+                configs_per_run=args.configs_per_run,
+                use_llm=not args.no_llm,
+                shapes_set=args.shapes,
+            )
     else:
         report = run_ablation(
             operator=args.operator,

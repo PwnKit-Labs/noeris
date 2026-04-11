@@ -29,6 +29,7 @@ import json
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
+from pathlib import Path
 from typing import Any
 
 
@@ -178,6 +179,215 @@ def run_multi_trial_ablation(
         report.without_db_trials.append(single.without_database.best_metric_so_far())
 
     return report
+
+
+def run_fast_multi_trial_ablation(
+    *,
+    operator: str,
+    gpu: str = "A100",
+    trials: int = 3,
+    iterations: int = 5,
+    configs_per_run: int = 6,
+    use_llm: bool = True,
+    shapes_set: str = "standard",
+) -> MultiTrialReport:
+    """Fast multi-trial ablation using a single persistent Modal session.
+
+    All 2*trials*iterations benchmark calls happen inside ONE Modal
+    ``with app.run()`` context, so the container stays warm. Per-call
+    overhead drops from ~10-15s (subprocess spawn + modal orchestration)
+    to ~1-3s (just the .remote() round trip).
+    """
+    from .modal_session import ModalBenchmarkSession
+    from .triton_operators import REGISTRY, select_configs_for_operator
+    from .triton_kernels import ConfigDatabase
+
+    spec = REGISTRY.get(operator)
+
+    if shapes_set == "tiny":
+        shapes = spec.shape_buckets[:2]
+    elif shapes_set == "full":
+        shapes = spec.shape_buckets
+    else:
+        shapes = spec.shape_buckets[:6]
+
+    llm_client = None
+    if use_llm:
+        try:
+            from .llm import LlmConfigurationError, ResponsesApiClient
+            llm_client = ResponsesApiClient.from_environment()
+        except Exception:
+            llm_client = None
+
+    report = MultiTrialReport(
+        operator=operator,
+        hardware=gpu,
+        iterations_per_condition=iterations,
+    )
+
+    with ModalBenchmarkSession(gpu=gpu) as session:
+        for trial_idx in range(trials):
+            # --- without_database condition: fresh DB each iteration ---
+            without_trajectory = []
+            best_so_far_without = 0.0
+            for iter_idx in range(iterations):
+                db = ConfigDatabase(path=Path(f"/tmp/ablation-nodb-{trial_idx}-{iter_idx}.json"))
+                metric = _run_one_session_iteration(
+                    spec=spec,
+                    session=session,
+                    database=db,
+                    shapes=shapes,
+                    configs_per_run=configs_per_run,
+                    llm_client=llm_client,
+                    operator=operator,
+                    gpu=gpu,
+                )
+                if metric > best_so_far_without:
+                    best_so_far_without = metric
+                without_trajectory.append(best_so_far_without)
+                try:
+                    db.path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+            report.without_db_trials.append(without_trajectory)
+
+            # --- with_database condition: persistent DB across iterations ---
+            shared_db_path = Path(f"/tmp/ablation-withdb-{trial_idx}.json")
+            shared_db_path.unlink(missing_ok=True)
+            shared_db = ConfigDatabase(path=shared_db_path)
+            with_trajectory = []
+            best_so_far_with = 0.0
+            for iter_idx in range(iterations):
+                metric = _run_one_session_iteration(
+                    spec=spec,
+                    session=session,
+                    database=shared_db,
+                    shapes=shapes,
+                    configs_per_run=configs_per_run,
+                    llm_client=llm_client,
+                    operator=operator,
+                    gpu=gpu,
+                )
+                if metric > best_so_far_with:
+                    best_so_far_with = metric
+                with_trajectory.append(best_so_far_with)
+            report.with_db_trials.append(with_trajectory)
+            shared_db_path.unlink(missing_ok=True)
+
+    return report
+
+
+def _run_one_session_iteration(
+    *,
+    spec,
+    session,
+    database,
+    shapes: list,
+    configs_per_run: int,
+    llm_client,
+    operator: str,
+    gpu: str,
+) -> float:
+    """Run one iteration within a persistent Modal session.
+
+    Performs: LLM proposal → select configs → send to warm Modal function →
+    parse results → record to database → return best metric.
+    """
+    from .triton_operators import select_configs_for_operator
+
+    proposed_configs: list[dict[str, int]] = []
+    if llm_client is not None:
+        try:
+            from .cli import _propose_operator_configs
+            proposal_result = _propose_operator_configs(
+                spec=spec,
+                proposer=llm_client,
+                database=database,
+                hardware=gpu,
+                target_shapes=shapes,
+            )
+            proposed_configs = proposal_result.get("configs", [])
+        except Exception:
+            proposed_configs = []
+
+    configs = select_configs_for_operator(
+        spec=spec,
+        database=database,
+        hardware=gpu,
+        shapes=shapes,
+        max_configs=configs_per_run,
+        proposed_configs=proposed_configs,
+    )
+    if not configs:
+        return 0.0
+
+    script = spec.benchmark_script_fn(configs, shapes)
+    batch = session.run_batch(script)
+    if not batch.success:
+        return 0.0
+
+    hw_name = batch.hardware.get("gpu", gpu)
+    best_metric = 0.0
+
+    for config_result in batch.config_results:
+        cid = config_result.get("config_id", "")
+        config = config_result.get("config", {})
+        shape_results = config_result.get("results", [])
+        for shape_result in shape_results:
+            if not shape_result.get("correct") or not shape_result.get("tflops"):
+                continue
+            parsed_shape = _parse_shape_for_operator(
+                operator,
+                shape_result.get("shape", ""),
+            )
+            if parsed_shape is None:
+                continue
+            bucket = spec.shape_bucket_fn(parsed_shape)
+            database.record_result(
+                shape=parsed_shape,
+                hardware=hw_name,
+                config=config,
+                tflops=shape_result["tflops"],
+                ms=shape_result.get("ms", 0),
+                correct=True,
+                run_id=cid,
+                operator=operator,
+                bucket=bucket,
+                config_id_str=cid,
+            )
+
+        correct_results = [
+            r for r in shape_results if r.get("correct") and r.get("tflops")
+        ]
+        if correct_results:
+            avg = sum(r["tflops"] for r in correct_results) / len(correct_results)
+            if avg > best_metric:
+                best_metric = avg
+
+    database.save()
+    return best_metric
+
+
+def _parse_shape_for_operator(operator: str, shape_str: str) -> dict | None:
+    """Parse operator-specific shape strings from benchmark output."""
+    parts = shape_str.split("x")
+    try:
+        if operator == "matmul":
+            return {"M": int(parts[0]), "N": int(parts[1]), "K": int(parts[2])}
+        if operator in ("rmsnorm", "layernorm"):
+            return {"n_rows": int(parts[0]), "hidden_dim": int(parts[1])}
+        if operator in ("softmax", "cross_entropy"):
+            return {"n_rows": int(parts[0]), "n_cols": int(parts[1])}
+        if operator == "attention":
+            return {
+                "batch": int(parts[0]),
+                "heads": int(parts[1]),
+                "seq_len": int(parts[2]),
+                "head_dim": int(parts[3]),
+            }
+    except (ValueError, IndexError):
+        return None
+    return None
 
 
 @dataclass(slots=True)

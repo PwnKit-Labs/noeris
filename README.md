@@ -1,10 +1,10 @@
 # Noeris
 
-Autonomous GPU kernel optimization engine with cross-run learning and shape-indexed config discovery.
+Research OS for autonomous empirical discovery, currently led by a flagship GPU kernel optimization track.
 
-**TL;DR:** Parameterized Triton kernels (6 operators), LLM-guided config search, persistent cross-run database, running on A100/H100 via Modal for ~$0.01/iteration. Beats AutoKernel's published H100 results on RMSNorm (11.66x vs 5.29x), softmax (6.38x vs 3.44x), and cross-entropy (9.65x vs 2.94x) using only curated starter configs — no search iterations yet.
+**TL;DR:** Noeris is a Research OS with shared ingestion, memory, execution, and verification substrates. Its most mature track today is GPU kernel optimization: parameterized Triton kernels (6 operators), LLM-guided config search, persistent cross-run database, and A100/H100 execution via Modal for ~$0.01/iteration. It already beats AutoKernel's published H100 results on RMSNorm (11.66x vs 5.29x), softmax (6.38x vs 3.44x), and cross-entropy (9.65x vs 2.94x) using curated starter configs.
 
-Noeris generates parameterized Triton kernels, benchmarks them across workload shapes on real GPUs via Modal, persists winning configs in a shape-indexed database, and feeds cross-run insights back to an LLM proposer for the next search iteration. It runs continuously via auto-chaining CI.
+Noeris is broader than the Triton work, but the Triton/kernel track is the strongest proving ground in the repository today. The core system is meant to generalize across tracks: long-context reasoning, tool-use reliability, evaluation design, and systems optimization all share the same research substrate.
 
 ## Results
 
@@ -162,6 +162,8 @@ tests/                     Regression coverage (80+ tests)
 docs/                      Design docs, thesis, roadmap
 .github/workflows/         CI and benchmark automation
 ```
+
+See [`docs/RESEARCH_OS.md`](docs/RESEARCH_OS.md) for the substrate / track / lane / study framing.
 
 ## Quick Start
 
