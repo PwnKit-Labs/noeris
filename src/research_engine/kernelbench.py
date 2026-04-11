@@ -220,6 +220,94 @@ class ProblemResult:
     speedup: float = 0.0  # vs eager
     compile_speedup: float = 0.0  # vs torch.compile
     correct: bool = False
+    # Task 6: advisory static check (upstream KernelBench reward-hack defenses).
+    # "pass" | "fail" | "skip". Never blocks reporting; a "fail" with a large
+    # speedup is a red flag for reviewers.
+    static_check: str = "skip"
+    static_check_messages: list[str] = field(default_factory=list)
+
+
+def run_static_check_on_operator(operator_name: str, backend: str = "triton") -> tuple[str, list[str]]:
+    """Run the vendored upstream static checker against the source of a
+    Noeris Triton operator module.
+
+    Returns ``("pass", [])`` on success or ``("fail", [msg, ...])`` on any
+    detected reward-hacking / bypass pattern. Errors fetching the source
+    are returned as ``("skip", [error])`` so the eval pipeline never blocks.
+    """
+    try:
+        from .kernel_static_checker import validate_kernel_static
+    except Exception as exc:  # pragma: no cover - import error is unexpected
+        return "skip", [f"static_checker_import_error: {exc}"]
+
+    module_map = {
+        "matmul":         "triton_kernels",
+        "rmsnorm":        "triton_rmsnorm",
+        "softmax":        "triton_softmax",
+        "layernorm":      "triton_layernorm",
+        "cross_entropy":  "triton_cross_entropy",
+        "attention":      "triton_attention",
+        "rotary":         "triton_rotary",
+        "geglu":          "triton_geglu",
+    }
+    module_stem = module_map.get(operator_name)
+    if module_stem is None:
+        return "skip", [f"no module mapping for operator={operator_name!r}"]
+    src_path = Path(__file__).with_name(module_stem + ".py")
+    if not src_path.exists():
+        return "skip", [f"missing source: {src_path}"]
+    try:
+        code = src_path.read_text()
+    except Exception as exc:  # pragma: no cover
+        return "skip", [f"read_error: {exc}"]
+
+    # The upstream checker is designed to run on *submitted* kernel code,
+    # whereas Noeris operator modules are harness generators that embed
+    # (a) the @triton.jit kernel, (b) a PyTorch reference for correctness
+    # comparison, and (c) try/except error handling for benchmark
+    # robustness. Naively running the checker over the whole file would
+    # flag (b) and (c) every time.
+    #
+    # Narrow the check to the @triton.jit kernel function bodies only:
+    # find each `@triton.jit` decorator and capture from there until
+    # the next top-level `def`/`@`/dedent. This mirrors how upstream
+    # would see a reward-hacking submission.
+    import re as _re
+
+    def _extract_triton_kernels(src: str) -> str:
+        kernels: list[str] = []
+        lines = src.splitlines()
+        i = 0
+        while i < len(lines):
+            if "@triton.jit" in lines[i] or "@triton.autotune" in lines[i]:
+                start = i
+                # Walk forward until the next top-level def/decorator/class
+                j = i + 1
+                while j < len(lines):
+                    stripped = lines[j].lstrip()
+                    is_top_level = lines[j] and not lines[j][0].isspace()
+                    if is_top_level and (
+                        stripped.startswith("def ")
+                        or stripped.startswith("class ")
+                        or stripped.startswith("@")
+                    ) and j > i + 1:
+                        break
+                    j += 1
+                kernels.append("\n".join(lines[start:j]))
+                i = j
+            else:
+                i += 1
+        return "\n\n".join(kernels)
+
+    embedded = _extract_triton_kernels(code)
+    if not embedded.strip():
+        # No @triton.jit found in this file (e.g. a pure-Python helper);
+        # fall back to checking the whole file so we don't silently pass.
+        embedded = code
+    valid, errors, warnings = validate_kernel_static(embedded, backend=backend)
+    if valid:
+        return "pass", warnings
+    return "fail", errors + warnings
 
 
 @dataclass(slots=True)
@@ -285,6 +373,8 @@ class KernelBenchReport:
                     "speedup_vs_eager": r.speedup,
                     "speedup_vs_compile": r.compile_speedup,
                     "correct": r.correct,
+                    "static_check": r.static_check,
+                    "static_check_messages": r.static_check_messages,
                 }
                 for r in self.results
             ],
@@ -740,6 +830,11 @@ def evaluate_kernelbench(
             problems = KERNELBENCH_SUBSET[op_name]
             configs = spec.curated_configs[:max_configs_per_problem]
 
+            # Task 6: run upstream static checker on this operator's embedded
+            # kernel source once per operator (not per problem). Result is
+            # purely advisory and attached to every problem result below.
+            static_status, static_msgs = run_static_check_on_operator(op_name)
+
             # Build script with baseline injection
             script = build_benchmark_script_with_baseline(op_name, problems, configs)
             batch = session.run_batch(script)
@@ -799,6 +894,8 @@ def evaluate_kernelbench(
                     speedup=speedup,
                     compile_speedup=compile_speedup,
                     correct=correct,
+                    static_check=static_status,
+                    static_check_messages=list(static_msgs),
                 ))
 
     report.compute_fast_p()
