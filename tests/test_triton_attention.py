@@ -150,6 +150,13 @@ class WindowSizeMinusOneRegressionTests(unittest.TestCase):
         shape = {"seq_len": 8192, "head_dim": 128, "heads": 32}
         self.assertEqual(attention_shape_bucket_key(shape), "mistral")
 
+    def test_mha_shapes_still_route_to_mha_buckets(self):
+        """GQA gate must not misroute MHA shapes (explicit or implicit)."""
+        shape = {"seq_len": 4096, "head_dim": 128, "heads": 16}
+        self.assertEqual(attention_shape_bucket_key(shape), "long_128")
+        shape = {"seq_len": 4096, "head_dim": 128, "heads": 16, "num_kv_heads": 16}
+        self.assertEqual(attention_shape_bucket_key(shape), "long_128")
+
 
 # ---------------------------------------------------------------------------
 # Causal + window interaction (pure Python)
@@ -598,6 +605,190 @@ class KernelBenchQKNormProblemsTests(unittest.TestCase):
         self.assertIn("kb_L3_attn_gemma_local", ids)
         self.assertIn("kb_L3_attn_gemma_slide_causal", ids)
         self.assertIn("kb_L3_attn_llama7b_causal", ids)
+
+# ---------------------------------------------------------------------------
+# GQA shape bucket routing
+# ---------------------------------------------------------------------------
+
+
+class GQAShapeBucketTests(unittest.TestCase):
+    def test_gemma4_31b_local_bucket(self):
+        shape = {"seq_len": 4096, "head_dim": 256, "heads": 32, "num_kv_heads": 16,
+                 "window_size": 1024, "use_qk_norm": True, "is_causal": True}
+        self.assertEqual(attention_shape_bucket_key(shape), "gemma4_31b_local")
+
+    def test_gemma4_31b_global_bucket(self):
+        shape = {"seq_len": 4096, "head_dim": 512, "heads": 32, "num_kv_heads": 4,
+                 "window_size": -1, "use_qk_norm": True, "is_causal": True}
+        self.assertEqual(attention_shape_bucket_key(shape), "gemma4_31b_global")
+
+    def test_gemma4_26b_a4b_local_bucket(self):
+        shape = {"seq_len": 4096, "head_dim": 256, "heads": 16, "num_kv_heads": 8,
+                 "window_size": 1024, "use_qk_norm": True, "is_causal": True}
+        self.assertEqual(attention_shape_bucket_key(shape), "gemma4_26b_a4b_local")
+
+    def test_gemma4_26b_a4b_global_bucket(self):
+        shape = {"seq_len": 4096, "head_dim": 512, "heads": 16, "num_kv_heads": 2,
+                 "window_size": -1, "use_qk_norm": True, "is_causal": True}
+        self.assertEqual(attention_shape_bucket_key(shape), "gemma4_26b_a4b_global")
+
+    def test_llama3_70b_gqa_bucket(self):
+        shape = {"seq_len": 4096, "head_dim": 128, "heads": 64, "num_kv_heads": 8,
+                 "is_causal": True}
+        self.assertEqual(attention_shape_bucket_key(shape), "llama3_70b_gqa")
+
+    def test_mistral_gqa_bucket(self):
+        shape = {"seq_len": 8192, "head_dim": 128, "heads": 32, "num_kv_heads": 8,
+                 "is_causal": True}
+        self.assertEqual(attention_shape_bucket_key(shape), "mistral_gqa")
+
+    def test_extreme_gqa_num_kv_heads_1(self):
+        """Gemma 4 E2B: 8 Q heads, 1 KV head."""
+        shape = {"seq_len": 4096, "head_dim": 256, "heads": 8, "num_kv_heads": 1,
+                 "window_size": 1024, "use_qk_norm": True, "is_causal": True}
+        key = attention_shape_bucket_key(shape)
+        # Should route to some GQA gemma bucket.
+        self.assertIn("gemma", key)
+
+    def test_all_new_gqa_buckets_present_in_shape_list(self):
+        names = {s["name"] for s in ATTENTION_SHAPE_BUCKETS}
+        for n in ["gemma4_31b_local", "gemma4_31b_global",
+                  "gemma4_26b_a4b_local", "gemma4_26b_a4b_global",
+                  "llama3_70b_gqa", "mistral_gqa"]:
+            self.assertIn(n, names)
+
+    def test_new_gqa_buckets_have_num_kv_heads_lt_heads(self):
+        gqa_names = {"gemma4_31b_local", "gemma4_31b_global",
+                     "gemma4_26b_a4b_local", "gemma4_26b_a4b_global",
+                     "llama3_70b_gqa", "mistral_gqa"}
+        for s in ATTENTION_SHAPE_BUCKETS:
+            if s["name"] in gqa_names:
+                self.assertLess(s["num_kv_heads"], s["heads"])
+                self.assertEqual(s["heads"] % s["num_kv_heads"], 0)
+
+    def test_all_existing_buckets_have_num_kv_heads(self):
+        """Every bucket carries an explicit num_kv_heads field (MHA or GQA)."""
+        for s in ATTENTION_SHAPE_BUCKETS:
+            self.assertIn("num_kv_heads", s, f"Bucket {s['name']} missing num_kv_heads")
+
+
+# ---------------------------------------------------------------------------
+# GQA benchmark-script validity
+# ---------------------------------------------------------------------------
+
+
+class GQABenchmarkScriptTests(unittest.TestCase):
+    def _make_script(self, shapes):
+        configs = [{"BLOCK_M": 64, "BLOCK_N": 64, "num_warps": 4, "num_stages": 3}]
+        return generate_attention_benchmark_script(configs, shapes)
+
+    def test_script_with_gqa_shape_is_valid_python(self):
+        shapes = [{
+            "name": "gemma4_31b_local", "batch": 1, "heads": 32, "num_kv_heads": 16,
+            "seq_len": 4096, "head_dim": 256, "is_causal": True,
+            "window_size": 1024, "use_qk_norm": True,
+        }]
+        script = self._make_script(shapes)
+        compile(script, "<benchmark_gqa>", "exec")
+
+    def test_script_with_gqa_global_head_dim_512_valid(self):
+        shapes = [{
+            "name": "gemma4_31b_global", "batch": 1, "heads": 32, "num_kv_heads": 4,
+            "seq_len": 4096, "head_dim": 512, "is_causal": True,
+            "window_size": -1, "use_qk_norm": True,
+        }]
+        script = self._make_script(shapes)
+        compile(script, "<benchmark_gqa_global>", "exec")
+
+    def test_script_embeds_num_kv_heads(self):
+        shapes = [{"name": "x", "batch": 1, "heads": 8, "num_kv_heads": 2,
+                   "seq_len": 512, "head_dim": 64}]
+        script = self._make_script(shapes)
+        self.assertIn("NUM_KV_HEADS", script)
+        self.assertIn("num_kv_heads", script)
+
+    def test_script_embeds_group_size_constexpr(self):
+        shapes = [{"name": "x", "batch": 1, "heads": 8, "num_kv_heads": 2,
+                   "seq_len": 512, "head_dim": 64}]
+        script = self._make_script(shapes)
+        self.assertIn("GROUP_SIZE", script)
+
+    def test_script_uses_repeat_interleave_for_reference(self):
+        shapes = [{"name": "x", "batch": 1, "heads": 8, "num_kv_heads": 2,
+                   "seq_len": 512, "head_dim": 64}]
+        script = self._make_script(shapes)
+        self.assertIn("repeat_interleave", script)
+
+
+# ---------------------------------------------------------------------------
+# Launcher assertions (require torch, not CUDA)
+# ---------------------------------------------------------------------------
+
+
+@unittest.skipUnless(TORCH_AVAILABLE, "torch required")
+class LauncherAssertionsTests(unittest.TestCase):
+    """The launcher in triton_attention.py only lives inside an auto-generated
+    f-string benchmark script, so we can't import it directly. Instead we
+    compile the generated script in a sandbox namespace, patch `triton` so we
+    never actually launch a kernel, and call `flash_attn` to verify that the
+    assertions fire before any kernel launch."""
+
+    def _load_flash_attn(self):
+        import types
+        configs = [{"BLOCK_M": 16, "BLOCK_N": 16, "num_warps": 2, "num_stages": 2}]
+        shapes = [{"name": "x", "batch": 1, "heads": 8, "num_kv_heads": 2,
+                   "seq_len": 16, "head_dim": 64}]
+        script = generate_attention_benchmark_script(configs, shapes)
+        # Stub triton so kernel launches (if reached) are no-ops.
+        fake_triton = types.ModuleType("triton")
+        fake_triton.cdiv = lambda a, b: (a + b - 1) // b
+        class _FakeJIT:
+            def jit(self, fn):
+                class _Launcher:
+                    def __getitem__(self, grid):
+                        return lambda *a, **kw: None
+                return _Launcher()
+        fake_triton.jit = _FakeJIT().jit
+        fake_lang = types.ModuleType("triton.language")
+        fake_lang.constexpr = int
+        ns = {
+            "__name__": "__sandbox__",
+            "triton": fake_triton,
+            "tl": fake_lang,
+            "torch": torch,
+        }
+        # Strip the `if __name__ == "__main__": main()` tail so importing
+        # the module doesn't actually run the benchmark.
+        script_no_main = script.replace(
+            'if __name__ == "__main__":\n    main()',
+            "",
+        )
+        # Monkey-patch triton/triton.language imports inside the script by
+        # executing in a namespace that already has them.
+        import sys
+        sys.modules.setdefault("triton", fake_triton)
+        sys.modules.setdefault("triton.language", fake_lang)
+        exec(compile(script_no_main, "<sandbox_attn>", "exec"), ns)
+        return ns["flash_attn"]
+
+    def test_flash_attn_rejects_mismatched_kv_heads(self):
+        flash_attn = self._load_flash_attn()
+        q = torch.zeros(1, 8, 16, 64, dtype=torch.float16)
+        k = torch.zeros(1, 4, 16, 64, dtype=torch.float16)
+        v = torch.zeros(1, 4, 16, 64, dtype=torch.float16)
+        cfg = {"BLOCK_M": 16, "BLOCK_N": 16, "num_warps": 2, "num_stages": 2}
+        with self.assertRaises(AssertionError):
+            flash_attn(q, k, v, cfg, num_kv_heads=2)  # k/v have 4 not 2
+
+    def test_flash_attn_rejects_nondivisible(self):
+        flash_attn = self._load_flash_attn()
+        q = torch.zeros(1, 6, 16, 64, dtype=torch.float16)
+        k = torch.zeros(1, 4, 16, 64, dtype=torch.float16)
+        v = torch.zeros(1, 4, 16, 64, dtype=torch.float16)
+        cfg = {"BLOCK_M": 16, "BLOCK_N": 16, "num_warps": 2, "num_stages": 2}
+        with self.assertRaises(AssertionError):
+            flash_attn(q, k, v, cfg, num_kv_heads=4)  # 6 % 4 != 0
+
 
 if __name__ == "__main__":
     unittest.main()

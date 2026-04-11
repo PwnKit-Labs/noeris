@@ -55,26 +55,37 @@ ATTENTION_CURATED_CONFIGS = [
 # Shape buckets: (batch, num_heads, seq_len, head_dim)
 # These match LLM workload patterns.
 ATTENTION_SHAPE_BUCKETS = [
-    {"name": "short_64", "batch": 4, "heads": 32, "seq_len": 512, "head_dim": 64, "is_causal": False},
-    {"name": "short_128", "batch": 2, "heads": 16, "seq_len": 1024, "head_dim": 128, "is_causal": False},
-    {"name": "med_128", "batch": 2, "heads": 16, "seq_len": 2048, "head_dim": 128, "is_causal": False},
-    {"name": "long_64", "batch": 1, "heads": 16, "seq_len": 4096, "head_dim": 64, "is_causal": False},
-    {"name": "long_128", "batch": 1, "heads": 16, "seq_len": 4096, "head_dim": 128, "is_causal": False},
-    {"name": "llama7b", "batch": 1, "heads": 32, "seq_len": 4096, "head_dim": 128, "is_causal": False},
-    {"name": "mistral", "batch": 1, "heads": 32, "seq_len": 8192, "head_dim": 128, "is_causal": False},
+    {"name": "short_64", "batch": 4, "heads": 32, "num_kv_heads": 32, "seq_len": 512, "head_dim": 64, "is_causal": False},
+    {"name": "short_128", "batch": 2, "heads": 16, "num_kv_heads": 16, "seq_len": 1024, "head_dim": 128, "is_causal": False},
+    {"name": "med_128", "batch": 2, "heads": 16, "num_kv_heads": 16, "seq_len": 2048, "head_dim": 128, "is_causal": False},
+    {"name": "long_64", "batch": 1, "heads": 16, "num_kv_heads": 16, "seq_len": 4096, "head_dim": 64, "is_causal": False},
+    {"name": "long_128", "batch": 1, "heads": 16, "num_kv_heads": 16, "seq_len": 4096, "head_dim": 128, "is_causal": False},
+    {"name": "llama7b", "batch": 1, "heads": 32, "num_kv_heads": 32, "seq_len": 4096, "head_dim": 128, "is_causal": False},
+    {"name": "mistral", "batch": 1, "heads": 32, "num_kv_heads": 32, "seq_len": 8192, "head_dim": 128, "is_causal": False},
     # Causal variants (for decoder-only LLMs)
-    {"name": "llama7b_causal", "batch": 1, "heads": 32, "seq_len": 4096, "head_dim": 128, "is_causal": True},
-    {"name": "mistral_causal", "batch": 1, "heads": 32, "seq_len": 8192, "head_dim": 128, "is_causal": True},
-    {"name": "long_128_causal", "batch": 1, "heads": 16, "seq_len": 4096, "head_dim": 128, "is_causal": True},
+    {"name": "llama7b_causal", "batch": 1, "heads": 32, "num_kv_heads": 32, "seq_len": 4096, "head_dim": 128, "is_causal": True},
+    {"name": "mistral_causal", "batch": 1, "heads": 32, "num_kv_heads": 32, "seq_len": 8192, "head_dim": 128, "is_causal": True},
+    {"name": "long_128_causal", "batch": 1, "heads": 16, "num_kv_heads": 16, "seq_len": 4096, "head_dim": 128, "is_causal": True},
     # Sliding-window local attention (Gemma 3 / 4 style)
     # 5 of every 6 layers use a 1024-token window; full attention on the rest.
-    {"name": "gemma4_local_1024", "batch": 1, "heads": 16, "seq_len": 4096, "head_dim": 256, "is_causal": True, "window_size": 1024},
-    {"name": "gemma4_local_short", "batch": 2, "heads": 16, "seq_len": 2048, "head_dim": 128, "is_causal": True, "window_size": 1024},
-    {"name": "gemma3_local", "batch": 1, "heads": 16, "seq_len": 8192, "head_dim": 128, "is_causal": True, "window_size": 1024},
+    {"name": "gemma4_local_1024", "batch": 1, "heads": 16, "num_kv_heads": 16, "seq_len": 4096, "head_dim": 256, "is_causal": True, "window_size": 1024},
+    {"name": "gemma4_local_short", "batch": 2, "heads": 16, "num_kv_heads": 16, "seq_len": 2048, "head_dim": 128, "is_causal": True, "window_size": 1024},
+    {"name": "gemma3_local", "batch": 1, "heads": 16, "num_kv_heads": 16, "seq_len": 8192, "head_dim": 128, "is_causal": True, "window_size": 1024},
     # QK-norm variants (Gemma 3 / 4 -- all layers normalise Q and K before dot-product).
     # window_size=1024 -> local layer (5 of 6); window_size=-1 -> global layer (1 of 6).
-    {"name": "gemma4_qknorm", "batch": 1, "heads": 16, "seq_len": 4096, "head_dim": 256, "is_causal": True, "window_size": 1024, "use_qk_norm": True},
-    {"name": "gemma4_qknorm_global", "batch": 1, "heads": 16, "seq_len": 4096, "head_dim": 256, "is_causal": True, "window_size": -1, "use_qk_norm": True},
+    {"name": "gemma4_qknorm", "batch": 1, "heads": 16, "num_kv_heads": 16, "seq_len": 4096, "head_dim": 256, "is_causal": True, "window_size": 1024, "use_qk_norm": True},
+    {"name": "gemma4_qknorm_global", "batch": 1, "heads": 16, "num_kv_heads": 16, "seq_len": 4096, "head_dim": 256, "is_causal": True, "window_size": -1, "use_qk_norm": True},
+    # GQA variants (Gemma 4 / Llama 3 / Mistral — grouped-query attention).
+    # Gemma 4 31B: 32:16 local, 32:4 global with head_dim=512.
+    {"name": "gemma4_31b_local", "batch": 1, "heads": 32, "num_kv_heads": 16, "seq_len": 4096, "head_dim": 256, "is_causal": True, "window_size": 1024, "use_qk_norm": True},
+    {"name": "gemma4_31b_global", "batch": 1, "heads": 32, "num_kv_heads": 4, "seq_len": 4096, "head_dim": 512, "is_causal": True, "window_size": -1, "use_qk_norm": True},
+    # Gemma 4 26B-A4B: 16:8 local, 16:2 global with head_dim=512.
+    {"name": "gemma4_26b_a4b_local", "batch": 1, "heads": 16, "num_kv_heads": 8, "seq_len": 4096, "head_dim": 256, "is_causal": True, "window_size": 1024, "use_qk_norm": True},
+    {"name": "gemma4_26b_a4b_global", "batch": 1, "heads": 16, "num_kv_heads": 2, "seq_len": 4096, "head_dim": 512, "is_causal": True, "window_size": -1, "use_qk_norm": True},
+    # Llama 3 70B: 64:8 GQA.
+    {"name": "llama3_70b_gqa", "batch": 1, "heads": 64, "num_kv_heads": 8, "seq_len": 4096, "head_dim": 128, "is_causal": True, "window_size": -1},
+    # Mistral: 32:8 GQA.
+    {"name": "mistral_gqa", "batch": 1, "heads": 32, "num_kv_heads": 8, "seq_len": 8192, "head_dim": 128, "is_causal": True, "window_size": -1},
 ]
 
 
@@ -86,8 +97,27 @@ def attention_shape_bucket_key(shape: dict[str, int]) -> str:
     seq = shape.get("seq_len", 0)
     hd = shape.get("head_dim", 0)
     heads = shape.get("heads", 0)
+    nkv = shape.get("num_kv_heads", heads)  # default = MHA
     ws = shape.get("window_size", -1)
     use_qk_norm = bool(shape.get("use_qk_norm", False))
+    is_gqa = nkv > 0 and nkv < heads
+
+    # GQA buckets take precedence — these are the LLM-shaped routes.
+    # Route BEFORE the qk-norm branch so Gemma 4 GQA + QK-norm shapes land here.
+    if is_gqa:
+        if use_qk_norm:
+            # Gemma 4. head_dim=512 signals global, 256 signals local.
+            if hd >= 512:
+                return "gemma4_31b_global" if heads >= 32 else "gemma4_26b_a4b_global"
+            # local layers: distinguish 31B (32:16) vs 26B (16:8) by heads
+            return "gemma4_31b_local" if heads >= 32 else "gemma4_26b_a4b_local"
+        # Non-QK-norm GQA: Llama 3 / Mistral
+        if seq >= 8192:
+            return "mistral_gqa"
+        if heads >= 64:
+            return "llama3_70b_gqa"
+        # Fallback: treat as mistral_gqa for now
+        return "mistral_gqa"
 
     # QK-norm shapes get dedicated buckets (Gemma 3/4 with fused QK-RMSNorm).
     if use_qk_norm:
@@ -227,6 +257,8 @@ def attn_fwd_kernel(
     B, H, M, N,
     sm_scale,
     HEAD_DIM: tl.constexpr,
+    NUM_KV_HEADS: tl.constexpr,
+    GROUP_SIZE: tl.constexpr,
     BLOCK_M: tl.constexpr,
     BLOCK_N: tl.constexpr,
     IS_CAUSAL: tl.constexpr,
@@ -262,11 +294,14 @@ def attn_fwd_kernel(
     pid = tl.program_id(0)
     off_bh = tl.program_id(1)
     off_b = off_bh // H
-    off_h = off_bh % H
+    off_h = off_bh % H                      # Q head index, [0, H)
+    # GQA: integer-divide Q head by group size to find KV head.
+    # For MHA (GROUP_SIZE=1) this is a no-op.
+    off_kvh = off_h // GROUP_SIZE           # KV head index, [0, NUM_KV_HEADS)
 
     q_base = Q + off_b * stride_qb + off_h * stride_qh
-    k_base = K + off_b * stride_kb + off_h * stride_kh
-    v_base = V + off_b * stride_vb + off_h * stride_vh
+    k_base = K + off_b * stride_kb + off_kvh * stride_kh
+    v_base = V + off_b * stride_vb + off_kvh * stride_vh
     o_base = Out + off_b * stride_ob + off_h * stride_oh
 
     offs_m = pid * BLOCK_M + tl.arange(0, BLOCK_M)
@@ -367,6 +402,7 @@ def attn_fwd_kernel(
 def flash_attn(
     q, k, v, config, is_causal=False, sm_scale=None, window_size=-1,
     use_qk_norm=False, q_scale=None, k_scale=None,
+    num_kv_heads=None,
 ):
     """q, k, v: (batch, heads, seq, head_dim) float16. Returns out.
 
@@ -376,9 +412,22 @@ def flash_attn(
         use_qk_norm: Fuse per-row RMSNorm into Q and K (Gemma 3/4, epsilon=1e-6).
         q_scale: Learnable [head_dim] scale weights for Q-norm (float32).
         k_scale: Learnable [head_dim] scale weights for K-norm (float32).
+        num_kv_heads: Number of KV heads for grouped-query attention. If None
+            (default), equals the number of Q heads (MHA). Must divide `heads`.
     """
     B, H, M, D = q.shape
-    _, _, N, _ = k.shape
+    _, Hk, N, Dk = k.shape
+    _, Hv, Nv, Dv = v.shape
+    if num_kv_heads is None:
+        num_kv_heads = H
+    assert num_kv_heads > 0, "num_kv_heads must be positive"
+    assert H % num_kv_heads == 0, f"H={{H}} not divisible by num_kv_heads={{num_kv_heads}}"
+    assert Hk == num_kv_heads and Hv == num_kv_heads, (
+        f"K/V must have shape[1] == num_kv_heads; got Hk={{Hk}} Hv={{Hv}} num_kv_heads={{num_kv_heads}}"
+    )
+    assert Dk == D and Dv == D, "head_dim must match across Q/K/V"
+    assert Nv == N, "K/V seq_len must match"
+    group_size = H // num_kv_heads
     if sm_scale is None:
         sm_scale = 1.0 / (D ** 0.5)
     out = torch.empty_like(q)
@@ -401,6 +450,8 @@ def flash_attn(
         B, H, M, N,
         sm_scale,
         HEAD_DIM=D,
+        NUM_KV_HEADS=num_kv_heads,
+        GROUP_SIZE=group_size,
         BLOCK_M=BLOCK_M,
         BLOCK_N=BLOCK_N,
         IS_CAUSAL=is_causal,
@@ -434,18 +485,27 @@ def make_sliding_window_mask(seq_len: int, window_size: int, is_causal: bool) ->
     return mask  # True = attend
 
 
-def benchmark_one(batch, heads, seq_len, head_dim, config, is_causal=False, window_size=-1, use_qk_norm=False):
+def benchmark_one(batch, heads, seq_len, head_dim, config, is_causal=False, window_size=-1, use_qk_norm=False, num_kv_heads=None):
     try:
+        if num_kv_heads is None:
+            num_kv_heads = heads
         q = torch.randn((batch, heads, seq_len, head_dim), device="cuda", dtype=torch.float16)
-        k = torch.randn((batch, heads, seq_len, head_dim), device="cuda", dtype=torch.float16)
-        v = torch.randn((batch, heads, seq_len, head_dim), device="cuda", dtype=torch.float16)
+        k = torch.randn((batch, num_kv_heads, seq_len, head_dim), device="cuda", dtype=torch.float16)
+        v = torch.randn((batch, num_kv_heads, seq_len, head_dim), device="cuda", dtype=torch.float16)
+
+        # PyTorch reference uses repeat_interleave to broadcast K/V across
+        # group members (avoids version-dependent SDPA GQA behavior). Reference
+        # cost is not benchmarked for speed, so the extra memory is fine.
+        group_size = heads // num_kv_heads
+        k_ref = k.repeat_interleave(group_size, dim=1) if group_size > 1 else k
+        v_ref = v.repeat_interleave(group_size, dim=1) if group_size > 1 else v
 
         # When QK-norm enabled, normalise Q/K before PyTorch reference.
         if use_qk_norm:
             q_ref = torch.nn.functional.rms_norm(q.float(), (head_dim,)).half()
-            k_ref = torch.nn.functional.rms_norm(k.float(), (head_dim,)).half()
+            k_ref = torch.nn.functional.rms_norm(k_ref.float(), (head_dim,)).half()
         else:
-            q_ref, k_ref = q, k
+            q_ref = q
 
         if window_size > 0:
             # Build explicit sliding-window mask for PyTorch reference.
@@ -453,20 +513,20 @@ def benchmark_one(batch, heads, seq_len, head_dim, config, is_causal=False, wind
             # SDPA expects float mask (0 = attend, -inf = mask out) or bool mask.
             # Pass as bool; SDPA converts internally.
             ref = torch.nn.functional.scaled_dot_product_attention(
-                q_ref, k_ref, v,
+                q_ref, k_ref, v_ref,
                 attn_mask=ws_mask,
                 is_causal=False,  # mask already encodes causality
             )
         else:
-            ref = torch.nn.functional.scaled_dot_product_attention(q_ref, k_ref, v, is_causal=is_causal)
+            ref = torch.nn.functional.scaled_dot_product_attention(q_ref, k_ref, v_ref, is_causal=is_causal)
 
-        out = flash_attn(q, k, v, config, is_causal=is_causal, window_size=window_size, use_qk_norm=use_qk_norm)
+        out = flash_attn(q, k, v, config, is_causal=is_causal, window_size=window_size, use_qk_norm=use_qk_norm, num_kv_heads=num_kv_heads)
         max_err = (out - ref).abs().max().item()
         if max_err > 0.1:
             return {{"correct": False, "max_err": max_err, "ms": None, "tflops": None}}
 
         ms = triton.testing.do_bench(
-            lambda: flash_attn(q, k, v, config, is_causal=is_causal, window_size=window_size, use_qk_norm=use_qk_norm),
+            lambda: flash_attn(q, k, v, config, is_causal=is_causal, window_size=window_size, use_qk_norm=use_qk_norm, num_kv_heads=num_kv_heads),
             warmup=10, rep=50,
         )
         # Effective work: causal halves flops; window shrinks further.
@@ -508,15 +568,18 @@ def main():
             is_causal = bool(shape.get("is_causal", False))
             window_size = int(shape.get("window_size", -1))
             use_qk_norm = bool(shape.get("use_qk_norm", False))
+            num_kv_heads = int(shape.get("num_kv_heads", heads))
             result = benchmark_one(
                 batch, heads, seq_len, head_dim, config,
                 is_causal=is_causal, window_size=window_size, use_qk_norm=use_qk_norm,
+                num_kv_heads=num_kv_heads,
             )
             result["shape"] = f"{{batch}}x{{heads}}x{{seq_len}}x{{head_dim}}"
             result["shape_name"] = shape.get("name", "")
             result["is_causal"] = is_causal
             result["window_size"] = window_size
             result["use_qk_norm"] = use_qk_norm
+            result["num_kv_heads"] = num_kv_heads
             shape_results.append(result)
         all_results.append({{
             "config_id": cid,
