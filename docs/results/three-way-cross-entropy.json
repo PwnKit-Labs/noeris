@@ -1,0 +1,54 @@
+{
+  "operator": "cross_entropy",
+  "gpu": "A100",
+  "iterations": 5,
+  "configs_per_run": 6,
+  "include_curated": false,
+  "shapes": [
+    "gpt2_small",
+    "gpt2_med",
+    "llama_32k",
+    "llama_32k_long",
+    "llama3_128k",
+    "mistral"
+  ],
+  "cost_model": {
+    "path": ".noeris/cost-model.pkl",
+    "training_size": 516
+  },
+  "conditions": {
+    "baseline": {
+      "trajectory": [
+        680.9016666666666,
+        681.415,
+        681.415,
+        681.7716666666666,
+        681.7716666666666
+      ],
+      "final_best": 681.7716666666666,
+      "delta_vs_baseline_pct": 0.0
+    },
+    "cost_model": {
+      "trajectory": [
+        937.2533333333332,
+        937.8983333333334,
+        937.8983333333334,
+        937.8983333333334,
+        937.8983333333334
+      ],
+      "final_best": 937.8983333333334,
+      "delta_vs_baseline_pct": 37.57
+    },
+    "bandit": {
+      "trajectory": [
+        936.9850000000001,
+        936.9850000000001,
+        937.0533333333334,
+        937.0533333333334,
+        937.0533333333334
+      ],
+      "final_best": 937.0533333333334,
+      "delta_vs_baseline_pct": 37.44
+    }
+  }
+}
