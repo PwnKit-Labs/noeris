@@ -437,6 +437,8 @@ def build_benchmark_script_with_baseline(
     operator: str,
     problems: list[dict],
     configs: list[dict],
+    *,
+    timer: str = "cuda_event",
 ) -> str:
     """Generate a script that benchmarks our configs AND the PyTorch baseline.
 
@@ -480,6 +482,13 @@ def build_benchmark_script_with_baseline(
         "print(json.dumps(output, indent=2))",
         baseline_injection + "\n    print(json.dumps(output, indent=2))"
     )
+
+    # Task 2: post-process to swap triton.testing.do_bench for the unified
+    # noeris_time helper. This matches upstream KernelBench methodology
+    # (cuda_event + L2 flush + median) by default and preserves the
+    # do_bench path via the CLI --timer flag.
+    from .timing_snippet import install_noeris_timing
+    patched = install_noeris_timing(patched, timer=timer)
     return patched
 
 
@@ -835,8 +844,10 @@ def evaluate_kernelbench(
             # purely advisory and attached to every problem result below.
             static_status, static_msgs = run_static_check_on_operator(op_name)
 
-            # Build script with baseline injection
-            script = build_benchmark_script_with_baseline(op_name, problems, configs)
+            # Build script with baseline injection (Task 2: honor --timer).
+            script = build_benchmark_script_with_baseline(
+                op_name, problems, configs, timer=timer,
+            )
             batch = session.run_batch(script)
 
             if not batch.success:
