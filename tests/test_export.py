@@ -26,6 +26,7 @@ class ExportBundleTests(unittest.TestCase):
             files = sorted(path.name for path in bundle_dir.iterdir())
             summary = (bundle_dir / "summary.md").read_text(encoding="utf-8")
             lineage = (bundle_dir / "claim-lineage.json").read_text(encoding="utf-8")
+            brief = (bundle_dir / "research-brief.md").read_text(encoding="utf-8")
 
         self.assertEqual(
             files,
@@ -35,7 +36,6 @@ class ExportBundleTests(unittest.TestCase):
         self.assertIn("claims", lineage)
         self.assertIn("linked_sources", lineage)
         self.assertIn("assessment", lineage)
-        brief = (bundle_dir / "research-brief.md").read_text(encoding="utf-8")
         self.assertIn("## Claims", brief)
         self.assertIn("## Hypotheses", brief)
 
