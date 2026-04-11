@@ -1,0 +1,29 @@
+{
+  "operator": "softmax",
+  "hardware": "A100",
+  "iterations_per_condition": 5,
+  "with_database": {
+    "final_best": 864.4,
+    "trajectory": [
+      846.38,
+      864.4,
+      864.4,
+      864.4,
+      864.4
+    ],
+    "iterations_to_95pct": 6
+  },
+  "without_database": {
+    "final_best": 969.61,
+    "trajectory": [
+      866.62,
+      868.47,
+      969.61,
+      969.61,
+      969.61
+    ],
+    "iterations_to_95pct": 3
+  },
+  "target_95pct": 921.13,
+  "speedup_to_convergence": 0.5
+}

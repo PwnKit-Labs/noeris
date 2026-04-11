@@ -376,7 +376,13 @@ class ConfigDatabase:
             self._load()
 
     def _load(self) -> None:
-        data = json.loads(self.path.read_text())
+        content = self.path.read_text().strip()
+        if not content:
+            return  # empty file, treat as fresh database
+        try:
+            data = json.loads(content)
+        except json.JSONDecodeError:
+            return  # malformed file, treat as fresh
         for key, record in data.get("records", {}).items():
             self.records[key] = ShapeRecord(
                 shape_key=record["shape_key"],
