@@ -123,6 +123,29 @@ class RunStoreTests(unittest.TestCase):
             "llm-extracted",
         )
 
+    def test_summarize_history_reports_source_freshness(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = JsonFileRunStore(Path(temp_dir))
+            record = ResearchPipeline().run_record_for(
+                topic=ResearchTopic(
+                    name="long-context reasoning",
+                    objective="improve benchmark performance",
+                    benchmark_id="long-context-reasoning",
+                    constraints=["benchmark_id:long-context-reasoning"],
+                ),
+                benchmark_id="long-context-reasoning",
+            )
+            record.memo.sources[0].updated_at = "2026-04-10T12:00:00Z"
+            store.save(record)
+
+            summary = store.summarize_history(benchmark_id="long-context-reasoning")
+            brief = store.render_history_brief(benchmark_id="long-context-reasoning")
+
+        self.assertEqual(summary["source_freshness"]["source_count_with_timestamps"], 1)
+        self.assertEqual(summary["source_freshness"]["newest_source_id"], "seed://bootstrap")
+        self.assertIn("## Source Freshness", brief)
+        self.assertIn("2026-04-10T12:00:00Z", brief)
+
     def test_summarize_history_reports_contradiction_deltas(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             store = JsonFileRunStore(Path(temp_dir))

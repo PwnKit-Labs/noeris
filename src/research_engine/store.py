@@ -211,6 +211,11 @@ class JsonFileRunStore:
         previous_contradiction_titles = {
             contradiction.title for contradiction in (previous.memo.contradictions if previous else [])
         }
+        latest_source_updates = {
+            source.identifier: source.updated_at
+            for source in (latest.memo.sources if latest else [])
+            if source.updated_at
+        }
 
         confidence_changes = []
         for source_id in sorted(set(latest_assessments) & set(previous_assessments)):
@@ -348,12 +353,16 @@ class JsonFileRunStore:
                                         + 1
                                     )
 
+        source_freshness = _summarize_source_freshness(latest.memo.sources if latest else [])
+
         return {
             "benchmark_id": benchmark_id or (latest.benchmark_id if latest else ""),
             "topic": topic or (latest.memo.topic if latest else ""),
             "run_count": len(records),
             "latest_run_id": latest.run_id if latest else "",
             "previous_run_id": previous.run_id if previous else "",
+            "latest_source_updates": latest_source_updates,
+            "source_freshness": source_freshness,
             "new_source_ids": sorted(latest_source_ids - previous_source_ids),
             "dropped_source_ids": sorted(previous_source_ids - latest_source_ids),
             "shared_source_ids": sorted(latest_source_ids & previous_source_ids),
@@ -445,6 +454,21 @@ class JsonFileRunStore:
             lines.extend(f"- New source: `{item}`" for item in summary.get("new_source_ids", []))
             lines.extend(f"- Dropped source: `{item}`" for item in summary.get("dropped_source_ids", []))
             lines.append("")
+        freshness = summary.get("source_freshness") or {}
+        if freshness.get("source_count_with_timestamps", 0):
+            lines.extend(["## Source Freshness", ""])
+            lines.append(
+                f"- Sources with timestamps: `{freshness.get('source_count_with_timestamps', 0)}`"
+            )
+            if freshness.get("newest_source_id"):
+                lines.append(
+                    f"- Newest source: `{freshness['newest_source_id']}` at `{freshness['newest_updated_at']}`"
+                )
+            if freshness.get("oldest_source_id"):
+                lines.append(
+                    f"- Oldest source: `{freshness['oldest_source_id']}` at `{freshness['oldest_updated_at']}`"
+                )
+            lines.append("")
         if summary.get("confidence_changes"):
             lines.extend(["## Confidence Changes", ""])
             for item in summary["confidence_changes"]:
@@ -528,3 +552,28 @@ def _extract_metric_from_record(
     else:
         value = None
     return float(value) if isinstance(value, (int, float)) else None
+
+
+def _summarize_source_freshness(sources: list[ResearchSource]) -> dict[str, object]:
+    dated = [
+        (source.identifier, source.updated_at)
+        for source in sources
+        if source.updated_at
+    ]
+    if not dated:
+        return {
+            "source_count_with_timestamps": 0,
+            "newest_source_id": "",
+            "newest_updated_at": "",
+            "oldest_source_id": "",
+            "oldest_updated_at": "",
+        }
+    newest_source_id, newest_updated_at = max(dated, key=lambda item: item[1] or "")
+    oldest_source_id, oldest_updated_at = min(dated, key=lambda item: item[1] or "")
+    return {
+        "source_count_with_timestamps": len(dated),
+        "newest_source_id": newest_source_id,
+        "newest_updated_at": newest_updated_at,
+        "oldest_source_id": oldest_source_id,
+        "oldest_updated_at": oldest_updated_at,
+    }
