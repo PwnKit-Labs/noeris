@@ -2,44 +2,71 @@
 
 Autonomous GPU kernel optimization engine with cross-run learning and shape-indexed config discovery.
 
+**TL;DR:** Parameterized Triton kernels (6 operators), LLM-guided config search, persistent cross-run database, running on A100/H100 via Modal for ~$0.01/iteration. Beats AutoKernel's published H100 results on RMSNorm (11.66x vs 5.29x), softmax (6.38x vs 3.44x), and cross-entropy (9.65x vs 2.94x) using only curated starter configs — no search iterations yet.
+
 Noeris generates parameterized Triton kernels, benchmarks them across workload shapes on real GPUs via Modal, persists winning configs in a shape-indexed database, and feeds cross-run insights back to an LLM proposer for the next search iteration. It runs continuously via auto-chaining CI.
 
-## Results (A100-SXM4-40GB via Modal)
+## Results
 
-**KernelBench-style evaluation — 20 problems, 5 operators, only curated starter configs (no search):**
+**KernelBench-style evaluation — 53 problems, 6 operators, 4 curated configs per problem (no search iterations).**
+
+### A100-SXM4-40GB via Modal
 
 | Threshold | Overall | Level 1 | Level 2 |
 |---|---|---|---|
-| **fast_1.0** (beat PyTorch) | **60.0%** | 50.0% | 75.0% |
-| **fast_2.0** (2x speedup) | **40.0%** | 33.3% | 50.0% |
-| **fast_3.0** (3x speedup) | **35.0%** | 33.3% | 37.5% |
+| **fast_1.0** (beat PyTorch) | **56.6%** | 58.3% | 61.5% |
+| **fast_1.5** | 41.5% | 45.8% | 42.3% |
+| **fast_2.0** (2x speedup) | **37.7%** | 37.5% | 42.3% |
+| **fast_3.0** (3x speedup) | **32.1%** | 33.3% | 34.6% |
 
-### Per-operator highlights
+### H100 via Modal
+
+| Threshold | Overall | Level 1 | Level 2 |
+|---|---|---|---|
+| **fast_1.0** | **56.6%** | 58.3% | 61.5% |
+| **fast_1.5** | 43.4% | 45.8% | 46.2% |
+| **fast_2.0** | **41.5%** | 45.8% | 42.3% |
+| **fast_3.0** | 30.2% | 33.3% | 30.8% |
+
+### Per-operator highlights (H100)
 
 | Operator | Best result | vs PyTorch | Config |
 |---|---|---|---|
-| **cross_entropy** (llama long) | 1242.9 GB/s | **10.15x** | `bs32768_w16_s1` |
-| **rmsnorm** (llama-7b) | 1162.2 GB/s | **10.07x** | `bs2048_w8_s1` |
-| **softmax** (vocab) | 1287.3 GB/s | **6.68x** | `bs4096_w16_s1` |
-| **layernorm** (gpt) | 927.1 GB/s | **1.32x** | `bs1024_w4_s1` |
-| **matmul** (xlarge) | 237.4 TFLOPS | 0.89x | `bm128_bn128_bk32_gm8_w4_s4` |
+| **rmsnorm** (mixtral) | 2625.1 GB/s | **11.66x** | `bs2048_w8_s1` |
+| **rmsnorm** (llama-13b) | 2418.3 GB/s | **11.20x** | `bs4096_w16_s1` |
+| **rmsnorm** (llama-7b) | 2340.2 GB/s | **11.11x** | `bs2048_w8_s1` |
+| **cross_entropy** (long_llama) | 2407.1 GB/s | **9.65x** | `bs32768_w16_s1` |
+| **cross_entropy** (mistral) | 2266.3 GB/s | **9.08x** | `bs8192_w16_s1` |
+| **softmax** (vocab_llama) | 2526.4 GB/s | **6.38x** | `bs4096_w16_s1` |
+| **softmax** (large) | 2347.5 GB/s | **5.46x** | `bs2048_w8_s1` |
+| **layernorm** (long_seq) | 1666.8 GB/s | **1.53x** | `bs512_w2_s2` |
+| **matmul** (llama7b_qkv) | 691.9 TFLOPS | **1.01x** | `bm128_bn256_bk64_gm8_w8_s3` |
+| **attention** (llama7b) | 468.4 TFLOPS | 0.78x | `m64_n64_w4_s3` |
 
-Cost: **~$0.01 per iteration**, ~$0.15 for the full KernelBench eval.
+Full reports in [`docs/results/`](docs/results/).
+
+Cost: **~$0.01 per iteration**, ~$0.40 for both A100 and H100 full evals (84 problems).
+
+### Direct comparison to AutoKernel (both on H100)
+
+| Kernel | **Noeris** | AutoKernel | Delta |
+|---|---|---|---|
+| RMSNorm | **11.66x** | 5.29x | **+120%** |
+| Cross-entropy | **9.65x** | 2.94x | **+228%** |
+| Softmax | **6.38x** | 3.44x | **+85%** |
+| LayerNorm | 1.53x | 3.21x | -52% (investigate) |
+
+We beat AutoKernel's published results on 3 of 4 memory-bound kernels **without any search iterations** — just the curated starter configs and the shape-indexed approach. LayerNorm is the one gap and a good target for the full search loop.
 
 ### Comparison to published work
 
-| | Noeris (A100) | AutoKernel (H100) | KernelSkill (ICLR'26) |
+| | Noeris | AutoKernel | KernelSkill (ICLR'26) |
 |---|---|---|---|
-| RMSNorm speedup | **10.07x** | 5.29x | — |
-| Softmax speedup | **6.68x** | 2.82x / 3.44x | — |
-| Cross-entropy | **10.15x** | 2.21x / 2.94x | — |
-| fast_1.0 | **60.0%** | — | 5.44x avg L1 |
-| Operators supported | **5** | 9 | — |
+| fast_1.0 (our 53 probs) | **56.6%** | — | 5.44x avg L1 |
+| Operators | **6** | 9 | — |
 | **Cross-run learning** | **Yes** | No | Skill retrieval |
 | **Shape-indexed configs** | **Yes** | No | No |
 | Cost/iteration | **$0.01** | dedicated H100 | dedicated GPU |
-
-We match or exceed the published memory-bound kernel speedups **without any search iterations** — these are just the curated starter configs. The full loop with LLM-guided search across the parameter grid improves further.
 
 ## What's Novel
 
@@ -104,7 +131,7 @@ No published system does all four.
 | **softmax** | BLOCK_SIZE, num_warps, num_stages | 7 | GB/s | Working |
 | **layernorm** | BLOCK_SIZE, num_warps, num_stages | 8 | GB/s | Working |
 | **cross_entropy** | BLOCK_SIZE, num_warps, num_stages | 7 | GB/s | Working |
-| **attention** (FlashAttention) | BLOCK_M, BLOCK_N, num_warps, stages | — | TFLOPS | Planned |
+| **attention** (FlashAttention) | BLOCK_M, BLOCK_N, num_warps, stages | 7 | TFLOPS | Working |
 | **rotary_emb** | BLOCK_SIZE, num_warps | — | GB/s | Planned |
 
 ## Repository Layout
@@ -129,6 +156,8 @@ src/research_engine/
   export.py                Run export bundles
   benchmarks.py            Benchmark definitions
   components.py            Component protocols
+  triton_attention.py      FlashAttention-style kernel with online softmax
+  ablation.py              Cross-run learning ablation study
 tests/                     Regression coverage (80+ tests)
 docs/                      Design docs, thesis, roadmap
 .github/workflows/         CI and benchmark automation
@@ -176,27 +205,26 @@ Requires:
 - [x] Shape-indexed ConfigDatabase with cross-run persistence
 - [x] Operator-aware database (multi-operator keying)
 - [x] Modal GPU execution backend (A100/H100)
-- [x] RMSNorm, Softmax, LayerNorm, Cross-entropy operators
-- [x] KernelBench-style evaluation with fast_p scoring
+- [x] Six parameterized operators: matmul, rmsnorm, softmax, layernorm, cross_entropy, attention
+- [x] FlashAttention kernel with tiled online softmax
+- [x] KernelBench-style evaluation with fast_p scoring (53 problems)
 - [x] LLM proposer with cross-run insights
 - [x] Auto-chaining CI with scheduled runs
-- [x] Verified end-to-end on real A100 — 60% fast_1.0, 10x best speedup
-
-### In progress
-
-- [ ] Generalized config selection across all operators
-- [ ] Multi-operator CI workflow (nightly runs over all ops)
-- [ ] LLM proposer fine-tuning for memory-bound operators
-- [ ] Cross-run learning ablation study
+- [x] Multi-operator CI matrix (6 operators in parallel)
+- [x] Generalized config selection for all operators
+- [x] Cross-run learning ablation framework
+- [x] H100 evaluation and direct comparison to AutoKernel
+- [x] Verified end-to-end on real A100 and H100 — beating published results on memory-bound kernels
 
 ### Next
 
-- [ ] FlashAttention-style attention kernel
+- [ ] Run the ablation study at scale to validate cross-run learning claim
+- [ ] Improve LayerNorm kernel (our only operator losing to AutoKernel)
+- [ ] Causal masking in attention kernel
 - [ ] Rotary embedding kernel
-- [ ] H100 evaluation (compare to AutoKernel directly)
-- [ ] Full KernelBench (250 problems) integration
+- [ ] Full KernelBench (250 problems) HuggingFace integration
 - [ ] Hardware cross-learning (configs learned on A100 applied to H100)
-- [ ] Research memo publication pipeline
+- [ ] Research paper draft (arXiv submission)
 
 ## Related Work
 
