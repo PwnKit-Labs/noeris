@@ -75,13 +75,12 @@ def _record_result(db: ConfigDatabase, cfg: dict, tflops: float = 100.0,
                    *, operator: str = "matmul", bucket: str = "medium",
                    hardware: str = "A100", selector: str = "",
                    selector_improved: bool | None = None) -> None:
-    """Helper: insert a single benchmark result into the database."""
-    extra: dict = {}
-    if selector:
-        extra["selector"] = selector
-    if selector_improved is not None:
-        extra["selector_improved"] = selector_improved
+    """Helper: insert a single benchmark result into the database.
 
+    ConfigDatabase.record_result() does not accept extra kwargs, so we inject
+    the ``selector`` and ``selector_improved`` fields directly into the last
+    appended result entry after the call.
+    """
     db.record_result(
         shape={"M": 2048, "N": 2048, "K": 2048, "bucket": bucket},
         hardware=hardware,
@@ -92,8 +91,14 @@ def _record_result(db: ConfigDatabase, cfg: dict, tflops: float = 100.0,
         operator=operator,
         bucket=bucket,
         config_id_str=config_id(cfg),
-        **extra,
     )
+    # Inject attribution fields into the result entry we just appended.
+    key = f"{operator}:{bucket}:{hardware}"
+    last_result = db.records[key].results[-1]
+    if selector:
+        last_result["selector"] = selector
+    if selector_improved is not None:
+        last_result["selector_improved"] = selector_improved
 
 
 # ---------------------------------------------------------------------------
