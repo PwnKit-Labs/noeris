@@ -1,0 +1,773 @@
+{
+  "experiment": "hardware_cross_learning",
+  "source_gpu": "A100",
+  "target_gpu": "H100",
+  "operators": [
+    "rmsnorm",
+    "softmax",
+    "layernorm",
+    "cross_entropy"
+  ],
+  "configs_per_op": 16,
+  "shapes_per_op": 4,
+  "top_k": 5,
+  "source_model": {
+    "path": "/Users/peak/coding/tools/noeris/.noeris/cost-model-a100-only.pkl",
+    "training_size": 516,
+    "training_info": {
+      "status": "trained",
+      "training_size": 516,
+      "holdout_r2": 0.939,
+      "operator_counts": {
+        "1": 96,
+        "2": 96,
+        "3": 96,
+        "4": 96,
+        "0": 60,
+        "5": 72
+      }
+    }
+  },
+  "total_target_points": 256,
+  "summary": {
+    "mean_r2_source_hw": 0.2047,
+    "mean_spearman_source_hw": 0.967,
+    "mean_topk_agreement": 0.5,
+    "random_topk_baseline": 0.0781,
+    "verdict": "weak_transfer",
+    "verdict_text": "Weak transfer: slight positive correlation but not reliably useful.",
+    "topk_verdict": "above_random"
+  },
+  "per_operator": [
+    {
+      "operator": "rmsnorm",
+      "n_points": 64,
+      "source_gpu": "A100",
+      "target_gpu": "H100",
+      "r2_source_hw_encoding": -0.1077,
+      "spearman_source_hw_encoding": 0.9612,
+      "topk_agreement_source_hw_encoding": 0.6,
+      "r2_target_hw_encoding": -0.1077,
+      "spearman_target_hw_encoding": 0.9612,
+      "topk_agreement_target_hw_encoding": 0.6,
+      "random_topk_baseline": 0.0781,
+      "top_k": 5,
+      "per_bucket": [
+        {
+          "shape_str": "1024x768",
+          "n": 16,
+          "mean_measured": 450.784,
+          "r2": -56.6297,
+          "spearman": 0.4853
+        },
+        {
+          "shape_str": "4096x768",
+          "n": 32,
+          "mean_measured": 1132.178,
+          "r2": -7.9758,
+          "spearman": 0.824
+        },
+        {
+          "shape_str": "2048x1024",
+          "n": 16,
+          "mean_measured": 928.924,
+          "r2": -21.0325,
+          "spearman": 0.6529
+        }
+      ],
+      "sample_predictions": [
+        {
+          "shape": {
+            "n_rows": 1024,
+            "hidden_dim": 768
+          },
+          "config": {
+            "BLOCK_SIZE": 1024,
+            "num_warps": 4,
+            "num_stages": 1
+          },
+          "measured": 450.75,
+          "predicted_source_hw": 288.585,
+          "predicted_target_hw": 288.585
+        },
+        {
+          "shape": {
+            "n_rows": 4096,
+            "hidden_dim": 768
+          },
+          "config": {
+            "BLOCK_SIZE": 1024,
+            "num_warps": 4,
+            "num_stages": 1
+          },
+          "measured": 1189.62,
+          "predicted_source_hw": 740.747,
+          "predicted_target_hw": 740.747
+        },
+        {
+          "shape": {
+            "n_rows": 2048,
+            "hidden_dim": 1024
+          },
+          "config": {
+            "BLOCK_SIZE": 1024,
+            "num_warps": 4,
+            "num_stages": 1
+          },
+          "measured": 956.12,
+          "predicted_source_hw": 603.168,
+          "predicted_target_hw": 603.168
+        },
+        {
+          "shape": {
+            "n_rows": 4096,
+            "hidden_dim": 768
+          },
+          "config": {
+            "BLOCK_SIZE": 1024,
+            "num_warps": 4,
+            "num_stages": 1
+          },
+          "measured": 1207.59,
+          "predicted_source_hw": 740.747,
+          "predicted_target_hw": 740.747
+        },
+        {
+          "shape": {
+            "n_rows": 1024,
+            "hidden_dim": 768
+          },
+          "config": {
+            "BLOCK_SIZE": 2048,
+            "num_warps": 8,
+            "num_stages": 1
+          },
+          "measured": 456.57,
+          "predicted_source_hw": 304.239,
+          "predicted_target_hw": 304.239
+        },
+        {
+          "shape": {
+            "n_rows": 4096,
+            "hidden_dim": 768
+          },
+          "config": {
+            "BLOCK_SIZE": 2048,
+            "num_warps": 8,
+            "num_stages": 1
+          },
+          "measured": 1058.26,
+          "predicted_source_hw": 747.77,
+          "predicted_target_hw": 747.77
+        },
+        {
+          "shape": {
+            "n_rows": 2048,
+            "hidden_dim": 1024
+          },
+          "config": {
+            "BLOCK_SIZE": 2048,
+            "num_warps": 8,
+            "num_stages": 1
+          },
+          "measured": 887.76,
+          "predicted_source_hw": 605.264,
+          "predicted_target_hw": 605.264
+        },
+        {
+          "shape": {
+            "n_rows": 4096,
+            "hidden_dim": 768
+          },
+          "config": {
+            "BLOCK_SIZE": 2048,
+            "num_warps": 8,
+            "num_stages": 1
+          },
+          "measured": 1057.47,
+          "predicted_source_hw": 747.77,
+          "predicted_target_hw": 747.77
+        },
+        {
+          "shape": {
+            "n_rows": 1024,
+            "hidden_dim": 768
+          },
+          "config": {
+            "BLOCK_SIZE": 4096,
+            "num_warps": 16,
+            "num_stages": 1
+          },
+          "measured": 384.62,
+          "predicted_source_hw": 255.999,
+          "predicted_target_hw": 255.999
+        },
+        {
+          "shape": {
+            "n_rows": 4096,
+            "hidden_dim": 768
+          },
+          "config": {
+            "BLOCK_SIZE": 4096,
+            "num_warps": 16,
+            "num_stages": 1
+          },
+          "measured": 763.23,
+          "predicted_source_hw": 507.196,
+          "predicted_target_hw": 507.196
+        }
+      ]
+    },
+    {
+      "operator": "softmax",
+      "n_points": 64,
+      "source_gpu": "A100",
+      "target_gpu": "H100",
+      "r2_source_hw_encoding": 0.4631,
+      "spearman_source_hw_encoding": 0.9875,
+      "topk_agreement_source_hw_encoding": 0.6,
+      "r2_target_hw_encoding": 0.4631,
+      "spearman_target_hw_encoding": 0.9875,
+      "topk_agreement_target_hw_encoding": 0.6,
+      "random_topk_baseline": 0.0781,
+      "top_k": 5,
+      "per_bucket": [
+        {
+          "shape_str": "1024x512",
+          "n": 16,
+          "mean_measured": 292.498,
+          "r2": -5.1545,
+          "spearman": 0.8647
+        },
+        {
+          "shape_str": "2048x1024",
+          "n": 16,
+          "mean_measured": 852.799,
+          "r2": -3.1933,
+          "spearman": 0.9088
+        },
+        {
+          "shape_str": "4096x4096",
+          "n": 16,
+          "mean_measured": 2248.587,
+          "r2": -54.6883,
+          "spearman": 0.7853
+        },
+        {
+          "shape_str": "8192x1024",
+          "n": 16,
+          "mean_measured": 1608.397,
+          "r2": -1.875,
+          "spearman": 0.9794
+        }
+      ],
+      "sample_predictions": [
+        {
+          "shape": {
+            "n_rows": 1024,
+            "n_cols": 512
+          },
+          "config": {
+            "BLOCK_SIZE": 1024,
+            "num_warps": 4,
+            "num_stages": 1
+          },
+          "measured": 306.6,
+          "predicted_source_hw": 197.111,
+          "predicted_target_hw": 197.111
+        },
+        {
+          "shape": {
+            "n_rows": 2048,
+            "n_cols": 1024
+          },
+          "config": {
+            "BLOCK_SIZE": 1024,
+            "num_warps": 4,
+            "num_stages": 1
+          },
+          "measured": 966.7,
+          "predicted_source_hw": 587.737,
+          "predicted_target_hw": 587.737
+        },
+        {
+          "shape": {
+            "n_rows": 4096,
+            "n_cols": 4096
+          },
+          "config": {
+            "BLOCK_SIZE": 1024,
+            "num_warps": 4,
+            "num_stages": 1
+          },
+          "measured": 2344.56,
+          "predicted_source_hw": 1432.682,
+          "predicted_target_hw": 1432.682
+        },
+        {
+          "shape": {
+            "n_rows": 8192,
+            "n_cols": 1024
+          },
+          "config": {
+            "BLOCK_SIZE": 1024,
+            "num_warps": 4,
+            "num_stages": 1
+          },
+          "measured": 1877.64,
+          "predicted_source_hw": 1107.871,
+          "predicted_target_hw": 1107.871
+        },
+        {
+          "shape": {
+            "n_rows": 1024,
+            "n_cols": 512
+          },
+          "config": {
+            "BLOCK_SIZE": 2048,
+            "num_warps": 8,
+            "num_stages": 1
+          },
+          "measured": 283.55,
+          "predicted_source_hw": 178.299,
+          "predicted_target_hw": 178.299
+        },
+        {
+          "shape": {
+            "n_rows": 2048,
+            "n_cols": 1024
+          },
+          "config": {
+            "BLOCK_SIZE": 2048,
+            "num_warps": 8,
+            "num_stages": 1
+          },
+          "measured": 819.93,
+          "predicted_source_hw": 552.854,
+          "predicted_target_hw": 552.854
+        },
+        {
+          "shape": {
+            "n_rows": 4096,
+            "n_cols": 4096
+          },
+          "config": {
+            "BLOCK_SIZE": 2048,
+            "num_warps": 8,
+            "num_stages": 1
+          },
+          "measured": 2335.16,
+          "predicted_source_hw": 1447.802,
+          "predicted_target_hw": 1447.802
+        },
+        {
+          "shape": {
+            "n_rows": 8192,
+            "n_cols": 1024
+          },
+          "config": {
+            "BLOCK_SIZE": 2048,
+            "num_warps": 8,
+            "num_stages": 1
+          },
+          "measured": 1565.89,
+          "predicted_source_hw": 968.525,
+          "predicted_target_hw": 968.525
+        },
+        {
+          "shape": {
+            "n_rows": 1024,
+            "n_cols": 512
+          },
+          "config": {
+            "BLOCK_SIZE": 4096,
+            "num_warps": 8,
+            "num_stages": 1
+          },
+          "measured": 255.74,
+          "predicted_source_hw": 167.458,
+          "predicted_target_hw": 167.458
+        },
+        {
+          "shape": {
+            "n_rows": 2048,
+            "n_cols": 1024
+          },
+          "config": {
+            "BLOCK_SIZE": 4096,
+            "num_warps": 8,
+            "num_stages": 1
+          },
+          "measured": 733.3,
+          "predicted_source_hw": 481.373,
+          "predicted_target_hw": 481.373
+        }
+      ]
+    },
+    {
+      "operator": "layernorm",
+      "n_points": 64,
+      "source_gpu": "A100",
+      "target_gpu": "H100",
+      "r2_source_hw_encoding": -0.04,
+      "spearman_source_hw_encoding": 0.9415,
+      "topk_agreement_source_hw_encoding": 0.4,
+      "r2_target_hw_encoding": -0.04,
+      "spearman_target_hw_encoding": 0.9415,
+      "topk_agreement_target_hw_encoding": 0.4,
+      "random_topk_baseline": 0.0781,
+      "top_k": 5,
+      "per_bucket": [
+        {
+          "shape_str": "1024x768",
+          "n": 16,
+          "mean_measured": 415.433,
+          "r2": -22.958,
+          "spearman": 0.2176
+        },
+        {
+          "shape_str": "4096x768",
+          "n": 32,
+          "mean_measured": 1057.432,
+          "r2": -5.4952,
+          "spearman": 0.6891
+        },
+        {
+          "shape_str": "4096x1024",
+          "n": 16,
+          "mean_measured": 1276.294,
+          "r2": -9.4855,
+          "spearman": 0.6324
+        }
+      ],
+      "sample_predictions": [
+        {
+          "shape": {
+            "n_rows": 1024,
+            "hidden_dim": 768
+          },
+          "config": {
+            "BLOCK_SIZE": 1024,
+            "num_warps": 4,
+            "num_stages": 1
+          },
+          "measured": 433.97,
+          "predicted_source_hw": 282.282,
+          "predicted_target_hw": 282.282
+        },
+        {
+          "shape": {
+            "n_rows": 4096,
+            "hidden_dim": 768
+          },
+          "config": {
+            "BLOCK_SIZE": 1024,
+            "num_warps": 4,
+            "num_stages": 1
+          },
+          "measured": 1166.02,
+          "predicted_source_hw": 705.433,
+          "predicted_target_hw": 705.433
+        },
+        {
+          "shape": {
+            "n_rows": 4096,
+            "hidden_dim": 768
+          },
+          "config": {
+            "BLOCK_SIZE": 1024,
+            "num_warps": 4,
+            "num_stages": 1
+          },
+          "measured": 1155.52,
+          "predicted_source_hw": 705.433,
+          "predicted_target_hw": 705.433
+        },
+        {
+          "shape": {
+            "n_rows": 4096,
+            "hidden_dim": 1024
+          },
+          "config": {
+            "BLOCK_SIZE": 1024,
+            "num_warps": 4,
+            "num_stages": 1
+          },
+          "measured": 1403.91,
+          "predicted_source_hw": 858.398,
+          "predicted_target_hw": 858.398
+        },
+        {
+          "shape": {
+            "n_rows": 1024,
+            "hidden_dim": 768
+          },
+          "config": {
+            "BLOCK_SIZE": 2048,
+            "num_warps": 8,
+            "num_stages": 1
+          },
+          "measured": 415.02,
+          "predicted_source_hw": 281.461,
+          "predicted_target_hw": 281.461
+        },
+        {
+          "shape": {
+            "n_rows": 4096,
+            "hidden_dim": 768
+          },
+          "config": {
+            "BLOCK_SIZE": 2048,
+            "num_warps": 8,
+            "num_stages": 1
+          },
+          "measured": 968.6,
+          "predicted_source_hw": 663.396,
+          "predicted_target_hw": 663.396
+        },
+        {
+          "shape": {
+            "n_rows": 4096,
+            "hidden_dim": 768
+          },
+          "config": {
+            "BLOCK_SIZE": 2048,
+            "num_warps": 8,
+            "num_stages": 1
+          },
+          "measured": 968.43,
+          "predicted_source_hw": 663.396,
+          "predicted_target_hw": 663.396
+        },
+        {
+          "shape": {
+            "n_rows": 4096,
+            "hidden_dim": 1024
+          },
+          "config": {
+            "BLOCK_SIZE": 2048,
+            "num_warps": 8,
+            "num_stages": 1
+          },
+          "measured": 1224.15,
+          "predicted_source_hw": 800.665,
+          "predicted_target_hw": 800.665
+        },
+        {
+          "shape": {
+            "n_rows": 1024,
+            "hidden_dim": 768
+          },
+          "config": {
+            "BLOCK_SIZE": 4096,
+            "num_warps": 16,
+            "num_stages": 1
+          },
+          "measured": 336.0,
+          "predicted_source_hw": 228.125,
+          "predicted_target_hw": 228.125
+        },
+        {
+          "shape": {
+            "n_rows": 4096,
+            "hidden_dim": 768
+          },
+          "config": {
+            "BLOCK_SIZE": 4096,
+            "num_warps": 16,
+            "num_stages": 1
+          },
+          "measured": 631.63,
+          "predicted_source_hw": 397.19,
+          "predicted_target_hw": 397.19
+        }
+      ]
+    },
+    {
+      "operator": "cross_entropy",
+      "n_points": 64,
+      "source_gpu": "A100",
+      "target_gpu": "H100",
+      "r2_source_hw_encoding": 0.5035,
+      "spearman_source_hw_encoding": 0.9779,
+      "topk_agreement_source_hw_encoding": 0.4,
+      "r2_target_hw_encoding": 0.5035,
+      "spearman_target_hw_encoding": 0.9779,
+      "topk_agreement_target_hw_encoding": 0.4,
+      "random_topk_baseline": 0.0781,
+      "top_k": 5,
+      "per_bucket": [
+        {
+          "shape_str": "1024x50257",
+          "n": 16,
+          "mean_measured": 665.312,
+          "r2": 0.597,
+          "spearman": 0.9059
+        },
+        {
+          "shape_str": "2048x50257",
+          "n": 16,
+          "mean_measured": 740.301,
+          "r2": 0.5825,
+          "spearman": 0.8441
+        },
+        {
+          "shape_str": "2048x32000",
+          "n": 16,
+          "mean_measured": 1435.754,
+          "r2": -0.0017,
+          "spearman": 0.9147
+        },
+        {
+          "shape_str": "4096x32000",
+          "n": 16,
+          "mean_measured": 1621.214,
+          "r2": 0.0545,
+          "spearman": 0.7676
+        }
+      ],
+      "sample_predictions": [
+        {
+          "shape": {
+            "n_rows": 1024,
+            "n_cols": 50257
+          },
+          "config": {
+            "BLOCK_SIZE": 4096,
+            "num_warps": 8,
+            "num_stages": 1
+          },
+          "measured": 1196.2,
+          "predicted_source_hw": 676.826,
+          "predicted_target_hw": 676.826
+        },
+        {
+          "shape": {
+            "n_rows": 2048,
+            "n_cols": 50257
+          },
+          "config": {
+            "BLOCK_SIZE": 4096,
+            "num_warps": 8,
+            "num_stages": 1
+          },
+          "measured": 1348.04,
+          "predicted_source_hw": 722.761,
+          "predicted_target_hw": 722.761
+        },
+        {
+          "shape": {
+            "n_rows": 2048,
+            "n_cols": 32000
+          },
+          "config": {
+            "BLOCK_SIZE": 4096,
+            "num_warps": 8,
+            "num_stages": 1
+          },
+          "measured": 1578.1,
+          "predicted_source_hw": 1097.25,
+          "predicted_target_hw": 1097.25
+        },
+        {
+          "shape": {
+            "n_rows": 4096,
+            "n_cols": 32000
+          },
+          "config": {
+            "BLOCK_SIZE": 4096,
+            "num_warps": 8,
+            "num_stages": 1
+          },
+          "measured": 1754.03,
+          "predicted_source_hw": 1195.727,
+          "predicted_target_hw": 1195.727
+        },
+        {
+          "shape": {
+            "n_rows": 1024,
+            "n_cols": 50257
+          },
+          "config": {
+            "BLOCK_SIZE": 8192,
+            "num_warps": 16,
+            "num_stages": 1
+          },
+          "measured": 1218.78,
+          "predicted_source_hw": 740.152,
+          "predicted_target_hw": 740.152
+        },
+        {
+          "shape": {
+            "n_rows": 2048,
+            "n_cols": 50257
+          },
+          "config": {
+            "BLOCK_SIZE": 8192,
+            "num_warps": 16,
+            "num_stages": 1
+          },
+          "measured": 1355.18,
+          "predicted_source_hw": 820.209,
+          "predicted_target_hw": 820.209
+        },
+        {
+          "shape": {
+            "n_rows": 2048,
+            "n_cols": 32000
+          },
+          "config": {
+            "BLOCK_SIZE": 8192,
+            "num_warps": 16,
+            "num_stages": 1
+          },
+          "measured": 2000.4,
+          "predicted_source_hw": 1166.72,
+          "predicted_target_hw": 1166.72
+        },
+        {
+          "shape": {
+            "n_rows": 4096,
+            "n_cols": 32000
+          },
+          "config": {
+            "BLOCK_SIZE": 8192,
+            "num_warps": 16,
+            "num_stages": 1
+          },
+          "measured": 2262.55,
+          "predicted_source_hw": 1316.154,
+          "predicted_target_hw": 1316.154
+        },
+        {
+          "shape": {
+            "n_rows": 1024,
+            "n_cols": 50257
+          },
+          "config": {
+            "BLOCK_SIZE": 16384,
+            "num_warps": 16,
+            "num_stages": 1
+          },
+          "measured": 1217.24,
+          "predicted_source_hw": 741.571,
+          "predicted_target_hw": 741.571
+        },
+        {
+          "shape": {
+            "n_rows": 2048,
+            "n_cols": 50257
+          },
+          "config": {
+            "BLOCK_SIZE": 16384,
+            "num_warps": 16,
+            "num_stages": 1
+          },
+          "measured": 1354.34,
+          "predicted_source_hw": 826.269,
+          "predicted_target_hw": 826.269
+        }
+      ]
+    }
+  ]
+}
