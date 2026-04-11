@@ -230,7 +230,7 @@ def build_parser() -> argparse.ArgumentParser:
     triton_parser.add_argument(
         "--operator",
         default="matmul",
-        choices=["matmul", "rmsnorm", "softmax", "layernorm", "cross_entropy", "attention"],
+        choices=["matmul", "rmsnorm", "softmax", "layernorm", "cross_entropy", "attention", "rotary"],
         help="which Triton operator to search",
     )
     triton_parser.add_argument(
@@ -278,7 +278,7 @@ def build_parser() -> argparse.ArgumentParser:
     kb_parser.add_argument(
         "--operator",
         default="",
-        choices=["", "matmul", "rmsnorm", "softmax", "layernorm", "cross_entropy", "attention"],
+        choices=["", "matmul", "rmsnorm", "softmax", "layernorm", "cross_entropy", "attention", "rotary"],
         help="restrict to one operator, or leave empty for all",
     )
     kb_parser.add_argument(
@@ -305,7 +305,7 @@ def build_parser() -> argparse.ArgumentParser:
     ablation_parser.add_argument(
         "--operator",
         required=True,
-        choices=["matmul", "rmsnorm", "softmax", "layernorm", "cross_entropy", "attention"],
+        choices=["matmul", "rmsnorm", "softmax", "layernorm", "cross_entropy", "attention", "rotary"],
     )
     ablation_parser.add_argument("--gpu", default="A100")
     ablation_parser.add_argument("--trials", type=int, default=1,
@@ -323,6 +323,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="Use persistent Modal session (one warm container across all iterations)",
     )
     ablation_parser.add_argument("--output", default=".noeris/ablation-report.json")
+
+    kb_hf_parser = subparsers.add_parser(
+        "kernelbench-hf-coverage",
+        help="Probe the HuggingFace KernelBench dataset and report operator coverage",
+    )
+    kb_hf_parser.add_argument(
+        "--levels",
+        nargs="+",
+        type=int,
+        default=[1, 2, 3, 4],
+        help="Levels to probe (default all)",
+    )
+    kb_hf_parser.add_argument(
+        "--limit-per-level",
+        type=int,
+        default=None,
+        help="Optional cap on problems per level",
+    )
 
     train_parser = subparsers.add_parser(
         "train-cost-model",
@@ -599,6 +617,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "train-cost-model":
         return _run_train_cost_model(args)
 
+    if args.command == "kernelbench-hf-coverage":
+        return _run_kernelbench_hf_coverage(args)
+
     try:
         pipeline = build_pipeline(
             use_llm=args.llm,
@@ -615,6 +636,18 @@ def main(argv: list[str] | None = None) -> int:
         constraints=args.constraint,
     )
     print(json.dumps(pipeline.run_cycle_dict(topic), indent=2))
+    return 0
+
+
+def _run_kernelbench_hf_coverage(args) -> int:
+    """Probe the HuggingFace KernelBench dataset and report coverage."""
+    from .kernelbench_hf import fetch_and_report_coverage
+
+    report = fetch_and_report_coverage(
+        levels=args.levels,
+        limit_per_level=args.limit_per_level,
+    )
+    print(json.dumps(report, indent=2))
     return 0
 
 
@@ -884,6 +917,13 @@ def _parse_operator_shape(operator_name: str, shape_str: str) -> dict:
             "batch": int(parts[0]),
             "heads": int(parts[1]),
             "seq_len": int(parts[2]),
+            "head_dim": int(parts[3]),
+        }
+    elif operator_name == "rotary":
+        return {
+            "batch": int(parts[0]),
+            "seq": int(parts[1]),
+            "heads": int(parts[2]),
             "head_dim": int(parts[3]),
         }
     return {"raw": shape_str}
