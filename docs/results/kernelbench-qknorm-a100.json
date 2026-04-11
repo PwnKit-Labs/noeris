@@ -1,0 +1,289 @@
+{
+  "metadata": {
+    "hardware": "A100",
+    "operators": [
+      "attention"
+    ]
+  },
+  "fast_p_scores": {
+    "vs_eager": {
+      "1.0": {
+        "level_2": 0.333,
+        "level_3": 0.222,
+        "overall": 0.25
+      },
+      "1.5": {
+        "level_2": 0.0,
+        "level_3": 0.111,
+        "overall": 0.083
+      },
+      "2.0": {
+        "level_2": 0.0,
+        "level_3": 0.111,
+        "overall": 0.083
+      },
+      "3.0": {
+        "level_2": 0.0,
+        "level_3": 0.0,
+        "overall": 0.0
+      }
+    },
+    "vs_compile": {
+      "1.0": {
+        "level_2": 0.667,
+        "level_3": 0.222,
+        "overall": 0.333
+      },
+      "1.5": {
+        "level_2": 0.333,
+        "level_3": 0.111,
+        "overall": 0.167
+      },
+      "2.0": {
+        "level_2": 0.0,
+        "level_3": 0.111,
+        "overall": 0.083
+      },
+      "3.0": {
+        "level_2": 0.0,
+        "level_3": 0.0,
+        "overall": 0.0
+      }
+    }
+  },
+  "results": [
+    {
+      "problem_id": "kb_L2_attn_short_64",
+      "operator": "attention",
+      "level": 2,
+      "shape": {
+        "batch": 4,
+        "heads": 16,
+        "seq_len": 512,
+        "head_dim": 64,
+        "is_causal": false
+      },
+      "our_metric": 83.71,
+      "our_config_id": "m64_n128_w4_s3",
+      "pytorch_baseline": 73.74,
+      "compile_baseline": 46.4,
+      "speedup_vs_eager": 1.1352047735286142,
+      "speedup_vs_compile": 1.8040948275862068,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L2_attn_short_128",
+      "operator": "attention",
+      "level": 2,
+      "shape": {
+        "batch": 4,
+        "heads": 16,
+        "seq_len": 512,
+        "head_dim": 128,
+        "is_causal": false
+      },
+      "our_metric": 76.53,
+      "our_config_id": "m64_n128_w4_s3",
+      "pytorch_baseline": 95.38,
+      "compile_baseline": 61.37,
+      "speedup_vs_eager": 0.8023694694904593,
+      "speedup_vs_compile": 1.2470262343164413,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L2_attn_med_128",
+      "operator": "attention",
+      "level": 2,
+      "shape": {
+        "batch": 2,
+        "heads": 16,
+        "seq_len": 2048,
+        "head_dim": 128,
+        "is_causal": false
+      },
+      "our_metric": 121.12,
+      "our_config_id": "m128_n128_w8_s2",
+      "pytorch_baseline": 150.02,
+      "compile_baseline": 148.29,
+      "speedup_vs_eager": 0.8073590187974936,
+      "speedup_vs_compile": 0.8167779351271158,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L3_attn_long_64",
+      "operator": "attention",
+      "level": 3,
+      "shape": {
+        "batch": 1,
+        "heads": 16,
+        "seq_len": 4096,
+        "head_dim": 64,
+        "is_causal": false
+      },
+      "our_metric": 147.11,
+      "our_config_id": "m64_n128_w4_s3",
+      "pytorch_baseline": 169.0,
+      "compile_baseline": 150.66,
+      "speedup_vs_eager": 0.8704733727810652,
+      "speedup_vs_compile": 0.9764370104871898,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L3_attn_long_128",
+      "operator": "attention",
+      "level": 3,
+      "shape": {
+        "batch": 1,
+        "heads": 16,
+        "seq_len": 4096,
+        "head_dim": 128,
+        "is_causal": false
+      },
+      "our_metric": 159.45,
+      "our_config_id": "m128_n64_w8_s3",
+      "pytorch_baseline": 197.21,
+      "compile_baseline": 172.65,
+      "speedup_vs_eager": 0.8085289792606865,
+      "speedup_vs_compile": 0.9235447437011294,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L3_attn_llama7b",
+      "operator": "attention",
+      "level": 3,
+      "shape": {
+        "batch": 1,
+        "heads": 32,
+        "seq_len": 4096,
+        "head_dim": 128,
+        "is_causal": false
+      },
+      "our_metric": 160.78,
+      "our_config_id": "m128_n64_w8_s3",
+      "pytorch_baseline": 201.2,
+      "compile_baseline": 177.0,
+      "speedup_vs_eager": 0.7991053677932406,
+      "speedup_vs_compile": 0.908361581920904,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L3_attn_llama7b_causal",
+      "operator": "attention",
+      "level": 3,
+      "shape": {
+        "batch": 1,
+        "heads": 32,
+        "seq_len": 4096,
+        "head_dim": 128,
+        "is_causal": true
+      },
+      "our_metric": 76.42,
+      "our_config_id": "m128_n128_w8_s2",
+      "pytorch_baseline": 161.01,
+      "compile_baseline": 132.39,
+      "speedup_vs_eager": 0.47462890503695426,
+      "speedup_vs_compile": 0.5772339300551402,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L3_attn_mistral_causal",
+      "operator": "attention",
+      "level": 3,
+      "shape": {
+        "batch": 1,
+        "heads": 32,
+        "seq_len": 8192,
+        "head_dim": 128,
+        "is_causal": true
+      },
+      "our_metric": 81.49,
+      "our_config_id": "m128_n128_w8_s2",
+      "pytorch_baseline": 181.56,
+      "compile_baseline": 164.64,
+      "speedup_vs_eager": 0.44883234192553423,
+      "speedup_vs_compile": 0.4949586977648202,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L3_attn_gemma_local",
+      "operator": "attention",
+      "level": 3,
+      "shape": {
+        "batch": 1,
+        "heads": 16,
+        "seq_len": 4096,
+        "head_dim": 256,
+        "is_causal": true,
+        "window_size": 1024
+      },
+      "our_metric": 9.72,
+      "our_config_id": "m64_n64_w4_s2",
+      "pytorch_baseline": 9.15,
+      "compile_baseline": 7.01,
+      "speedup_vs_eager": 1.0622950819672132,
+      "speedup_vs_compile": 1.3865905848787448,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L3_attn_gemma_slide_causal",
+      "operator": "attention",
+      "level": 3,
+      "shape": {
+        "batch": 2,
+        "heads": 16,
+        "seq_len": 2048,
+        "head_dim": 128,
+        "is_causal": true,
+        "window_size": 1024
+      },
+      "our_metric": 31.54,
+      "our_config_id": "m128_n32_w4_s3",
+      "pytorch_baseline": 14.41,
+      "compile_baseline": 13.58,
+      "speedup_vs_eager": 2.1887578070784177,
+      "speedup_vs_compile": 2.3225331369661264,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L3_attn_gemma_qknorm_local",
+      "operator": "attention",
+      "level": 3,
+      "shape": {
+        "batch": 1,
+        "heads": 16,
+        "seq_len": 4096,
+        "head_dim": 256,
+        "is_causal": true,
+        "window_size": 1024,
+        "use_qk_norm": true
+      },
+      "our_metric": 3.6,
+      "our_config_id": "m64_n64_w4_s2",
+      "pytorch_baseline": 7.29,
+      "compile_baseline": 6.82,
+      "speedup_vs_eager": 0.4938271604938272,
+      "speedup_vs_compile": 0.5278592375366569,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L3_attn_gemma_qknorm_global",
+      "operator": "attention",
+      "level": 3,
+      "shape": {
+        "batch": 1,
+        "heads": 16,
+        "seq_len": 4096,
+        "head_dim": 256,
+        "is_causal": true,
+        "use_qk_norm": true
+      },
+      "our_metric": 18.56,
+      "our_config_id": "m64_n64_w4_s2",
+      "pytorch_baseline": 78.04,
+      "compile_baseline": 95.98,
+      "speedup_vs_eager": 0.23782675550999485,
+      "speedup_vs_compile": 0.19337361950406332,
+      "correct": true
+    }
+  ]
+}
