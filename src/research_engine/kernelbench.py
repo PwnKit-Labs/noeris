@@ -163,22 +163,25 @@ class KernelBenchReport:
             for level, problems in by_level.items():
                 if not problems:
                     continue
+                # fast_p uses strict > to match upstream KernelBench
+                # (src/kernelbench/score.py: `speedup > p`). Previously used
+                # `>=`, which double-counted ties and inflated our numbers.
                 eager_passing = sum(
-                    1 for r in problems if r.correct and r.speedup >= p
+                    1 for r in problems if r.correct and r.speedup > p
                 )
                 compile_passing = sum(
                     1 for r in problems
-                    if r.correct and r.compile_speedup >= p and r.compile_baseline_metric > 0
+                    if r.correct and r.compile_speedup > p and r.compile_baseline_metric > 0
                 )
                 scores["vs_eager"][p][f"level_{level}"] = round(eager_passing / len(problems), 3)
                 scores["vs_compile"][p][f"level_{level}"] = round(compile_passing / len(problems), 3)
 
             all_problems = self.results
             if all_problems:
-                eager_all = sum(1 for r in all_problems if r.correct and r.speedup >= p)
+                eager_all = sum(1 for r in all_problems if r.correct and r.speedup > p)
                 compile_all = sum(
                     1 for r in all_problems
-                    if r.correct and r.compile_speedup >= p and r.compile_baseline_metric > 0
+                    if r.correct and r.compile_speedup > p and r.compile_baseline_metric > 0
                 )
                 scores["vs_eager"][p]["overall"] = round(eager_all / len(all_problems), 3)
                 scores["vs_compile"][p]["overall"] = round(compile_all / len(all_problems), 3)
