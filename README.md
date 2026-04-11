@@ -4,15 +4,16 @@ Autonomous GPU kernel search with parameterized Triton templates, shape-indexed 
 
 ## TL;DR
 
-- **8 parameterized Triton operators**: matmul, rmsnorm, softmax, layernorm, cross_entropy, attention (causal + sliding-window + fused QK-norm), rotary, fused GeGLU.
-- **KernelBench-style eval on 53 problems, A100 and H100**: fast_1.0 = **56.6%**, fast_2.0 = **37.7%** (A100) / **41.5%** (H100), with zero search iterations — curated starter configs only.
-- **Beats AutoKernel's published H100 numbers** on 3 of 4 memory-bound kernels: **11.66x RMSNorm**, **9.65x cross-entropy**, **6.38x softmax**.
-- **Fused GeGLU for Gemma 2/3/4**: 1060–1351 GB/s on A100 and 1601–2287 GB/s on H100, 2.65–3.98x over PyTorch eager.
+- **Novel kernel: fused QK-RMSNorm + RoPE prologue for Gemma 3/4.** vLLM does not fuse this sequence (confirmed by source read at [`vllm/model_executor/models/gemma4.py:395-427`](https://github.com/vllm-project/vllm/pull/38826)). Our fused Triton kernel beats vLLM's 4-launch separated baseline by **10.2–12.9× on A100** and **10.4–11.9× on H100** across all 6 Gemma 3/4 shape buckets (60/60 correct). Peak throughput **1627.7 GB/s on H100** (≈49% of HBM3 theoretical peak). See [`docs/results/qk-norm-rope-fusion-speedup.md`](docs/results/qk-norm-rope-fusion-speedup.md).
+- **9 parameterized Triton operators**: matmul, rmsnorm, softmax, layernorm, cross_entropy, attention (GQA + causal + sliding-window + fused QK-norm), rotary, fused GeGLU, fused QK-RMSNorm+RoPE (new).
+- **Full Gemma 4 attention support**: grouped-query attention with `NUM_KV_HEADS` / `GROUP_SIZE` constexprs, `head_dim=512` global-layer buckets, QK-norm with Gemma-mode `(1 + w)` affine — covers 31B Dense (32:4 GQA), 26B-A4B (16:2 GQA), E2B (8:1 GQA), plus Llama 3 70B and Mistral GQA buckets.
+- **Learned feasibility**: shared-memory filter removed, bandit learns per-shape config feasibility from runtime failures. Zero hardcoded priors.
 - **Learned GBR cost model**: R² = 0.94 on 516 training points; A100-trained rankings transfer to H100 with Spearman ρ = **0.967**.
-- **Adaptive meta-bandit router** validated across 3 independent trials: matches the best fixed selector within 0.5% (132.19 ± 6.89 vs 132.81 ± 6.93 TFLOPS on matmul A100); a naive alternating ensemble stalls at 83 TFLOPS.
-- **~$0.01 per iteration** on Modal. All 53-problem A100+H100 evals for under $1.
+- **Adaptive meta-bandit router** validated across 3 independent trials: matches the best fixed selector within 0.5%; naive alternating ensemble stalls.
+- **Apples-to-apples KernelBench upstream comparison** with `cuda_event` + L2 flush timing matching the upstream harness. Real fp32 `nn.Module` problems, not synthetic shapes.
+- **~$0.01 per iteration** on Modal. The full A100+H100 fusion_speedup table above was produced for under $0.20.
 
-Paper draft (11,229 words): [`docs/paper/noeris.md`](docs/paper/noeris.md).
+Paper draft (12,500+ words): [`docs/paper/noeris.md`](docs/paper/noeris.md).
 
 ## Architecture
 

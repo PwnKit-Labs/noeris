@@ -1,0 +1,277 @@
+{
+  "gpu": "A100",
+  "shapes": 6,
+  "configs": 5,
+  "results": [
+    {
+      "config_id": "bs32_w2_s1",
+      "shape_name": "gemma3_local_1024",
+      "correct": true,
+      "ms": 0.2068,
+      "gb_per_s": 669.16,
+      "fusion_speedup": 10.634,
+      "max_err": 0.015625
+    },
+    {
+      "config_id": "bs32_w2_s1",
+      "shape_name": "gemma4_e2b_local",
+      "correct": true,
+      "ms": 0.0707,
+      "gb_per_s": 593.65,
+      "fusion_speedup": 10.232,
+      "max_err": 0.023438
+    },
+    {
+      "config_id": "bs32_w2_s1",
+      "shape_name": "gemma4_26b_a4b_local",
+      "correct": true,
+      "ms": 0.1592,
+      "gb_per_s": 658.53,
+      "fusion_speedup": 10.489,
+      "max_err": 0.015625
+    },
+    {
+      "config_id": "bs32_w2_s1",
+      "shape_name": "gemma4_26b_a4b_global",
+      "correct": true,
+      "ms": 0.2575,
+      "gb_per_s": 618.89,
+      "fusion_speedup": 9.165,
+      "max_err": 0.015625
+    },
+    {
+      "config_id": "bs32_w2_s1",
+      "shape_name": "gemma4_31b_local",
+      "correct": true,
+      "ms": 0.3021,
+      "gb_per_s": 680.36,
+      "fusion_speedup": 10.51,
+      "max_err": 0.015625
+    },
+    {
+      "config_id": "bs32_w2_s1",
+      "shape_name": "gemma4_31b_global",
+      "correct": true,
+      "ms": 0.3932,
+      "gb_per_s": 789.34,
+      "fusion_speedup": 10.983,
+      "max_err": 0.019531
+    },
+    {
+      "config_id": "bs64_w4_s1",
+      "shape_name": "gemma3_local_1024",
+      "correct": true,
+      "ms": 0.1935,
+      "gb_per_s": 715.19,
+      "fusion_speedup": 10.651,
+      "max_err": 0.015625
+    },
+    {
+      "config_id": "bs64_w4_s1",
+      "shape_name": "gemma4_e2b_local",
+      "correct": true,
+      "ms": 0.0645,
+      "gb_per_s": 650.19,
+      "fusion_speedup": 9.635,
+      "max_err": 0.015625
+    },
+    {
+      "config_id": "bs64_w4_s1",
+      "shape_name": "gemma4_26b_a4b_local",
+      "correct": true,
+      "ms": 0.1475,
+      "gb_per_s": 711.12,
+      "fusion_speedup": 10.368,
+      "max_err": 0.015625
+    },
+    {
+      "config_id": "bs64_w4_s1",
+      "shape_name": "gemma4_26b_a4b_global",
+      "correct": true,
+      "ms": 0.1761,
+      "gb_per_s": 904.95,
+      "fusion_speedup": 12.401,
+      "max_err": 0.015625
+    },
+    {
+      "config_id": "bs64_w4_s1",
+      "shape_name": "gemma4_31b_local",
+      "correct": true,
+      "ms": 0.2816,
+      "gb_per_s": 729.84,
+      "fusion_speedup": 10.56,
+      "max_err": 0.015625
+    },
+    {
+      "config_id": "bs64_w4_s1",
+      "shape_name": "gemma4_31b_global",
+      "correct": true,
+      "ms": 0.3354,
+      "gb_per_s": 925.52,
+      "fusion_speedup": 12.849,
+      "max_err": 0.03125
+    },
+    {
+      "config_id": "bs128_w4_s2",
+      "shape_name": "gemma3_local_1024",
+      "correct": true,
+      "ms": 0.1935,
+      "gb_per_s": 715.19,
+      "fusion_speedup": 10.69,
+      "max_err": 0.015625
+    },
+    {
+      "config_id": "bs128_w4_s2",
+      "shape_name": "gemma4_e2b_local",
+      "correct": true,
+      "ms": 0.0645,
+      "gb_per_s": 650.19,
+      "fusion_speedup": 9.579,
+      "max_err": 0.015625
+    },
+    {
+      "config_id": "bs128_w4_s2",
+      "shape_name": "gemma4_26b_a4b_local",
+      "correct": true,
+      "ms": 0.149,
+      "gb_per_s": 703.79,
+      "fusion_speedup": 10.251,
+      "max_err": 0.015625
+    },
+    {
+      "config_id": "bs128_w4_s2",
+      "shape_name": "gemma4_26b_a4b_global",
+      "correct": true,
+      "ms": 0.1761,
+      "gb_per_s": 904.95,
+      "fusion_speedup": 12.404,
+      "max_err": 0.023438
+    },
+    {
+      "config_id": "bs128_w4_s2",
+      "shape_name": "gemma4_31b_local",
+      "correct": true,
+      "ms": 0.2811,
+      "gb_per_s": 731.17,
+      "fusion_speedup": 11.295,
+      "max_err": 0.015625
+    },
+    {
+      "config_id": "bs128_w4_s2",
+      "shape_name": "gemma4_31b_global",
+      "correct": true,
+      "ms": 0.4178,
+      "gb_per_s": 742.91,
+      "fusion_speedup": 11.028,
+      "max_err": 0.015625
+    },
+    {
+      "config_id": "bs128_w8_s1",
+      "shape_name": "gemma3_local_1024",
+      "correct": true,
+      "ms": 0.3686,
+      "gb_per_s": 375.47,
+      "fusion_speedup": 5.61,
+      "max_err": 0.015625
+    },
+    {
+      "config_id": "bs128_w8_s1",
+      "shape_name": "gemma4_e2b_local",
+      "correct": true,
+      "ms": 0.1137,
+      "gb_per_s": 369.03,
+      "fusion_speedup": 5.441,
+      "max_err": 0.015625
+    },
+    {
+      "config_id": "bs128_w8_s1",
+      "shape_name": "gemma4_26b_a4b_local",
+      "correct": true,
+      "ms": 0.2796,
+      "gb_per_s": 375.1,
+      "fusion_speedup": 5.473,
+      "max_err": 0.015625
+    },
+    {
+      "config_id": "bs128_w8_s1",
+      "shape_name": "gemma4_26b_a4b_global",
+      "correct": true,
+      "ms": 0.2294,
+      "gb_per_s": 694.87,
+      "fusion_speedup": 9.527,
+      "max_err": 0.015625
+    },
+    {
+      "config_id": "bs128_w8_s1",
+      "shape_name": "gemma4_31b_local",
+      "correct": true,
+      "ms": 0.5417,
+      "gb_per_s": 379.41,
+      "fusion_speedup": 5.487,
+      "max_err": 0.015625
+    },
+    {
+      "config_id": "bs128_w8_s1",
+      "shape_name": "gemma4_31b_global",
+      "correct": true,
+      "ms": 0.4419,
+      "gb_per_s": 702.45,
+      "fusion_speedup": 9.753,
+      "max_err": 0.023438
+    },
+    {
+      "config_id": "bs256_w8_s2",
+      "shape_name": "gemma3_local_1024",
+      "correct": true,
+      "ms": 0.3625,
+      "gb_per_s": 381.84,
+      "fusion_speedup": 5.668,
+      "max_err": 0.019531
+    },
+    {
+      "config_id": "bs256_w8_s2",
+      "shape_name": "gemma4_e2b_local",
+      "correct": true,
+      "ms": 0.1106,
+      "gb_per_s": 379.28,
+      "fusion_speedup": 5.583,
+      "max_err": 0.015625
+    },
+    {
+      "config_id": "bs256_w8_s2",
+      "shape_name": "gemma4_26b_a4b_local",
+      "correct": true,
+      "ms": 0.2729,
+      "gb_per_s": 384.25,
+      "fusion_speedup": 5.61,
+      "max_err": 0.015625
+    },
+    {
+      "config_id": "bs256_w8_s2",
+      "shape_name": "gemma4_26b_a4b_global",
+      "correct": true,
+      "ms": 0.2304,
+      "gb_per_s": 691.79,
+      "fusion_speedup": 9.48,
+      "max_err": 0.015625
+    },
+    {
+      "config_id": "bs256_w8_s2",
+      "shape_name": "gemma4_31b_local",
+      "correct": true,
+      "ms": 0.5335,
+      "gb_per_s": 385.23,
+      "fusion_speedup": 5.571,
+      "max_err": 0.015625
+    },
+    {
+      "config_id": "bs256_w8_s2",
+      "shape_name": "gemma4_31b_global",
+      "correct": true,
+      "ms": 0.4439,
+      "gb_per_s": 699.21,
+      "fusion_speedup": 9.71,
+      "max_err": 0.03125
+    }
+  ]
+}

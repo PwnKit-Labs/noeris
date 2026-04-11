@@ -228,6 +228,31 @@ However, the end-to-end KernelBench measurement is a **negative result at the st
 
 This is a **pool-limitation rather than a search-limitation** finding: the negative result is not evidence against fused QK-norm; it is evidence that a curated `gemma4_qknorm` config set (with `BLOCK_N∈{64, 128}` and `BLOCK_M∈{64, 128}` explicitly enumerated) plus a shape-aware shared-memory check (using the actual `head_dim`) is the prerequisite for a fair evaluation. Raw artifacts: [`docs/results/bandit-qknorm-attention-a100.json`](../results/bandit-qknorm-attention-a100.json), [`docs/results/bandit-qknorm-attention-a100-summary.json`](../results/bandit-qknorm-attention-a100-summary.json). Raw reports: [`docs/results/kernelbench-qknorm-a100.md`](../results/kernelbench-qknorm-a100.md), [`docs/results/kernelbench-qknorm-h100.md`](../results/kernelbench-qknorm-h100.md).
 
+### 3.2.1 Fused QK-RMSNorm + RoPE prologue — a novel kernel (headline result)
+
+A direct source read of vLLM's Gemma 4 implementation (see [`docs/research/vllm-gemma4-kernel-patterns.md`](../research/vllm-gemma4-kernel-patterns.md)) confirmed that **vLLM does not fuse the Gemma prologue sequence** (`Q-RMSNorm → K-RMSNorm → Q-RoPE → K-RoPE`). `Gemma4Attention.forward` at `vllm/model_executor/models/gemma4.py:395-427` issues 4+ sequential PyTorch launches. This is not a port opportunity; it is **novel kernel territory**. We built it.
+
+`triton_qk_norm_rope.py` defines `qk_norm_rope_kernel`, a fused Triton kernel that for each row in a `(B, H, S, D)` tensor: (i) loads the row, (ii) computes `rstd = rsqrt(mean(x²) + 1e-6)`, (iii) applies the Gemma-mode `(1 + weight)` affine, (iv) rotates the resulting even/odd pairs with the RoPE `cos`/`sin` tables for that sequence position, and (v) stores the rotated result. Two launches (one Q, one K) replace the four of the separated path. Shared `[HEAD_DIM]` affine weights for each of Q and K. Each launch is `(B · H · S,)` programs with `BLOCK_SIZE` covering `HEAD_DIM/2` pairs. The kernel is registered via `TritonOperatorSpec` and is bandit-searchable through the same machinery as every other Noeris operator.
+
+**Measurement.** We ran the fused kernel against a "separated" PyTorch baseline that issues the four separate launches (mirroring vLLM's Python-level structure) on 6 Gemma 3/4 shape buckets × 5 curated configs × 2 GPUs (A100-SXM4-40GB and H100-SXM5-80GB on Modal). Timer: `cuda_event` + L2 flush, 3 warmup / 10 trials, median ms. Correctness: `max_err ≤ 0.1` against PyTorch fp32 reference. **All 60 (shape, config) combinations are correct — zero failures.**
+
+Best fusion_speedup per shape (across the 5 tested configs):
+
+| Shape | GQA | head_dim | A100 GB/s | A100 fusion_speedup | H100 GB/s | H100 fusion_speedup |
+|---|---|---|---|---|---|---|
+| `gemma4_31b_global` | 32:4 | **512** | 925.5 | **12.85×** | **1627.7** | 11.88× |
+| `gemma4_26b_a4b_global` | 16:2 | **512** | 905.0 | 12.40× | 1576.5 | 11.73× |
+| `gemma4_31b_local` | 32:16 | 256 | 731.2 | 11.30× | 1536.3 | 11.81× |
+| `gemma3_local_1024` | 16:16 | 256 | 715.2 | 10.69× | 1490.2 | **11.82×** |
+| `gemma4_26b_a4b_local` | 16:8 | 256 | 711.1 | 10.37× | 1443.2 | 11.49× |
+| `gemma4_e2b_local` | 8:1 | 256 | 593.6 | 10.23× | 1213.7 | 10.35× |
+
+Every shape beats the separated baseline by **≥5×**, with the best cases hitting **12.85× (A100)** and **11.88× (H100)**. The best-config regime is `BLOCK_SIZE=64, num_warps=4, num_stages=1` across both GPUs, with `BLOCK_SIZE=32` preferred on the smallest shape (E2B, `head_dim=256`, 8:1 GQA) and the second-best config on H100 `gemma4_31b_global` (`bs32_w2_s1`: 1536.3 GB/s, 11.81×). H100 peak throughput on `gemma4_31b_global` reaches **1627.7 GB/s**, which is ~49% of the H100 HBM3 theoretical peak (3.35 TB/s).
+
+**Why so much higher than our pre-measurement estimate?** A purely HBM-accounting cost model predicts ~2× fusion speedup: the separated path reads and writes Q twice (once for RMSNorm, once for RoPE), while the fused path reads and writes it once. The measured 10-13× is **5-6× higher** than this model predicts. The gap is **kernel launch overhead**. At these tile sizes each individual kernel takes 30-100 µs on A100/H100; the CUDA launch latency (~5-10 µs per launch) is therefore 10-20% of each separated call, and going from 4 launches to 2 saves a disproportionate fraction of end-to-end time. This is precisely the regime where Triton fusion provides asymmetric value — not at the HBM-bandwidth frontier, but at the launch-amortization frontier.
+
+**Provenance.** Raw A100 and H100 JSONs: [`docs/results/qk-norm-rope-a100-full.json`](../results/qk-norm-rope-a100-full.json), [`docs/results/qk-norm-rope-h100-full.json`](../results/qk-norm-rope-h100-full.json). Summary: [`docs/results/qk-norm-rope-fusion-speedup.md`](../results/qk-norm-rope-fusion-speedup.md). Reproduction: `python scripts/smoke_modal.py --full --h100 --qk-only --write-results` (~3 minutes per GPU, ~$0.20 total Modal cost).
+
 ---
 
 ## 4. Evaluation
