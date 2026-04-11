@@ -153,6 +153,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="max runs to compare",
     )
 
+    history_brief_parser = subparsers.add_parser(
+        "history-brief",
+        help="render a human-readable history summary across runs",
+    )
+    history_brief_parser.add_argument(
+        "--benchmark-id",
+        default="",
+        help="optional benchmark id filter",
+    )
+    history_brief_parser.add_argument(
+        "--topic",
+        default="",
+        help="optional topic filter",
+    )
+    history_brief_parser.add_argument(
+        "--limit",
+        type=int,
+        default=5,
+        help="max runs to compare",
+    )
+
     show_run_parser = subparsers.add_parser("show-run", help="show a persisted research run")
     show_run_parser.add_argument("run_id", help="identifier of the run to show")
 
@@ -429,6 +450,16 @@ def main(argv: list[str] | None = None) -> int:
                     limit=args.limit,
                 ),
                 indent=2,
+            )
+        )
+        return 0
+    if args.command == "history-brief":
+        store = JsonFileRunStore()
+        print(
+            store.render_history_brief(
+                benchmark_id=args.benchmark_id or None,
+                topic=args.topic or None,
+                limit=args.limit,
             )
         )
         return 0

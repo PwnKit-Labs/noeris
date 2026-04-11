@@ -125,6 +125,19 @@ class CliTests(unittest.TestCase):
         self.assertEqual(history_payload["benchmark_id"], "tool-use-reliability")
         self.assertEqual(history_payload["run_count"], 2)
 
+    def test_history_brief_command_renders_markdown_summary(self) -> None:
+        with _temp_workspace():
+            _run_cli_json("benchmark-run", "tool-use-reliability")
+            _run_cli_json("benchmark-run", "tool-use-reliability")
+            exit_code, output = _run_cli(
+                "history-brief",
+                "--benchmark-id",
+                "tool-use-reliability",
+            )
+        self.assertEqual(exit_code, 0)
+        self.assertIn("# History Brief", output)
+        self.assertIn("Benchmark", output)
+
     def test_export_run_command_writes_bundle(self) -> None:
         with _temp_workspace() as temp_dir:
             exit_code, payload = _run_cli_json("run", "--topic", "memory routing")

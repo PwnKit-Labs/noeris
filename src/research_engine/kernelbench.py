@@ -475,80 +475,86 @@ def evaluate_kernelbench(
     gpu: str = "A100",
     max_configs_per_problem: int = 8,
 ) -> KernelBenchReport:
-    """Run KernelBench-style evaluation across one or all supported operators."""
+    """Run KernelBench-style evaluation across one or all supported operators.
+
+    Uses a single ModalBenchmarkSession to amortize cold start across all
+    operators — one warm container handles the full eval instead of
+    spawning a fresh ``modal run`` per operator.
+    """
     from .triton_operators import REGISTRY
-    from .modal_runner import run_benchmark_batch_modal_generic, _extract_json_object
+    from .modal_session import ModalBenchmarkSession
 
     operators = [operator] if operator else list(KERNELBENCH_SUBSET.keys())
     report = KernelBenchReport(metadata={"hardware": gpu, "operators": operators})
 
-    for op_name in operators:
-        if op_name not in KERNELBENCH_SUBSET:
-            continue
-        spec = REGISTRY.get(op_name)
-        problems = KERNELBENCH_SUBSET[op_name]
-        configs = spec.curated_configs[:max_configs_per_problem]
+    with ModalBenchmarkSession(gpu=gpu, timeout_seconds=900) as session:
+        for op_name in operators:
+            if op_name not in KERNELBENCH_SUBSET:
+                continue
+            spec = REGISTRY.get(op_name)
+            problems = KERNELBENCH_SUBSET[op_name]
+            configs = spec.curated_configs[:max_configs_per_problem]
 
-        # Build script with baseline injection
-        script = build_benchmark_script_with_baseline(op_name, problems, configs)
-        batch = run_benchmark_batch_modal_generic(benchmark_script=script, gpu=gpu)
+            # Build script with baseline injection
+            script = build_benchmark_script_with_baseline(op_name, problems, configs)
+            batch = session.run_batch(script)
 
-        if not batch.success:
-            continue
+            if not batch.success:
+                continue
 
-        # pytorch_baselines and compile_baselines were stashed in batch.extra
-        pytorch_baselines = (batch.extra or {}).get("pytorch_baselines", [])
-        compile_baselines = (batch.extra or {}).get("compile_baselines", [])
-        baselines = {
-            b["shape_name"]: b.get("tflops", 0)
-            for b in pytorch_baselines
-        }
-        compile_map = {
-            b["shape_name"]: b.get("tflops", 0)
-            for b in compile_baselines
-            if "tflops" in b
-        }
+            # pytorch_baselines and compile_baselines were stashed in batch.extra
+            pytorch_baselines = (batch.extra or {}).get("pytorch_baselines", [])
+            compile_baselines = (batch.extra or {}).get("compile_baselines", [])
+            baselines = {
+                b["shape_name"]: b.get("tflops", 0)
+                for b in pytorch_baselines
+            }
+            compile_map = {
+                b["shape_name"]: b.get("tflops", 0)
+                for b in compile_baselines
+                if "tflops" in b
+            }
 
-        # Per problem, find our best config
-        for problem in problems:
-            pid = problem["id"]
-            level = problem["level"]
-            shape = {k: v for k, v in problem.items() if k not in ("id", "level")}
+            # Per problem, find our best config
+            for problem in problems:
+                pid = problem["id"]
+                level = problem["level"]
+                shape = {k: v for k, v in problem.items() if k not in ("id", "level")}
 
-            best_metric = 0.0
-            best_config_id = ""
-            correct = False
-            for config_result in batch.config_results:
-                cid = config_result.get("config_id", "")
-                for sr in config_result.get("results", []):
-                    if sr.get("shape_name") != pid:
-                        continue
-                    if sr.get("correct") and sr.get("tflops"):
-                        if sr["tflops"] > best_metric:
-                            best_metric = sr["tflops"]
-                            best_config_id = cid
-                            correct = True
+                best_metric = 0.0
+                best_config_id = ""
+                correct = False
+                for config_result in batch.config_results:
+                    cid = config_result.get("config_id", "")
+                    for sr in config_result.get("results", []):
+                        if sr.get("shape_name") != pid:
+                            continue
+                        if sr.get("correct") and sr.get("tflops"):
+                            if sr["tflops"] > best_metric:
+                                best_metric = sr["tflops"]
+                                best_config_id = cid
+                                correct = True
 
-            baseline = baselines.get(pid, 0)
-            compile_baseline = compile_map.get(pid, 0)
-            speedup = best_metric / baseline if baseline > 0 else 0
-            compile_speedup = (
-                best_metric / compile_baseline if compile_baseline > 0 else 0
-            )
+                baseline = baselines.get(pid, 0)
+                compile_baseline = compile_map.get(pid, 0)
+                speedup = best_metric / baseline if baseline > 0 else 0
+                compile_speedup = (
+                    best_metric / compile_baseline if compile_baseline > 0 else 0
+                )
 
-            report.results.append(ProblemResult(
-                problem_id=pid,
-                operator=op_name,
-                level=level,
-                shape=shape,
-                our_best_metric=best_metric,
-                our_best_config_id=best_config_id,
-                pytorch_baseline_metric=baseline,
-                compile_baseline_metric=compile_baseline,
-                speedup=speedup,
-                compile_speedup=compile_speedup,
-                correct=correct,
-            ))
+                report.results.append(ProblemResult(
+                    problem_id=pid,
+                    operator=op_name,
+                    level=level,
+                    shape=shape,
+                    our_best_metric=best_metric,
+                    our_best_config_id=best_config_id,
+                    pytorch_baseline_metric=baseline,
+                    compile_baseline_metric=compile_baseline,
+                    speedup=speedup,
+                    compile_speedup=compile_speedup,
+                    correct=correct,
+                ))
 
     report.compute_fast_p()
     return report
