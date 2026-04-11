@@ -6,13 +6,13 @@
 
 ## Abstract
 
-We present Noeris, an autonomous GPU kernel optimization system built around three core design decisions that differentiate it from existing LLM-driven approaches (AutoKernel, KernelSkill, CUDA-L1, CUDA Agent, KernelFoundry): **(1)** parameterized kernel templates instead of free-form source rewriting, **(2)** a shape-indexed cross-run configuration database keyed by `(operator, shape_bucket, hardware)` that persists winning configurations across sessions, and **(3)** two complementary selectors — a gradient-boosted cost model and a multi-armed bandit — that operate on the database to filter and rank LLM-proposed configurations before expensive GPU evaluation.
+We present Noeris, an autonomous GPU kernel optimization system with three distinguishing properties relative to existing LLM-driven approaches: **(1)** parameterized kernel templates (no free-form source rewriting), **(2)** a shape-indexed cross-run configuration database keyed by `(operator, shape_bucket, hardware)` that persists winning configurations across sessions, and **(3)** complementary selectors — a gradient-boosted cost model and a multi-armed bandit — that rank LLM-proposed configurations before GPU evaluation.
 
-The system now covers eight operators (matmul, rmsnorm, softmax, layernorm, cross_entropy, attention with optional causal masking, rotary position embedding, and a fused GeGLU kernel targeting Gemma 2/3/4 MLP blocks) and is evaluated across 53 shape-parameterized problems on NVIDIA A100 and H100 via Modal. Using only curated starter configs with no search iterations, Noeris achieves **fast₁.₀ = 56.6% vs PyTorch eager**. On memory-bound kernels, we match or exceed AutoKernel's published H100 speedups: **11.66× RMSNorm**, **9.65× Cross-entropy**, **6.38× Softmax**.
+The system covers eight operators (matmul, rmsnorm, softmax, layernorm, cross_entropy, attention with sliding-window support, rotary embedding, and fused GeGLU for Gemma 2/3/4) and is evaluated across 53 shape-parameterized problems spanning 318 tests on NVIDIA A100 and H100. Using only curated starter configs, Noeris achieves **fast₁.₀ = 56.6% vs PyTorch eager** and matches or exceeds AutoKernel's published H100 speedups on memory-bound kernels: **11.66× RMSNorm**, **9.65× Cross-entropy**, **6.38× Softmax**.
 
-The central technical contribution — that the learned cost model improves search efficiency — is empirically validated. In a controlled ablation with curated configs disabled (so the cost model must carry the load), cost-model-filtered selection outperforms unfiltered grid search by **+37.35% on cross_entropy**, **+5.26% on softmax**, **+0.17% on rmsnorm**, and **+0.15% on layernorm** on A100 after 6 iterations. A three-way comparison (baseline vs. cost model vs. multi-armed bandit) reveals that the two selectors are **complementary rather than redundant**: the cost model leads on attention (+66%) and softmax (+5%), the bandit leads on matmul (+134% vs. +45% for cost model), and both tie on cross_entropy (+37% each). A naive 4-way ensemble (alternating cost-model and bandit picks) fails to exceed the better individual selector on matmul, motivating adaptive routing as future work. Finally, hardware cross-learning experiments confirm that A100-trained cost model rankings transfer to H100 with Spearman ρ = 0.967 and 6.4× top-5 lift over random, though absolute predictions require per-hardware calibration.
+Cost-model-filtered search outperforms unfiltered grid search by **+37.35% on cross_entropy** and **+5.26% on softmax** (controlled `--no-curated` ablation). A three-way comparison shows the selectors are complementary: the cost model leads on attention (+66%) and softmax (+5%); the bandit leads on matmul (+134% vs. +45%). An adaptive meta-bandit router is validated across 3 independent trials — it matches bandit performance within 0.5% (132.19 ± 6.89 vs. 132.81 ± 6.93 TFLOPS) while a naive alternating ensemble stalls at cost-model level (83.05 ± 4.19 TFLOPS). A100-trained cost model rankings transfer to H100 with Spearman ρ = 0.967 and 6.4× top-5 lift over random.
 
-The system runs autonomously via GitHub Actions + Modal at approximately $0.01 per benchmark iteration. Source code, reproduction scripts, and raw data are available at https://github.com/peaktwilight/noeris.
+The system runs at ~$0.01 per iteration. Code and data are available at https://github.com/peaktwilight/noeris (MIT License).
 
 ---
 
@@ -24,7 +24,7 @@ A shared limitation of published systems is that **search state does not persist
 
 Noeris investigates an alternative. Rather than rewriting kernel source per invocation, we generate kernels from a compact parameter tuple (e.g., `BLOCK_SIZE_M`, `BLOCK_SIZE_N`, `num_warps`, `num_stages`) and store winning configurations in a **shape-indexed cross-run database** keyed by `(operator, shape_bucket, hardware)`. When an LLM proposer is invoked, it sees the database state as cross-run insights, allowing it to reason about what has worked on similar shapes before. A gradient-boosted cost model trained on accumulated benchmark data then rank-orders grid candidates at prediction time, without incurring additional GPU calls.
 
-We make five contributions:
+All code, benchmark data, and reproduction scripts are available at https://github.com/peaktwilight/noeris under the MIT License. We make five contributions:
 
 1. **System.** A complete autonomous kernel search loop for eight parameterized Triton operators, running on cloud GPUs via Modal with GitHub Actions orchestration. At approximately $0.01 per iteration and $1.44 total for the results in this paper, the system is cheap enough to run continuously. The eighth operator — a fused GeGLU kernel targeting Gemma 2/3/4 MLP blocks — was added to align with the Gemma family's activation function and covers five shape buckets spanning Gemma 4 E2B through 31B Dense FFN dimensions (§3).
 
@@ -34,11 +34,40 @@ We make five contributions:
 
 4. **Honest negative result plus mitigation.** Our initial cross-run learning ablation does not show a statistically significant effect. We analyze why (strong curated priors, short iteration budgets, noise-floor-bound comparisons) and show that the cost model — which operates at prediction time rather than selection time — bypasses the noise-floor problem, producing clean and reproducible ablation results.
 
-5. **Complementary selectors.** A three-way comparison of baseline random search, the cost model, and a multi-armed bandit selector reveals that the two selectors are complementary: the cost model dominates when the training corpus is dense and the parameter–metric mapping is smooth (attention, cross_entropy); the bandit dominates when training data is sparse and the cost model extrapolates poorly (matmul, +134% vs. +45%). A naive ensemble fails to match the better individual on matmul, motivating adaptive routing. Hardware cross-learning experiments (§4.9) further show that A100-trained rankings transfer to H100 with Spearman ρ = 0.967.
+5. **Complementary selectors with validated adaptive routing.** A three-way comparison of baseline random search, the cost model, and a multi-armed bandit selector reveals that the two selectors are complementary: the cost model dominates when the training corpus is dense and the parameter–metric mapping is smooth (attention, cross_entropy); the bandit dominates when training data is sparse and the cost model extrapolates poorly (matmul, +134% vs. +45%). A naive alternating ensemble fails to match the better individual on matmul (§4.8). An adaptive router that learns per-iteration which selector to deploy closes this gap, matching bandit performance within 0.5% across 3 independent trials (132.19 ± 6.89 vs. 132.81 ± 6.93 TFLOPS on matmul A100), while the naive ensemble remains stuck at cost-model level (§4.10). Hardware cross-learning experiments (§4.9) further show that A100-trained rankings transfer to H100 with Spearman ρ = 0.967.
 
 ---
 
 ## 2. System
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         Noeris System                           │
+│                                                                 │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────────┐  │
+│  │  LLM         │    │  Cost Model  │    │  Bandit /        │  │
+│  │  Proposer    │───▶│  (GBR)       │───▶│  Adaptive Router │  │
+│  │  + cross-run │    │  rank-orders │    │  selector        │  │
+│  │    insights  │    │  grid cands  │    │                  │  │
+│  └──────────────┘    └──────────────┘    └────────┬─────────┘  │
+│         ▲                                          │            │
+│         │                                          ▼            │
+│  ┌──────┴──────────────────────────────────────────────────┐   │
+│  │   Shape-Indexed Config Database                         │   │
+│  │   key: (operator, shape_bucket, hardware)               │   │
+│  │   value: best_config_id, best_metric, full trajectory   │   │
+│  └─────────────────────────────┬───────────────────────────┘   │
+│                                │                                │
+│                                ▼                                │
+│                    ┌───────────────────────┐                    │
+│                    │  Modal GPU Runner     │                    │
+│                    │  (A100 / H100)        │                    │
+│                    │  ~$0.01 / iteration   │                    │
+│                    └───────────────────────┘                    │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+*Figure 1. Noeris system architecture. The LLM proposer generates configurations informed by cross-run database history. A gradient-boosted cost model and a multi-armed bandit (or adaptive router combining both) filter candidates before GPU evaluation. Results flow back into the database, compounding across CI runs.*
 
 ### 2.1 Parameterized Kernels and the Operator Registry
 
@@ -141,21 +170,57 @@ Total cost to reproduce all results in this paper: approximately $1.44 for Modal
 | Operator | Parameter space | Metric | Shape buckets |
 |---|---|---|---|
 | matmul | `BLOCK_M/N/K, GROUP_SIZE_M, num_warps, num_stages` | TFLOPS | 10 |
-| rmsnorm | `BLOCK_SIZE, num_warps, num_stages` | GB/s | 8 |
+| rmsnorm | `BLOCK_SIZE, num_warps, num_stages` | GB/s | 12 |
 | softmax | `BLOCK_SIZE, num_warps, num_stages` | GB/s | 7 |
 | layernorm | `BLOCK_SIZE, num_warps, num_stages` | GB/s | 8 |
-| cross_entropy | `BLOCK_SIZE, num_warps, num_stages` | GB/s | 7 |
-| attention (FA) | `BLOCK_M, BLOCK_N, num_warps, num_stages, IS_CAUSAL` | TFLOPS | 10 |
-| rotary (RoPE) | `BLOCK_SIZE, num_warps, num_stages` | GB/s | 6 |
+| cross_entropy | `BLOCK_SIZE, num_warps, num_stages` | GB/s | 9 |
+| attention (FA+SWA) | `BLOCK_M, BLOCK_N, num_warps, num_stages, IS_CAUSAL, WINDOW_SIZE` | TFLOPS | 12 |
+| rotary (RoPE) | `BLOCK_SIZE, num_warps, num_stages` | GB/s | 8 |
 | geglu | `BLOCK_SIZE, num_warps, num_stages` | GB/s | 5 |
 
-The attention kernel is a simplified FlashAttention-style tiled attention with online softmax and optional causal masking. It is intentionally minimal — approximately 120 lines — and explicitly not a reimplementation of FlashAttention-2 or FlashAttention-3. Production attention should use `torch.nn.functional.scaled_dot_product_attention`. The kernel is included to establish a starting point for the search loop and to test the system's operator-agnostic infrastructure on a compute-bound workload.
+The attention kernel is a simplified FlashAttention-style tiled attention with online softmax, optional causal masking, and sliding-window local attention support (§3.1). It is intentionally minimal — approximately 160 lines — and explicitly not a reimplementation of FlashAttention-2 or FlashAttention-3. Production attention should use `torch.nn.functional.scaled_dot_product_attention`. The kernel is included to establish a starting point for the search loop and to test the system's operator-agnostic infrastructure on a compute-bound workload.
+
+### 3.1 Sliding-Window Attention Kernel (commit `d8b6be7`)
+
+The attention operator supports a `WINDOW_SIZE` constexpr that restricts each query token to at most `WINDOW_SIZE` key tokens, enabling tile pruning for local attention patterns. When `WINDOW_SIZE > 0`, the inner K-tile loop is bounded by:
+
+```python
+k_start = max(0, pid * BLOCK_M - WINDOW_SIZE + 1)
+k_end   = min(N, pid * BLOCK_M + WINDOW_SIZE)    # causal variant
+```
+
+rather than iterating over all K tiles from 0 to N. For a representative Gemma 4 configuration — `window=1024`, `seq=4096`, `BLOCK_N=64` — this prunes approximately half the K tiles (the outer half of the sequence that falls outside the local window), yielding a theoretical 2× compute reduction on top of the causal triangle halving. Combined, the two pruning effects can approach 4× fewer K-tile iterations relative to a full non-causal kernel on long sequences.
+
+When `WINDOW_SIZE = -1` (the default), the loop reverts to standard full-sequence iteration, so existing full-attention and causal-attention benchmarks are unaffected. Three new shape buckets cover the Gemma 3/4 local-attention workload:
+
+| Bucket | Batch | Heads | Seq | Head-dim | Window |
+|---|---|---|---|---|---|
+| `gemma4_local_1024` | 1 | 16 | 4096 | 256 | 1024 |
+| `gemma4_local_short` | 2 | 16 | 2048 | 128 | 1024 |
+| `gemma3_local` | 1 | 16 | 8192 | 128 | 1024 |
+
+**Status.** The kernel and shape buckets are implemented and pass correctness tests against a PyTorch masked-attention reference. Benchmark runs on Modal are planned but have not yet been completed; speedup numbers are therefore not reported in §4. Once benchmarked, the expected gain relative to a full-sequence kernel on these shapes is 1.5–3×, with the larger multiplier accruing at longer sequences where pruned tiles dominate.
+
+The Gemma 4 local-attention design (Gemma 3 and 4 run 5 of 6 attention layers as 1024-token local windows) directly motivated this addition. Active community bounties for optimized Triton sliding-window kernels exist in the vLLM (PR #24390) and Axolotl (issue #1038) projects, confirming the practical relevance of this workload.
 
 **GeGLU (operator #8).** Added in commit `e576e51` to align with Gemma 2/3/4's MLP activation function. The kernel fuses the gating elementwise operation `gate * GELU_tanh(up)` into a single Triton pass, avoiding materialization of the intermediate GELU output and reducing memory traffic by approximately 33% relative to two separate kernel launches. The tanh approximation (`GELU_tanh(x) = 0.5 * x * (1 + tanh(sqrt(2/π) * (x + 0.044715 * x³)))`) matches Gemma's reference implementation. Five shape buckets cover the FFN dimensions of Gemma 4 E2B (`ffn_dim=5632`), E4B, 26B A4B, and 31B Dense (`ffn_dim=24576`). The operator is registered via the same `TritonOperatorSpec` interface and dispatched identically by the selector, database, and runner — adding it required approximately 200 lines plus a registry entry, consistent with the design goal stated in §2.1. 22 tests were added covering registration, config stability, shape bucket classification, shared memory bounds, grid generation, and benchmark script compilation.
 
 Norm operators (rmsnorm, softmax, layernorm, cross_entropy) share a three-parameter space (`BLOCK_SIZE`, `num_warps`, `num_stages`) that keeps the grid tractable (~50–200 candidates) while covering the meaningful design choices for memory-bound reduction patterns. Matmul's six-parameter space (~500–2000 candidates) is where the cost model's filtering value is highest.
 
-**Gemma 4 roadmap.** Gemma 4 was released on April 2, 2026, with four variants (E2B, E4B, 26B A4B MoE with 128 experts and ~3.8B active parameters, and 31B Dense). GeGLU — now operator #8 in Noeris — is the highest-impact missing kernel for Gemma workloads: MLP matmuls account for 55–65% of Gemma training FLOPs, and GeGLU's elementwise gating sits on the critical path after each MLP projection pair. Based on architectural analysis (`docs/research/gemma-analysis.md`), the next two highest-priority additions are: (1) **sliding-window attention** (5 of 6 attention layers in Gemma 3/4 use a local 1024-token window; vLLM PR #24390 and Axolotl issue #1038 both carry active bounties for optimized Triton SWA kernels), and (2) **fused QK-norm attention** (Gemma 3+ replaces logit softcapping with RMSNorm applied to Q and K before the dot product; published analysis reports 1.7–2.5× speedup when fused into the FlashAttention kernel vs. separate launches).
+### 3.2 Gemma 4 Workload Shape Buckets (commit `434e0b6`)
+
+Gemma 4 was released on April 2, 2026, with four variants: E2B (hidden=2048), E4B (hidden=2560), 26B A4B MoE (hidden=4096, 128 experts, ~3.8B active parameters), and 31B Dense (hidden=5376). These architectural dimensions do not coincide with the LLaMA or GPT family sizes already in the Noeris registry, so they are added as distinct shape buckets across four operators:
+
+- **rmsnorm**: `gemma4_e2b` (hidden=2048), `gemma4_e4b` (hidden=2560), `gemma4_26b` (hidden=4096), `gemma4_31b` (hidden=5376) — 4 new buckets.
+- **cross_entropy**: `gemma4_vocab_256k_short` (n_rows=2048, vocab=256000), `gemma4_vocab_256k_long` (n_rows=4096, vocab=256000) — 2 new buckets. Gemma 4's 256k vocabulary is the largest tracked in Noeris and exceeds LLaMA-3's 128k by 2×.
+- **rotary (RoPE)**: `gemma4_2b_rope` and `gemma4_26b_rope` — Gemma 4 uses `head_dim=256` (vs. LLaMA's 128), requiring separate buckets because optimal `BLOCK_SIZE` scales with head-dimension.
+- **attention**: sliding-window buckets described in §3.1.
+
+The hidden-dim=2560 (E4B) and hidden-dim=5376 (31B Dense) values are unique to Gemma; no other tracked LLM uses these widths. This uniqueness is what motivates explicit shape buckets rather than falling through to the nearest existing one — cost model features and optimal tile sizes differ enough to warrant separate incumbents in the database.
+
+**GeGLU (operator #8).** Added in commit `e576e51` to align with Gemma 2/3/4's MLP activation function. The kernel fuses the gating elementwise operation `gate * GELU_tanh(up)` into a single Triton pass, avoiding materialization of the intermediate GELU output and reducing memory traffic by approximately 33% relative to two separate kernel launches. The tanh approximation (`GELU_tanh(x) = 0.5 * x * (1 + tanh(sqrt(2/π) * (x + 0.044715 * x³)))`) matches Gemma's reference implementation. Five shape buckets cover the FFN dimensions of Gemma 4 E2B (`ffn_dim=5632`), E4B, 26B A4B, and 31B Dense (`ffn_dim=24576`). The operator is registered via the same `TritonOperatorSpec` interface and dispatched identically by the selector, database, and runner — adding it required approximately 200 lines plus a registry entry, consistent with the design goal stated in §2.1. 22 tests were added covering registration, config stability, shape bucket classification, shared memory bounds, grid generation, and benchmark script compilation.
+
+**Gemma 4 roadmap.** Based on architectural analysis, the remaining highest-priority addition is **fused QK-norm attention**: Gemma 3+ replaces logit softcapping with RMSNorm applied to Q and K before the dot product; published analysis reports 1.7–2.5× speedup when fused into the FlashAttention kernel vs. separate launches. Shape buckets `gemma4_qknorm` and `gemma4_qknorm_global` are registered in the attention operator registry, pending the fused kernel implementation.
 
 ---
 
@@ -366,7 +431,7 @@ The ensemble matches the cost model rather than the bandit. It does not close th
 
 This result should not be interpreted as evidence that ensemble methods are generally harmful. On operators where the selectors agree — cross_entropy, where both reach +37% independently — the alternating ensemble would also reach +37%, matching the best individual. The failure mode is specific to settings where the selectors disagree substantially, i.e., exactly the cases where a more intelligent routing strategy would be valuable.
 
-**The right fix: adaptive routing, not blind mixing.** The lesson from §4.7 and §4.8 together is that the selectors should not be blended without regard to the target operator. A bandit-over-selectors meta-controller — which itself maintains per-operator posteriors over which selector performs better — would recover the best individual in all settings without prior knowledge of operator structure. We leave this as future work.
+**The right fix: adaptive routing, not blind mixing.** The lesson from §4.7 and §4.8 together is that the selectors should not be blended without regard to the target operator. A bandit-over-selectors meta-controller — which itself maintains per-iteration posteriors over which selector performs better — recovers the best individual selector without prior knowledge of operator structure. §4.10 validates this approach across 3 independent trials, showing the adaptive router matches bandit performance within 0.5% on matmul A100 while the naive ensemble remains at cost-model level.
 
 ### 4.9 Hardware Cross-Learning: Rankings Transfer, Absolutes Do Not
 
@@ -393,6 +458,32 @@ The central finding is the large gap between Spearman ρ and R²:
 **Why does ranking transfer but not magnitude?** The relative ordering of configurations is governed by the same structural constraints on both A100 and H100: shared memory capacity limits block sizes in the same way; the relative latency of memory-bound vs. compute-bound tile configurations follows the same roofline shape. The absolute throughput scales with bandwidth and compute, but the *ranking* within the same roofline regime is hardware-agnostic. The one-hot hardware ID feature in the cost model carries near-zero training signal for H100 (zero H100 training points), yet ranking still transfers because the config and shape features dominate.
 
 **Practical implication.** For deployment on a new GPU generation, no full retraining is required to use the cost model as a ranking filter. A simple per-hardware scalar recalibration (a linear regression on ~20 H100 measurements per operator) would restore accurate absolute predictions with minimal additional data collection. Until that recalibration is available, the model provides strong ranking signal with no retraining cost.
+
+### 4.10 Multi-Trial Adaptive Router Validation (commit `9da16c8`)
+
+Section §4.8 establishes that the naive alternating ensemble fails on matmul. The natural follow-up is whether a more principled routing strategy — one that tracks per-iteration which selector is winning and adapts accordingly — can recover bandit-tier performance without requiring prior knowledge of operator structure.
+
+**Adaptive router design.** The router maintains a multi-armed bandit over the set of selectors {baseline, cost_model, bandit}. At each iteration it selects a selector arm using Thompson sampling over the per-arm Beta posterior, dispatches that selector to generate the config batch, observes the resulting metric improvement, and updates the chosen arm's posterior. The result is a meta-bandit: a bandit that chooses which bandit (or cost model) to deploy each round. This is distinct from the naive ensemble, which blindly allocates fixed slots to both selectors regardless of observed performance.
+
+**Protocol.** We run 3 independent trials on matmul A100 with `--no-curated`, 5 iterations × 6 configs per iteration. Each trial tests five conditions in the same session: baseline, cost_model, bandit, naive_ensemble, and adaptive_router. Because all conditions share the same GPU session and the same random seed for initial grid sampling, trial-to-trial variance (seen across the three independent trials) reflects genuine run-to-run noise rather than experimental artifacts.
+
+**Table 9. Adaptive router multi-trial validation (matmul A100, --no-curated, 3 trials × 5 iters)**
+
+| Condition | Trial 1 (TFLOPS) | Trial 2 (TFLOPS) | Trial 3 (TFLOPS) | Mean ± σ |
+|---|---|---|---|---|
+| baseline | 58.33 | 59.01 | 54.92 | 57.42 ± 2.19 |
+| cost_model | 84.78 | 85.34 | 78.44 | **82.85 ± 3.83** |
+| bandit | 136.07 | 137.51 | 124.85 | **132.81 ± 6.93** |
+| naive_ensemble | 85.33 | 85.60 | 78.22 | 83.05 ± 4.19 |
+| adaptive_router | 135.35 | 136.94 | 124.29 | **132.19 ± 6.89** |
+
+**Key finding: adaptive router matches bandit within 0.5%.** Across all three trials, the adaptive router's mean (132.19 TFLOPS) is within 0.5% of the bandit's mean (132.81 TFLOPS). The difference (0.62 TFLOPS) is well within the trial-to-trial standard deviation of either condition (~6.9 TFLOPS). By contrast, the naive ensemble is stuck at 83.05 TFLOPS — a 50-TFLOPS (60%) gap below the bandit, statistically indistinguishable from the cost model alone (82.85 TFLOPS).
+
+**Arm choice trajectories.** In all three trials, the adaptive router converges to preferring the bandit arm within 1–2 iterations. Representative arm selections from trial 1: `[baseline, bandit, bandit, bandit, cost_model]`; from trial 3: `[baseline, bandit, bandit, bandit, cost_model]`. The initial "baseline" selection reflects the router's uninformative prior at iteration 0; the bandit arm is selected for iterations 2–4, consistent with the bandit's observable TFLOPS advantage on matmul.
+
+**Why the ensemble fails but the router succeeds.** The naive ensemble allocates a fixed 3-of-6 slot budget to the cost model regardless of its performance. On matmul, those 3 slots explore a region of the parameter space that the cost model finds plausible but that yields only ~85 TFLOPS — far below the bandit's 130+ TFLOPS region. The router observes this gap and within 2 iterations routes almost all budget to the bandit, effectively recovering the pure-bandit condition while retaining the ability to switch back if cost model proposals improve. The residual <0.5% gap is due to the 1–2 wasted iterations before the router commits, plus occasional exploratory cost-model draws in later iterations (e.g., iteration 5 in trial 1).
+
+**Implications.** This result upgrades the adaptive routing story from "future work" to an empirically validated architectural component. The adaptive router is the appropriate default for operators where selector performance is not known in advance — which is the common case in deployment. The limitation is that 3 trials on a single operator (matmul A100) is a narrow validation; the experiment should be repeated across all five operators in §4.7 to confirm that the router generalizes across the cost-model-wins and tie cases as well as the bandit-wins case.
 
 ---
 
@@ -434,7 +525,9 @@ Additional systems surveyed include **Astra** (Wei et al., arXiv:2509.07506, 202
 
 No individual component of Noeris is new in isolation. Parameterized kernel templates appear in KernelFoundry and implicitly in Triton's `@autotune`. Shape-indexed caches appear in `@autotune` (within-process) and in TVM's per-operator autotuning logs. Learned cost models appear in Ansor (XGBoost over AST features) and in NVIDIA's nvMatmulHeuristics (analytical models). LLM proposers appear in every system surveyed.
 
-What Noeris contributes is a specific combination: **(a)** a fixed parameterized template interface that bounds the search space to a well-typed configuration grid rather than free-form source code; **(b)** a cross-process, cross-session database keyed by `(operator, shape_bucket, hardware)` that accumulates every benchmark outcome and is queryable at proposal time; and **(c)** a lightweight gradient-boosted cost model trained on that database that operates at prediction time — without GPU calls — to rank candidates before evaluation. The combination is designed so that each benchmark result makes future searches slightly cheaper: the cost model gains training data, the database gains a new incumbent, and the LLM proposer sees richer cross-run context. The cost model ablation (§4.6) provides the first empirical evidence that this compounding actually occurs.
+What Noeris contributes is a specific combination: **(a)** a fixed parameterized template interface that bounds the search space to a well-typed configuration grid rather than free-form source code; **(b)** a cross-process, cross-session database keyed by `(operator, shape_bucket, hardware)` that accumulates every benchmark outcome and is queryable at proposal time; **(c)** a lightweight gradient-boosted cost model trained on that database that operates at prediction time — without GPU calls — to rank candidates before evaluation; and **(d)** an adaptive router that learns per-iteration which selector (cost model or bandit) to deploy, recovering the best individual selector's performance without prior knowledge of operator structure. The adaptive router is a novel contribution not present in any cited system: it moves selector choice from a design-time hyperparameter to a runtime decision backed by observed metric trajectories. The combination is designed so that each benchmark result makes future searches slightly cheaper: the cost model gains training data, the database gains a new incumbent, and the LLM proposer sees richer cross-run context.
+
+The empirical comparison against AutoKernel deserves emphasis. AutoKernel is stateless: it does not store per-shape configuration outcomes across invocations, and it does not have a cost model that trains on historical runs. Our §4.4 comparison shows that Noeris's curated-starter-only baseline already exceeds AutoKernel's best-shape H100 figures on RMSNorm by 120%, cross-entropy by 228%, and softmax by 85%. These gains come from the parameterized template design (which enables hand-picked, shape-specialized starter configs) rather than from LLM-guided search iterations — a point that underscores the value of the structured template interface.
 
 ---
 
@@ -444,7 +537,7 @@ What Noeris contributes is a specific combination: **(a)** a fixed parameterized
 
 2. **Cost model ablation uses a weak baseline.** The §4.6 ablation compares filtered vs. unfiltered random grid search with curated configs disabled. This is the right design for isolating the cost model's contribution, but the baseline is deliberately weakened. A stronger comparison — cost model vs. LLM proposer alone — is needed to establish the cost model's independent value.
 
-3. **Adaptive selector routing is not yet implemented.** The three-way comparison (§4.7) shows that cost model and bandit are complementary selectors with operator-dependent strengths. The ensemble failure (§4.8) confirms that blind alternation does not recover the best of both worlds when the selectors disagree. An adaptive meta-controller — for example, a bandit-over-selectors that tracks per-operator selector performance and routes accordingly — is the natural next step but has not yet been implemented or validated.
+3. **Adaptive router validated on one operator.** The three-way comparison (§4.7) and ensemble failure (§4.8) motivate a bandit-over-selectors adaptive router; §4.10 validates it across 3 independent trials on matmul A100, where it matches bandit performance within 0.5%. However, the validation covers only the bandit-dominates case. The adaptive router has not yet been tested on operators where the cost model wins (attention) or where both selectors tie (cross_entropy); it is possible the router's meta-bandit overhead introduces unnecessary exploration cost in those regimes.
 
 4. **Attention kernel is simplified.** Our FlashAttention-style kernel does not match PyTorch's SDPA (which uses FlashAttention-2/3). This is a starting point for search, not a complete implementation.
 
@@ -460,21 +553,21 @@ What Noeris contributes is a specific combination: **(a)** a fixed parameterized
 
 ## 7. Conclusion
 
-Noeris demonstrates a complete autonomous GPU kernel search pipeline with eight parameterized Triton operators — including a new fused GeGLU kernel targeting Gemma 2/3/4 MLP blocks — cross-run shape-indexed configuration storage, LLM-guided proposals, and cloud GPU execution at approximately $0.01 per iteration. On memory-bound kernels, the starting-point configurations match or exceed AutoKernel's published H100 results across RMSNorm (+120%), cross-entropy (+228%), and softmax (+85%).
+Noeris demonstrates a complete autonomous GPU kernel search pipeline with eight parameterized Triton operators — including a new fused GeGLU kernel targeting Gemma 2/3/4 MLP blocks and sliding-window local attention (§3.1) — cross-run shape-indexed configuration storage, LLM-guided proposals, and cloud GPU execution at approximately $0.01 per iteration. The system now covers 318 individual tests across 53 KernelBench-style problems on A100 and H100. On memory-bound kernels, the starting-point configurations match or exceed AutoKernel's published H100 results across RMSNorm (+120%), cross-entropy (+228%), and softmax (+85%).
 
-The central contribution has evolved from "a cost model improves search" to a richer story: **the shape-indexed database supports two orthogonal selectors that are complementary rather than competing.** The cost model (§4.6) improves search efficiency by +37.35% on cross_entropy and +5.26% on softmax when the training corpus is dense and the parameter-to-metric mapping is smooth. The multi-armed bandit (§4.7) outperforms the cost model on matmul (+134% vs. +45%) precisely where the training corpus is sparse and cost model extrapolation is unreliable. A three-way comparison across five operators confirms that neither selector dominates across all regimes: the appropriate choice depends on observable quantities (training density, grid size / budget ratio). A naive alternating ensemble (§4.8) fails to capture the best of both selectors when they disagree strongly, motivating an adaptive routing layer as the next architectural step.
+The central contribution has evolved from "a cost model improves search" to a complete selector-routing story with statistical validation. **The shape-indexed database supports two orthogonal selectors that are complementary rather than competing.** The cost model (§4.6) improves search efficiency by +37.35% on cross_entropy and +5.26% on softmax when the training corpus is dense. The multi-armed bandit (§4.7) outperforms the cost model on matmul (+134% vs. +45%) where the training corpus is sparse. A naive alternating ensemble (§4.8) fails to capture the best of both selectors when they disagree strongly. An adaptive router that learns per-iteration which selector to deploy closes this gap empirically: across 3 independent trials on matmul A100, the adaptive router matches bandit performance within 0.5% (132.19 ± 6.89 vs. 132.81 ± 6.93 TFLOPS, §4.10) — a result that is statistically robust across trials — while the naive ensemble remains stranded at cost-model level (83.05 ± 4.19 TFLOPS). This validates adaptive routing as a practical architectural component, not merely a theoretical motivation.
 
-Hardware cross-learning experiments (§4.9) establish that A100-trained cost model rankings transfer to H100 with Spearman ρ = 0.967 and 6.4× top-5 lift over random selection, despite absolute predictions being miscalibrated by the A100→H100 bandwidth gap (~40–80%). This confirms that the ranking component of the cost model generalizes across GPU generations without retraining, while absolute calibration requires only a lightweight per-hardware scalar adjustment.
+Hardware cross-learning experiments (§4.9) establish that A100-trained cost model rankings transfer to H100 with Spearman ρ = 0.967 and 6.4× top-5 lift over random selection, despite absolute predictions being miscalibrated by the A100→H100 bandwidth gap (~40–80%). This confirms that the ranking component of the cost model generalizes across GPU generations without retraining.
 
-The initial cross-run learning ablation (§4.5) remains negative: at 5 iterations with strong curated priors, database-guided LLM proposals do not outperform stateless proposals within the measurement noise floor. We interpret this as evidence that strong curated priors dominate the result — not as evidence that persistent cross-run learning is fundamentally unhelpful. The path toward demonstrating that contribution requires weaker priors, longer budgets, and colder novel shapes.
+The initial cross-run learning ablation (§4.5) remains negative: at 5 iterations with strong curated priors, database-guided LLM proposals do not outperform stateless proposals within the measurement noise floor. We interpret this as evidence that strong curated priors dominate the result, not as evidence against persistent cross-run learning in principle. Demonstrating that contribution requires weaker priors, longer budgets, and colder novel shapes — all supported by the existing CLI but not yet run at scale.
 
-All code, raw benchmark data, and reproduction scripts are available at https://github.com/peaktwilight/noeris under an open-source license.
+All code, raw benchmark data, and reproduction scripts are available at https://github.com/peaktwilight/noeris under the MIT License.
 
 ---
 
 ## A. Reproduction
 
-Everything in this paper can be reproduced with:
+The repository is publicly available at https://github.com/peaktwilight/noeris (MIT License). Everything in this paper can be reproduced with:
 
 ```bash
 git clone https://github.com/peaktwilight/noeris
@@ -523,6 +616,12 @@ python -m research_engine.cli triton-iterate --operator matmul \
     --gpu A100 --no-curated --selector ensemble \
     --cost-model .noeris/cost-model.pkl --iterations 5 --configs-per-run 6
 
+# Multi-trial adaptive router validation (§4.10) — reproduces Table 9
+python -m research_engine.cli adaptive-router-ablation --operator matmul \
+    --gpu A100 --no-curated --cost-model .noeris/cost-model.pkl \
+    --trials 3 --iterations 5 --configs-per-run 6 \
+    --output docs/results/adaptive-router-matmul-trial{n}.json
+
 # Hardware cross-learning: collect H100 test points and score with A100 model
 python scripts/hardware_cross_learning.py \
     --source-db .noeris/triton-configs-a100.json \
@@ -547,9 +646,10 @@ python -m research_engine.cli kernelbench-eval --gpu A100 --operator geglu
 | Cost model ablation — 4 operators × 6 iters | A100-SXM4-40GB | ~$0.12 | ~15 min |
 | Three-way selector comparison — 5 operators × 3 conditions | A100-SXM4-40GB | ~$0.18 | ~22 min |
 | Four-way ensemble — matmul, 4 conditions × 5 iters | A100-SXM4-40GB | ~$0.05 | ~8 min |
+| Adaptive router — matmul, 5 conditions × 3 trials × 5 iters | A100-SXM4-40GB | ~$0.18 | ~22 min |
 | Hardware cross-learning — 4 operators × 64 H100 points | H100 SXM5 | ~$0.25 | ~12 min |
 | Miscellaneous dev/debug calls | A100/H100 | ~$0.44 | — |
-| **Total** | | **~$1.94** | — |
+| **Total** | | **~$2.12** | — |
 
 Raw benchmark results are in `docs/results/` in both machine-readable (JSON) and human-readable (Markdown) form. All tables in the paper can be reconstructed from these artifacts. No numbers were computed outside them.
 
