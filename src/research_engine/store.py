@@ -187,6 +187,8 @@ class JsonFileRunStore:
 
         latest_claim_titles = {claim.title for claim in latest.memo.claims} if latest else set()
         previous_claim_titles = {claim.title for claim in previous.memo.claims} if previous else set()
+        latest_source_ids = {source.identifier for source in latest.memo.sources} if latest else set()
+        previous_source_ids = {source.identifier for source in previous.memo.sources} if previous else set()
         latest_assessments = {
             assessment.source_id: assessment.confidence
             for assessment in (latest.memo.source_assessments if latest else [])
@@ -194,6 +196,20 @@ class JsonFileRunStore:
         previous_assessments = {
             assessment.source_id: assessment.confidence
             for assessment in (previous.memo.source_assessments if previous else [])
+        }
+        latest_evidence_kinds = {
+            claim.title: claim.evidence_kind
+            for claim in (latest.memo.claims if latest else [])
+        }
+        previous_evidence_kinds = {
+            claim.title: claim.evidence_kind
+            for claim in (previous.memo.claims if previous else [])
+        }
+        latest_contradiction_titles = {
+            contradiction.title for contradiction in (latest.memo.contradictions if latest else [])
+        }
+        previous_contradiction_titles = {
+            contradiction.title for contradiction in (previous.memo.contradictions if previous else [])
         }
 
         confidence_changes = []
@@ -205,6 +221,18 @@ class JsonFileRunStore:
                     "source_id": source_id,
                     "previous_confidence": previous_assessments[source_id],
                     "latest_confidence": latest_assessments[source_id],
+                }
+            )
+
+        evidence_kind_changes = []
+        for claim_title in sorted(set(latest_evidence_kinds) & set(previous_evidence_kinds)):
+            if latest_evidence_kinds[claim_title] == previous_evidence_kinds[claim_title]:
+                continue
+            evidence_kind_changes.append(
+                {
+                    "claim_title": claim_title,
+                    "previous_evidence_kind": previous_evidence_kinds[claim_title],
+                    "latest_evidence_kind": latest_evidence_kinds[claim_title],
                 }
             )
 
@@ -326,10 +354,20 @@ class JsonFileRunStore:
             "run_count": len(records),
             "latest_run_id": latest.run_id if latest else "",
             "previous_run_id": previous.run_id if previous else "",
+            "new_source_ids": sorted(latest_source_ids - previous_source_ids),
+            "dropped_source_ids": sorted(previous_source_ids - latest_source_ids),
+            "shared_source_ids": sorted(latest_source_ids & previous_source_ids),
             "new_claim_titles": sorted(latest_claim_titles - previous_claim_titles),
             "dropped_claim_titles": sorted(previous_claim_titles - latest_claim_titles),
             "shared_claim_titles": sorted(latest_claim_titles & previous_claim_titles),
             "confidence_changes": confidence_changes,
+            "evidence_kind_changes": evidence_kind_changes,
+            "new_contradiction_titles": sorted(
+                latest_contradiction_titles - previous_contradiction_titles
+            ),
+            "dropped_contradiction_titles": sorted(
+                previous_contradiction_titles - latest_contradiction_titles
+            ),
             "latest_contradictions": [
                 {
                     "title": contradiction.title,
@@ -376,6 +414,72 @@ class JsonFileRunStore:
                 key=lambda item: item.get("runner_up_gap_pct", 10**9),
             ),
         }
+
+    def render_history_brief(
+        self,
+        *,
+        benchmark_id: str | None = None,
+        topic: str | None = None,
+        limit: int = 5,
+    ) -> str:
+        summary = self.summarize_history(
+            benchmark_id=benchmark_id,
+            topic=topic,
+            limit=limit,
+        )
+        lines = [
+            "# History Brief",
+            "",
+            f"- Benchmark: `{summary.get('benchmark_id') or 'none'}`",
+            f"- Topic: `{summary.get('topic') or 'none'}`",
+            f"- Runs compared: `{summary.get('run_count', 0)}`",
+            "",
+        ]
+        if summary.get("new_claim_titles") or summary.get("dropped_claim_titles"):
+            lines.extend(["## Claim Changes", ""])
+            lines.extend(f"- New claim: `{item}`" for item in summary.get("new_claim_titles", []))
+            lines.extend(f"- Dropped claim: `{item}`" for item in summary.get("dropped_claim_titles", []))
+            lines.append("")
+        if summary.get("new_source_ids") or summary.get("dropped_source_ids"):
+            lines.extend(["## Source Changes", ""])
+            lines.extend(f"- New source: `{item}`" for item in summary.get("new_source_ids", []))
+            lines.extend(f"- Dropped source: `{item}`" for item in summary.get("dropped_source_ids", []))
+            lines.append("")
+        if summary.get("confidence_changes"):
+            lines.extend(["## Confidence Changes", ""])
+            for item in summary["confidence_changes"]:
+                lines.append(
+                    f"- `{item['source_id']}`: `{item['previous_confidence']}` -> `{item['latest_confidence']}`"
+                )
+            lines.append("")
+        if summary.get("evidence_kind_changes"):
+            lines.extend(["## Evidence Kind Changes", ""])
+            for item in summary["evidence_kind_changes"]:
+                lines.append(
+                    f"- `{item['claim_title']}`: `{item['previous_evidence_kind']}` -> `{item['latest_evidence_kind']}`"
+                )
+            lines.append("")
+        if summary.get("new_contradiction_titles") or summary.get("dropped_contradiction_titles"):
+            lines.extend(["## Contradiction Changes", ""])
+            lines.extend(
+                f"- New contradiction: `{item}`"
+                for item in summary.get("new_contradiction_titles", [])
+            )
+            lines.extend(
+                f"- Dropped contradiction: `{item}`"
+                for item in summary.get("dropped_contradiction_titles", [])
+            )
+            lines.append("")
+        if summary.get("best_matmul_candidate_id"):
+            lines.extend(
+                [
+                    "## Matmul Frontier",
+                    "",
+                    f"- Best candidate: `{summary['best_matmul_candidate_id']}`",
+                    "",
+                ]
+            )
+        return "\n".join(lines)
 
     def _load_matching_runs(
         self,

@@ -55,6 +55,7 @@ def _run_condition(
     configs_per_run: int,
     iterations: int,
     cost_model=None,
+    include_curated: bool = True,
 ) -> list[float]:
     """Run N iterations of triton-iterate under a single condition.
 
@@ -78,6 +79,7 @@ def _run_condition(
                 operator=spec.name,
                 gpu="A100",
                 cost_model=cost_model,
+                include_curated=include_curated,
             )
             if metric > best_so_far:
                 best_so_far = metric
@@ -91,6 +93,7 @@ def _run_condition(
 def _run_one_session_iteration_with_cost_model(
     *, spec, session, database, shapes, configs_per_run,
     llm_client, operator, gpu, cost_model,
+    include_curated: bool = True,
 ) -> float:
     """Variant of _run_one_session_iteration that uses the cost model in
     the selector."""
@@ -104,6 +107,7 @@ def _run_one_session_iteration_with_cost_model(
         max_configs=configs_per_run,
         proposed_configs=None,
         cost_model=cost_model,
+        include_curated=include_curated,
     )
     if not configs:
         return 0.0
@@ -159,6 +163,11 @@ def main() -> int:
     parser.add_argument("--configs-per-run", type=int, default=6)
     parser.add_argument("--cost-model", required=True)
     parser.add_argument("--shapes-set", default="standard", choices=["tiny", "standard", "full"])
+    parser.add_argument(
+        "--no-curated",
+        action="store_true",
+        help="Strip curated starter configs so the cost model has room to filter grid candidates.",
+    )
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
 
@@ -181,24 +190,27 @@ def main() -> int:
     print(f"Shapes: {[s.get('name') for s in shapes]}")
     print()
 
+    include_curated = not args.no_curated
     with ModalBenchmarkSession(gpu=args.gpu, timeout_seconds=900) as session:
-        print("Condition A: baseline (no cost model)")
+        print(f"Condition A: baseline (no cost model, include_curated={include_curated})")
         baseline = _run_condition(
             condition_name="baseline",
             spec=spec, session=session, shapes=shapes,
             configs_per_run=args.configs_per_run,
             iterations=args.iterations,
             cost_model=None,
+            include_curated=include_curated,
         )
 
         print()
-        print("Condition B: cost-model-filtered")
+        print(f"Condition B: cost-model-filtered (include_curated={include_curated})")
         filtered = _run_condition(
             condition_name="cost_model",
             spec=spec, session=session, shapes=shapes,
             configs_per_run=args.configs_per_run,
             iterations=args.iterations,
             cost_model=cost_model,
+            include_curated=include_curated,
         )
 
     baseline_final = max(baseline) if baseline else 0
@@ -213,6 +225,7 @@ def main() -> int:
         "gpu": args.gpu,
         "iterations": args.iterations,
         "configs_per_run": args.configs_per_run,
+        "include_curated": include_curated,
         "shapes": [s.get("name") for s in shapes],
         "baseline_trajectory": baseline,
         "filtered_trajectory": filtered,

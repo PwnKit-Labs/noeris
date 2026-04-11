@@ -1,0 +1,38 @@
+{
+  "operator": "rmsnorm",
+  "gpu": "A100",
+  "iterations": 6,
+  "configs_per_run": 6,
+  "include_curated": false,
+  "shapes": [
+    "small_hidden",
+    "gpt2_base",
+    "llama_160m",
+    "bert_base",
+    "llama_7b",
+    "llama_13b"
+  ],
+  "baseline_trajectory": [
+    801.3249999999999,
+    801.3249999999999,
+    801.3249999999999,
+    801.3249999999999,
+    801.3249999999999,
+    801.8283333333334
+  ],
+  "filtered_trajectory": [
+    800.5316666666666,
+    803.1633333333333,
+    803.1633333333333,
+    803.1633333333333,
+    803.1633333333333,
+    803.1633333333333
+  ],
+  "baseline_final": 801.8283333333334,
+  "filtered_final": 803.1633333333333,
+  "delta_pct": 0.17,
+  "cost_model": {
+    "path": ".noeris/cost-model.pkl",
+    "training_size": 384
+  }
+}

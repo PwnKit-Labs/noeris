@@ -89,6 +89,7 @@ def select_configs_for_operator(
     proposed_configs: list[dict[str, int]] | None = None,
     cost_model=None,  # Optional CostModel
     cost_model_candidates: int = 40,
+    include_curated: bool = True,
 ) -> list[dict[str, int]]:
     """Generalized config selection that works for any registered operator.
 
@@ -136,10 +137,11 @@ def select_configs_for_operator(
             for result in record.results:
                 tested_ids.add(result.get("config_id", ""))
 
-    # Slot 3: curated configs not yet tested
-    for config in spec.curated_configs:
-        if spec.config_id_fn(config) not in tested_ids:
-            _add(config)
+    # Slot 3: curated configs not yet tested (can be disabled for ablations)
+    if include_curated:
+        for config in spec.curated_configs:
+            if spec.config_id_fn(config) not in tested_ids:
+                _add(config)
 
     # Slot 4: grid exploration — untested configs
     # If a cost model is provided, score the untested grid first and prefer

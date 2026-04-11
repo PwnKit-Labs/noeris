@@ -6,7 +6,7 @@ from pathlib import Path
 
 from tests import _pathfix  # noqa: F401
 
-from research_engine.models import ResearchTopic
+from research_engine.models import Contradiction, ResearchTopic
 from research_engine.pipeline import ResearchPipeline
 from research_engine.store import JsonFileRunStore
 
@@ -75,6 +75,7 @@ class RunStoreTests(unittest.TestCase):
                 benchmark_id="tool-use-reliability",
             )
             newer.memo.claims[0].title = "Newer claim"
+            newer.memo.claims[0].evidence_kind = "llm-extracted"
             newer.memo.source_assessments[0].confidence = "high"
             store.save(newer)
 
@@ -84,6 +85,85 @@ class RunStoreTests(unittest.TestCase):
         self.assertIn("Newer claim", summary["new_claim_titles"])
         self.assertIn("Older claim", summary["dropped_claim_titles"])
         self.assertEqual(summary["confidence_changes"][0]["latest_confidence"], "high")
+        self.assertEqual(summary["shared_source_ids"], ["seed://bootstrap"])
+
+    def test_summarize_history_reports_evidence_kind_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = JsonFileRunStore(Path(temp_dir))
+            older = ResearchPipeline().run_record_for(
+                topic=ResearchTopic(
+                    name="tool-use reliability",
+                    objective="improve task success",
+                    benchmark_id="tool-use-reliability",
+                    constraints=["benchmark_id:tool-use-reliability"],
+                ),
+                benchmark_id="tool-use-reliability",
+            )
+            older.memo.claims[0].title = "Shared claim"
+            older.memo.claims[0].evidence_kind = "source-derived"
+            store.save(older)
+
+            newer = ResearchPipeline().run_record_for(
+                topic=ResearchTopic(
+                    name="tool-use reliability",
+                    objective="improve task success",
+                    benchmark_id="tool-use-reliability",
+                    constraints=["benchmark_id:tool-use-reliability"],
+                ),
+                benchmark_id="tool-use-reliability",
+            )
+            newer.memo.claims[0].title = "Shared claim"
+            newer.memo.claims[0].evidence_kind = "llm-extracted"
+            store.save(newer)
+
+            summary = store.summarize_history(benchmark_id="tool-use-reliability")
+
+        self.assertEqual(
+            summary["evidence_kind_changes"][0]["latest_evidence_kind"],
+            "llm-extracted",
+        )
+
+    def test_summarize_history_reports_contradiction_deltas(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = JsonFileRunStore(Path(temp_dir))
+            older = ResearchPipeline().run_record_for(
+                topic=ResearchTopic(
+                    name="long-context reasoning",
+                    objective="improve benchmark performance",
+                    benchmark_id="long-context-reasoning",
+                    constraints=["benchmark_id:long-context-reasoning"],
+                ),
+                benchmark_id="long-context-reasoning",
+            )
+            older.memo.contradictions = []
+            store.save(older)
+
+            newer = ResearchPipeline().run_record_for(
+                topic=ResearchTopic(
+                    name="long-context reasoning",
+                    objective="improve benchmark performance",
+                    benchmark_id="long-context-reasoning",
+                    constraints=["benchmark_id:long-context-reasoning"],
+                ),
+                benchmark_id="long-context-reasoning",
+            )
+            newer.memo.contradictions = [
+                Contradiction(
+                    title="Context disagreement",
+                    summary="Two sources imply different retention behavior.",
+                    claim_titles=[newer.memo.claims[0].title],
+                    severity="medium",
+                )
+            ]
+            store.save(newer)
+
+            summary = store.summarize_history(benchmark_id="long-context-reasoning")
+            brief = store.render_history_brief(benchmark_id="long-context-reasoning")
+
+        self.assertEqual(summary["new_contradiction_titles"], ["Context disagreement"])
+        self.assertEqual(summary["dropped_contradiction_titles"], [])
+        self.assertIn("## Contradiction Changes", brief)
+        self.assertIn("Context disagreement", brief)
 
     def test_summarize_history_reports_matmul_candidate_wins(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

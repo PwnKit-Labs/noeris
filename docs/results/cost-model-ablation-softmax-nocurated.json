@@ -1,0 +1,38 @@
+{
+  "operator": "softmax",
+  "gpu": "A100",
+  "iterations": 6,
+  "configs_per_run": 6,
+  "include_curated": false,
+  "shapes": [
+    "small",
+    "medium",
+    "large",
+    "attn_short",
+    "attn_long",
+    "vocab_small"
+  ],
+  "baseline_trajectory": [
+    933.3149999999999,
+    940.0666666666667,
+    944.9033333333332,
+    948.3466666666667,
+    948.3466666666667,
+    948.3466666666667
+  ],
+  "filtered_trajectory": [
+    988.5716666666667,
+    988.5716666666667,
+    993.205,
+    994.3166666666666,
+    998.2616666666667,
+    998.2616666666667
+  ],
+  "baseline_final": 948.3466666666667,
+  "filtered_final": 998.2616666666667,
+  "delta_pct": 5.26,
+  "cost_model": {
+    "path": ".noeris/cost-model.pkl",
+    "training_size": 384
+  }
+}
