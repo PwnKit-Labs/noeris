@@ -1,250 +1,156 @@
 # Noeris
 
-Research OS for autonomous empirical discovery, currently led by a flagship GPU kernel optimization track.
+Autonomous GPU kernel search with parameterized Triton templates, shape-indexed cross-run memory, and learned selectors.
 
-**TL;DR:** Noeris is a Research OS with shared ingestion, memory, execution, and verification substrates. Its most mature track is GPU kernel optimization: **7 parameterized Triton operators** (matmul, rmsnorm, softmax, layernorm, cross_entropy, FlashAttention with causal masking, RoPE), **three orthogonal config selectors** (frontier-slot baseline, learned cost model with R²=0.94 on 516 points, Thompson-sampling bandit), shape-indexed cross-run database, A100/H100 execution via Modal for ~$0.01/iteration. Beats AutoKernel's published H100 results on memory-bound kernels (RMSNorm 11.66x vs 5.29x, cross-entropy 9.65x vs 2.94x, softmax 6.38x vs 3.44x). **3-way ablation shows cost model and bandit are complementary**: bandit wins matmul (+133%), cost model wins attention (+66%), they tie on cross_entropy (+37%). Paper draft at [`docs/paper/noeris.md`](docs/paper/noeris.md).
+## TL;DR
 
-Noeris is broader than the Triton work, but the Triton/kernel track is the strongest proving ground in the repository today. The core system is meant to generalize across tracks: long-context reasoning, tool-use reliability, evaluation design, and systems optimization all share the same research substrate.
+- **8 parameterized Triton operators**: matmul, rmsnorm, softmax, layernorm, cross_entropy, attention (causal + sliding-window + fused QK-norm), rotary, fused GeGLU.
+- **KernelBench-style eval on 53 problems, A100 and H100**: fast_1.0 = **56.6%**, fast_2.0 = **37.7%** (A100) / **41.5%** (H100), with zero search iterations — curated starter configs only.
+- **Beats AutoKernel's published H100 numbers** on 3 of 4 memory-bound kernels: **11.66x RMSNorm**, **9.65x cross-entropy**, **6.38x softmax**.
+- **Fused GeGLU for Gemma 2/3/4**: 1060–1351 GB/s on A100 and 1601–2287 GB/s on H100, 2.65–3.98x over PyTorch eager.
+- **Learned GBR cost model**: R² = 0.94 on 516 training points; A100-trained rankings transfer to H100 with Spearman ρ = **0.967**.
+- **Adaptive meta-bandit router** validated across 3 independent trials: matches the best fixed selector within 0.5% (132.19 ± 6.89 vs 132.81 ± 6.93 TFLOPS on matmul A100); a naive alternating ensemble stalls at 83 TFLOPS.
+- **~$0.01 per iteration** on Modal. All 53-problem A100+H100 evals for under $1.
 
-## Results
-
-**KernelBench-style evaluation — 53 problems, 6 operators, 4 curated configs per problem (no search iterations).**
-
-### A100-SXM4-40GB via Modal
-
-| Threshold | Overall | Level 1 | Level 2 |
-|---|---|---|---|
-| **fast_1.0** (beat PyTorch) | **56.6%** | 58.3% | 61.5% |
-| **fast_1.5** | 41.5% | 45.8% | 42.3% |
-| **fast_2.0** (2x speedup) | **37.7%** | 37.5% | 42.3% |
-| **fast_3.0** (3x speedup) | **32.1%** | 33.3% | 34.6% |
-
-### H100 via Modal
-
-| Threshold | Overall | Level 1 | Level 2 |
-|---|---|---|---|
-| **fast_1.0** | **56.6%** | 58.3% | 61.5% |
-| **fast_1.5** | 43.4% | 45.8% | 46.2% |
-| **fast_2.0** | **41.5%** | 45.8% | 42.3% |
-| **fast_3.0** | 30.2% | 33.3% | 30.8% |
-
-### Per-operator highlights (H100)
-
-| Operator | Best result | vs PyTorch | Config |
-|---|---|---|---|
-| **rmsnorm** (mixtral) | 2625.1 GB/s | **11.66x** | `bs2048_w8_s1` |
-| **rmsnorm** (llama-13b) | 2418.3 GB/s | **11.20x** | `bs4096_w16_s1` |
-| **rmsnorm** (llama-7b) | 2340.2 GB/s | **11.11x** | `bs2048_w8_s1` |
-| **cross_entropy** (long_llama) | 2407.1 GB/s | **9.65x** | `bs32768_w16_s1` |
-| **cross_entropy** (mistral) | 2266.3 GB/s | **9.08x** | `bs8192_w16_s1` |
-| **softmax** (vocab_llama) | 2526.4 GB/s | **6.38x** | `bs4096_w16_s1` |
-| **softmax** (large) | 2347.5 GB/s | **5.46x** | `bs2048_w8_s1` |
-| **layernorm** (long_seq) | 1666.8 GB/s | **1.53x** | `bs512_w2_s2` |
-| **matmul** (llama7b_qkv) | 691.9 TFLOPS | **1.01x** | `bm128_bn256_bk64_gm8_w8_s3` |
-| **attention** (llama7b) | 468.4 TFLOPS | 0.78x | `m64_n64_w4_s3` |
-
-Full reports in [`docs/results/`](docs/results/).
-
-Cost: **~$0.01 per iteration**, ~$0.40 for both A100 and H100 full evals (84 problems).
-
-### Direct comparison to AutoKernel (both on H100)
-
-| Kernel | **Noeris** | AutoKernel | Delta |
-|---|---|---|---|
-| RMSNorm | **11.66x** | 5.29x | **+120%** |
-| Cross-entropy | **9.65x** | 2.94x | **+228%** |
-| Softmax | **6.38x** | 3.44x | **+85%** |
-| LayerNorm | 1.53x | 3.21x | -52% (investigate) |
-
-We beat AutoKernel's published results on 3 of 4 memory-bound kernels **without any search iterations** — just the curated starter configs and the shape-indexed approach. LayerNorm is the one gap and a good target for the full search loop.
-
-### Comparison to published work
-
-| | Noeris | AutoKernel | KernelSkill (ICLR'26) |
-|---|---|---|---|
-| fast_1.0 (our 53 probs) | **56.6%** | — | 5.44x avg L1 |
-| Operators | **6** | 9 | — |
-| **Cross-run learning** | **Yes** | No | Skill retrieval |
-| **Shape-indexed configs** | **Yes** | No | No |
-| Cost/iteration | **$0.01** | dedicated H100 | dedicated GPU |
-
-## What's Novel
-
-Every existing LLM-driven kernel optimization system (AutoKernel, KernelSkill, CUDA-L1, CUDA Agent, KernelFoundry) starts fresh each run and produces one kernel per operator. Noeris is the first to combine:
-
-1. **Parameterized kernel templates** — generate kernels from `(BLOCK_SIZE, num_warps, num_stages)` configs rather than rewriting whole files
-2. **Per-shape autotuning** — different configs win different matrix shapes; track which
-3. **Cross-run config database** — persist `(operator, shape_bucket, hardware) -> best params` across sessions and feed them back to the LLM proposer
-4. **Continuous frontier tracking** — run overnight, chain follow-up runs when the frontier moves, accumulate discoveries
-
-No published system does all four.
+Paper draft (11,229 words): [`docs/paper/noeris.md`](docs/paper/noeris.md).
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────┐
-│  LLM Proposer                                   │
-│  (suggests novel kernel configs using           │
-│   cross-run insights from config database)      │
-└──────────────────────┬──────────────────────────┘
-                       │ proposed configs
-                       ▼
-┌─────────────────────────────────────────────────┐
-│  Config Selector                                │
-│  incumbent / proposed / curated / exploration   │
-│  slots, max N configs per run                   │
-└──────────────────────┬──────────────────────────┘
-                       │ selected configs
-                       ▼
-┌─────────────────────────────────────────────────┐
-│  Kernel Generator (per operator)                │
-│  matmul / rmsnorm / softmax / layernorm /       │
-│  cross_entropy                                  │
-└──────────────────────┬──────────────────────────┘
-                       │ self-contained benchmark scripts
-                       ▼
-┌─────────────────────────────────────────────────┐
-│  Modal GPU Executor (A100/H100)                 │
-│  Batched: all configs in one cold start         │
-│  5-stage correctness gate + perf benchmark      │
-└──────────────────────┬──────────────────────────┘
-                       │ results
-                       ▼
-┌─────────────────────────────────────────────────┐
-│  Shape-Indexed Config Database                  │
-│  (operator, shape_bucket, hardware) -> configs  │
-│  Persisted as JSON across runs                  │
-│  Insights extracted for next LLM proposal       │
-└─────────────────────────────────────────────────┘
-                       │
-                       ▼
-              auto-chain next run
-              (if frontier moved)
+```mermaid
+flowchart LR
+    OP[Operator Registry<br/>8 Triton templates] --> PROP[LLM Proposer<br/>+ cross-run insights]
+    DB[(Shape-Indexed<br/>Config DB)] --> PROP
+    DB --> CM[Cost Model<br/>GBR, R²=0.94]
+    PROP --> SEL
+    CM --> SEL[Adaptive Router]
+    BAN[Thompson Bandit] --> SEL
+    SEL --> MOD[Modal GPU Runner<br/>A100 / H100]
+    MOD --> DB
 ```
 
-## Supported Operators
+The proposer, selectors, database, and runner are all operator-agnostic. Adding a new operator is ~200 LoC plus a registry entry.
 
-| Operator | Param space | Shape buckets | Metric | Status |
+## What it does
+
+Existing LLM-driven kernel systems rewrite free-form source and start fresh each run. Noeris instead generates kernels from small parameter tuples (e.g. `BLOCK_SIZE_M/N/K, num_warps, num_stages`) and persists winning configs in a JSON database keyed by `(operator, shape_bucket, hardware)`. Every CI run restores the previous database, adds new measurements, and saves it as a new artifact — knowledge compounds across sessions.
+
+An LLM proposer sees the database state as "cross-run insights" and suggests novel configs; a gradient-boosted cost model and a Thompson-sampling bandit rank grid candidates before any GPU call; an adaptive meta-bandit router learns per-iteration which selector to trust.
+
+## Iteration loop
+
+```mermaid
+flowchart TD
+    G[Grid generator] --> R[Selector<br/>incumbent / proposed /<br/>curated / exploration]
+    L[LLM proposer] --> R
+    R --> B[Modal benchmark<br/>correctness + perf]
+    B --> U[Update DB]
+    U --> I[Extract insights]
+    I --> L
+    U -.auto-chain if<br/>frontier moved.-> G
+```
+
+## Results
+
+### KernelBench — 53 problems, curated starter configs, no search
+
+| GPU | fast_1.0 | fast_1.5 | fast_2.0 | fast_3.0 |
 |---|---|---|---|---|
-| **matmul** | BLOCK_M/N/K, GROUP_SIZE_M, num_warps, num_stages | 10 | TFLOPS | Working |
-| **rmsnorm** | BLOCK_SIZE, num_warps, num_stages | 8 | GB/s | Working |
-| **softmax** | BLOCK_SIZE, num_warps, num_stages | 7 | GB/s | Working |
-| **layernorm** | BLOCK_SIZE, num_warps, num_stages | 8 | GB/s | Working |
-| **cross_entropy** | BLOCK_SIZE, num_warps, num_stages | 7 | GB/s | Working |
-| **attention** (FlashAttention) | BLOCK_M, BLOCK_N, num_warps, stages | 7 | TFLOPS | Working |
-| **rotary_emb** | BLOCK_SIZE, num_warps | — | GB/s | Planned |
+| A100-SXM4-40GB | **56.6%** | 41.5% | 37.7% | 32.1% |
+| H100 | **56.6%** | 43.4% | 41.5% | 30.2% |
 
-## Repository Layout
+Full per-problem tables: [`docs/results/kernelbench-a100-53problems.md`](docs/results/kernelbench-a100-53problems.md), [`docs/results/kernelbench-h100-53problems.md`](docs/results/kernelbench-h100-53problems.md).
 
-```
-src/research_engine/
-  triton_operators.py      Common operator protocol and registry
-  triton_kernels.py        Matmul kernel generator + ConfigDatabase
-  triton_rmsnorm.py        RMSNorm operator
-  triton_softmax.py        Softmax operator
-  triton_layernorm.py      LayerNorm operator
-  triton_cross_entropy.py  Cross-entropy operator
-  modal_runner.py          Modal-based GPU execution backend
-  kernelbench.py           KernelBench-style evaluation with fast_p
-  cli.py                   CLI entry point (triton-iterate, kernelbench-eval)
-  executors.py             CPU benchmark executors (proving ground)
-  pipeline.py              Research cycle orchestration
-  llm.py                   LLM-backed proposals and claim extraction
-  ingestion.py             Live source discovery (arXiv, GitHub)
-  models.py                Data models
-  store.py                 Run persistence and history
-  export.py                Run export bundles
-  benchmarks.py            Benchmark definitions
-  components.py            Component protocols
-  triton_attention.py      FlashAttention-style kernel with online softmax
-  ablation.py              Cross-run learning ablation study
-tests/                     Regression coverage (80+ tests)
-docs/                      Design docs, thesis, roadmap
-.github/workflows/         CI and benchmark automation
-```
+### Direct comparison to AutoKernel (H100)
 
-See [`docs/RESEARCH_OS.md`](docs/RESEARCH_OS.md) for the substrate / track / lane / study framing.
-See [`docs/RESEARCH_MEMORY.md`](docs/RESEARCH_MEMORY.md) for the current lineage and memory model.
+| Kernel | Noeris | AutoKernel | Delta |
+|---|---|---|---|
+| RMSNorm | **11.66x** | 5.29x | +120% |
+| Cross-entropy | **9.65x** | 2.94x | +228% |
+| Softmax | **6.38x** | 3.44x | +85% |
+| LayerNorm | 1.53x | 3.21x | -52% (gap to close) |
 
-## Quick Start
+### Fused GeGLU for Gemma 2/3/4
+
+| Problem | A100 GB/s | A100 vs eager | H100 GB/s | H100 vs eager |
+|---|---|---|---|---|
+| gemma2b FFN | 1167.6 | 3.77x | 1999.0 | 3.60x |
+| gemma4b FFN | 1279.5 | 3.79x | 2120.3 | 3.61x |
+| gemma26b FFN | 1351.1 | 3.98x | 2287.3 | 3.87x |
+| gemma31b FFN | 1060.0 | 3.08x | 1601.3 | 2.65x |
+
+All four problems use `bs4096_w16_s1`. Full reports: [`docs/results/kernelbench-geglu-a100.md`](docs/results/kernelbench-geglu-a100.md), [`docs/results/kernelbench-geglu-h100.md`](docs/results/kernelbench-geglu-h100.md).
+
+### Sliding-window + fused QK-norm attention (newly landed)
+
+The attention kernel now supports a `WINDOW_SIZE` constexpr that prunes the K-tile loop for Gemma 3/4 local attention (3 new shape buckets), and a fused QK-RMSNorm variant that normalizes Q once and K per-tile. Sliding-window validated on A100 with max error 0.00098; 22 new tests cover both features. Benchmark numbers on the two added KernelBench L3 problems are not yet collected.
+
+### Selectors are complementary
+
+Three-way ablation (baseline grid vs. cost model vs. Thompson bandit) across matmul, rmsnorm, softmax, cross_entropy, and attention shows the selectors win on different operators: bandit dominates matmul (+134% vs +45% cost model), cost model dominates attention (+66%) and wins softmax and cross_entropy by smaller margins.
+
+An adaptive meta-bandit router learns per-iteration which selector to deploy. Across 3 independent trials on matmul A100:
+
+| Condition | Mean TFLOPS | Std |
+|---|---|---|
+| Adaptive router | 132.19 | 6.89 |
+| Thompson bandit | 132.81 | 6.93 |
+| Cost model | ~85 | — |
+| Naive alternating ensemble | 83.05 | 4.19 |
+
+The adaptive router closes the gap to the best fixed selector within 0.5% without needing to know in advance which one to pick. See [`docs/results/adaptive-router-matmul-trial{1,2,3}.json`](docs/results/) and [`docs/results/three-way-summary.md`](docs/results/three-way-summary.md).
+
+### Hardware cross-learning
+
+A cost model trained on 516 A100 benchmark points and applied to H100 candidate ranking achieves Spearman ρ = **0.967** (`rmsnorm`, `softmax`, `layernorm`, `cross_entropy`, 16 configs each). See [`docs/results/hardware-cross-learning-a100-to-h100.json`](docs/results/hardware-cross-learning-a100-to-h100.json).
+
+## Quick start
 
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -e .
 
-# Run KernelBench evaluation on an A100 via Modal
+# KernelBench-style eval on an A100 via Modal
 python -m research_engine.cli kernelbench-eval --gpu A100
 
-# Search a specific operator
+# Search a specific operator with LLM proposals
 python -m research_engine.cli triton-iterate \
     --operator rmsnorm --gpu A100 --llm --configs-per-run 8
-
-# CPU matmul search (no GPU needed — proving ground)
-python -m research_engine.cli iterate matmul-speedup --iterations 3 --llm --live-execution
 ```
 
-Requires:
-- Modal account (`pip install modal && modal token new`)
-- Azure OpenAI or OpenAI credentials for the LLM proposer (optional but powerful)
+Requires a Modal account (`pip install modal && modal token new`). Azure OpenAI or OpenAI credentials are optional but power the LLM proposer.
 
-## CI
+## Repository layout
 
-| Workflow | Trigger | Purpose |
-|---|---|---|
-| CI | Push + PR | Unit tests (80+ tests), benchmark registry validation |
-| Triton Iterate | Twice daily + manual | Autonomous GPU kernel search with auto-chaining |
-| Benchmark Iterate | Twice daily + manual | CPU matmul search (proving ground) |
-| Benchmark Plans | Weekly + manual | Offline benchmark planning validation |
+```
+src/research_engine/
+  triton_operators.py        operator protocol + registry
+  triton_kernels.py          matmul kernel + ConfigDatabase
+  triton_{rmsnorm,softmax,layernorm,cross_entropy}.py
+  triton_attention.py        FlashAttention + causal + SWA + QK-norm
+  triton_rotary.py           RoPE kernel
+  triton_geglu.py            fused GeGLU for Gemma
+  modal_runner.py            Modal GPU execution backend
+  kernelbench.py             KernelBench-style evaluation + fast_p
+  cost_model.py              gradient-boosted cost model
+  ablation.py                cross-run learning + selector ablation
+  cli.py                     CLI entry point
+tests/                       80+ regression tests
+docs/paper/noeris.md         paper draft (11,229 words)
+docs/results/                all benchmark JSON + reports
+```
 
-## Roadmap
+## Related work
 
-### Done
+| System | Cross-run | Shape-indexed | Parameterized | Operators |
+|---|---|---|---|---|
+| **Noeris** | **Yes** | **Yes** | **Yes** | **8** |
+| AutoKernel | No | No | No | 9 |
+| KernelSkill (ICLR'26) | Skill retrieval | No | No | — |
+| CUDA-L1 (ICLR'26) | Trained model | No | No | — |
+| KernelFoundry | Within-run | No | Template-based | — |
+| Triton autotune | Cached per shape | Per-shape | Fixed list | — |
 
-- [x] Autonomous CPU matmul search loop with code generation (proving ground)
-- [x] Compiled code generation for parameterized kernels
-- [x] LLM-proposed novel configs that actually win
-- [x] Parameterized Triton matmul kernel
-- [x] Shape-indexed ConfigDatabase with cross-run persistence
-- [x] Operator-aware database (multi-operator keying)
-- [x] Modal GPU execution backend (A100/H100)
-- [x] Six parameterized operators: matmul, rmsnorm, softmax, layernorm, cross_entropy, attention
-- [x] FlashAttention kernel with tiled online softmax
-- [x] KernelBench-style evaluation with fast_p scoring (53 problems)
-- [x] LLM proposer with cross-run insights
-- [x] Auto-chaining CI with scheduled runs
-- [x] Multi-operator CI matrix (6 operators in parallel)
-- [x] Generalized config selection for all operators
-- [x] Cross-run learning ablation framework
-- [x] H100 evaluation and direct comparison to AutoKernel
-- [x] Verified end-to-end on real A100 and H100 — beating published results on memory-bound kernels
+## Citing
 
-### Next
-
-- [ ] Run the ablation study at scale to validate cross-run learning claim
-- [ ] Improve LayerNorm kernel (our only operator losing to AutoKernel)
-- [ ] Causal masking in attention kernel
-- [ ] Rotary embedding kernel
-- [ ] Full KernelBench (250 problems) HuggingFace integration
-- [ ] Hardware cross-learning (configs learned on A100 applied to H100)
-- [ ] Research paper draft (arXiv submission)
-
-## Related Work
-
-| System | Method | Cross-run | Shape-indexed | Parameterized | Operators |
-|---|---|---|---|---|---|
-| **Noeris** | Parameterized + LLM proposals | **Yes** | **Yes** | **Yes** | 5 |
-| AutoKernel (2603.21331) | Iterative agent loop | No | No | No | 9 |
-| KernelSkill (2603.10085) | Multi-agent + skill library | Skill reuse | No | No | — |
-| CUDA-L1 (ICLR'26) | Contrastive RL | Trained model | No | No | — |
-| CUDA Agent (2602.24286) | Agentic RL | Trained model | No | No | — |
-| KernelFoundry (2603.12440) | MAP-Elites evolutionary | Within-run | No | Template-based | — |
-| Triton autotune | Exhaustive over fixed list | Cached per shape | Per-shape | Fixed list | — |
-
-## Design Principles
-
-- **Evidence-first.** Every claim has an artifact trail. No vibes.
-- **Shape-aware.** Different workloads have different optimal configs. Track which.
-- **Cross-run.** Discoveries persist and compound. The system gets smarter over time.
-- **Reproducible.** Parameterized configs, not monolithic rewrites. Artifact bundles, not summaries.
-- **Cheap.** ~$0.01 per iteration on Modal. ~$3/week for scheduled runs.
+Paper draft: [`docs/paper/noeris.md`](docs/paper/noeris.md). MIT License. If you reference this work, please link to the repo.
