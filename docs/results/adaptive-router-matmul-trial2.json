@@ -1,0 +1,83 @@
+{
+  "operator": "matmul",
+  "gpu": "A100",
+  "iterations": 5,
+  "configs_per_run": 6,
+  "include_curated": false,
+  "shapes": [
+    "tiny",
+    "small",
+    "medium",
+    "large",
+    "xlarge",
+    "tall_skinny"
+  ],
+  "cost_model": {
+    "path": ".noeris/cost-model.pkl",
+    "training_size": 516
+  },
+  "conditions": {
+    "baseline": {
+      "trajectory": [
+        59.00833333333333,
+        59.00833333333333,
+        59.00833333333333,
+        59.00833333333333,
+        59.00833333333333
+      ],
+      "final_best": 59.00833333333333,
+      "delta_vs_baseline_pct": 0.0
+    },
+    "cost_model": {
+      "trajectory": [
+        85.32000000000001,
+        85.33833333333332,
+        85.33833333333332,
+        85.33833333333332,
+        85.33833333333332
+      ],
+      "final_best": 85.33833333333332,
+      "delta_vs_baseline_pct": 44.62
+    },
+    "bandit": {
+      "trajectory": [
+        137.515,
+        137.515,
+        137.515,
+        137.515,
+        137.515
+      ],
+      "final_best": 137.515,
+      "delta_vs_baseline_pct": 133.04
+    },
+    "naive_ensemble": {
+      "trajectory": [
+        85.59833333333334,
+        85.59833333333334,
+        85.59833333333334,
+        85.59833333333334,
+        85.59833333333334
+      ],
+      "final_best": 85.59833333333334,
+      "delta_vs_baseline_pct": 45.06
+    },
+    "adaptive_router": {
+      "trajectory": [
+        136.41333333333333,
+        136.41333333333333,
+        136.56166666666667,
+        136.94,
+        136.94
+      ],
+      "final_best": 136.94,
+      "delta_vs_baseline_pct": 132.07,
+      "arm_choices": [
+        "baseline",
+        "bandit",
+        "cost_model",
+        "baseline",
+        "baseline"
+      ]
+    }
+  }
+}
