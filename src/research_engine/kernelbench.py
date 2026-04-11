@@ -138,7 +138,7 @@ KERNELBENCH_SUBSET = {
         {"id": "kb_L2_rmsnorm_llama70b", "n_rows": 2048, "hidden_dim": 8192, "level": 2},
         {"id": "kb_L2_rmsnorm_mixtral", "n_rows": 8192, "hidden_dim": 4096, "level": 2},
         # Gemma 4 family (April 2026)
-        {"id": "kb_L2_rmsnorm_gemma_26b", "n_rows": 4096, "hidden_dim": 4096, "level": 2},
+        {"id": "kb_L2_rmsnorm_gemma_26b", "n_rows": 4096, "hidden_dim": 2816, "level": 2},
     ],
     "softmax": [
         {"id": "kb_L1_softmax_tiny", "n_rows": 1024, "n_cols": 256, "level": 1},

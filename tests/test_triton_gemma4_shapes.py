@@ -1,10 +1,10 @@
 """Tests for Gemma 4 shape buckets added to RMSNorm, Cross-Entropy, and Rotary operators.
 
-Gemma 4 was released April 2026 with variants E2B, E4B, 26B (MoE), and 31B Dense.
-Key distinguishing architectural features:
-- hidden_dim: 2048 / 2560 / 4096 / 5376
-- vocab: 256000 (largest published dense-LLM vocabulary)
-- head_dim: 256 (2x LLaMA's 128)
+Gemma 4 was released April 2026 with variants E2B, E4B, 26B-A4B (MoE), and 31B Dense.
+Key distinguishing architectural features (from HF config.json, verified 2026-04-11):
+- hidden_dim: 1536 / 2560 / 2816 / 5376 (E2B / E4B / 26B-A4B / 31B)
+- vocab: 262144 (largest published dense-LLM vocabulary)
+- head_dim: 256 local / 512 global (Gemma 4 introduced asymmetric head_dim)
 """
 
 from __future__ import annotations
@@ -56,8 +56,9 @@ class TestRmsnormGemma4Buckets(unittest.TestCase):
         self.assertIn("gemma4_31b", self._bucket_names())
 
     def test_classifier_e2b(self):
+        # HF gemma-4-E2B-it config.json: hidden_size=1536 (was incorrectly 2048 pre-#46)
         self.assertEqual(
-            rmsnorm_shape_bucket_key({"n_rows": 2048, "hidden_dim": 2048}),
+            rmsnorm_shape_bucket_key({"n_rows": 2048, "hidden_dim": 1536}),
             "gemma4_e2b",
         )
 
@@ -68,8 +69,9 @@ class TestRmsnormGemma4Buckets(unittest.TestCase):
         )
 
     def test_classifier_26b(self):
+        # HF gemma-4-26B-A4B-it config.json: hidden_size=2816 (was incorrectly 4096 pre-#46)
         self.assertEqual(
-            rmsnorm_shape_bucket_key({"n_rows": 4096, "hidden_dim": 4096}),
+            rmsnorm_shape_bucket_key({"n_rows": 4096, "hidden_dim": 2816}),
             "gemma4_26b",
         )
 
@@ -245,7 +247,8 @@ class TestKernelBenchGemmaProblems(unittest.TestCase):
             if p["id"] == "kb_L2_rmsnorm_gemma_26b"
         )
         self.assertEqual(problem["n_rows"], 4096)
-        self.assertEqual(problem["hidden_dim"], 4096)
+        # HF gemma-4-26B-A4B-it config.json: hidden_size=2816
+        self.assertEqual(problem["hidden_dim"], 2816)
 
     def test_ce_gemma_256k_has_correct_vocab(self):
         problem = next(
