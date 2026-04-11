@@ -251,7 +251,7 @@ def build_parser() -> argparse.ArgumentParser:
     triton_parser.add_argument(
         "--operator",
         default="matmul",
-        choices=["matmul", "rmsnorm", "softmax", "layernorm", "cross_entropy", "attention", "rotary"],
+        choices=["matmul", "rmsnorm", "softmax", "layernorm", "cross_entropy", "attention", "rotary", "geglu"],
         help="which Triton operator to search",
     )
     triton_parser.add_argument(
@@ -308,7 +308,7 @@ def build_parser() -> argparse.ArgumentParser:
     kb_parser.add_argument(
         "--operator",
         default="",
-        choices=["", "matmul", "rmsnorm", "softmax", "layernorm", "cross_entropy", "attention", "rotary"],
+        choices=["", "matmul", "rmsnorm", "softmax", "layernorm", "cross_entropy", "attention", "rotary", "geglu"],
         help="restrict to one operator, or leave empty for all",
     )
     kb_parser.add_argument(
@@ -335,7 +335,7 @@ def build_parser() -> argparse.ArgumentParser:
     ablation_parser.add_argument(
         "--operator",
         required=True,
-        choices=["matmul", "rmsnorm", "softmax", "layernorm", "cross_entropy", "attention", "rotary"],
+        choices=["matmul", "rmsnorm", "softmax", "layernorm", "cross_entropy", "attention", "rotary", "geglu"],
     )
     ablation_parser.add_argument("--gpu", default="A100")
     ablation_parser.add_argument("--trials", type=int, default=1,
@@ -978,6 +978,8 @@ def _parse_operator_shape(operator_name: str, shape_str: str) -> dict:
             "heads": int(parts[2]),
             "head_dim": int(parts[3]),
         }
+    elif operator_name == "geglu":
+        return {"n_rows": int(parts[0]), "ffn_dim": int(parts[1])}
     return {"raw": shape_str}
 
 

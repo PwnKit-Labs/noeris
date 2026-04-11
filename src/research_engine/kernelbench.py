@@ -95,6 +95,13 @@ KERNELBENCH_SUBSET = {
         {"id": "kb_L3_attn_llama7b_causal", "batch": 1, "heads": 32, "seq_len": 4096, "head_dim": 128, "is_causal": True, "level": 3},
         {"id": "kb_L3_attn_mistral_causal", "batch": 1, "heads": 32, "seq_len": 8192, "head_dim": 128, "is_causal": True, "level": 3},
     ],
+    "geglu": [
+        # Level 2: Gemma 4 FFN shapes (n_rows = batch*seq tokens, ffn_dim = intermediate size)
+        {"id": "kb_L2_geglu_gemma2b",  "n_rows": 2048, "ffn_dim": 5632,  "level": 2},
+        {"id": "kb_L2_geglu_gemma4b",  "n_rows": 2048, "ffn_dim": 14336, "level": 2},
+        {"id": "kb_L2_geglu_gemma26b", "n_rows": 2048, "ffn_dim": 16384, "level": 2},
+        {"id": "kb_L2_geglu_gemma31b", "n_rows": 2048, "ffn_dim": 24576, "level": 2},
+    ],
 }
 
 
@@ -259,6 +266,8 @@ def build_benchmark_script_with_baseline(
         from .triton_cross_entropy import generate_cross_entropy_benchmark_script as gen_fn
     elif operator == "attention":
         from .triton_attention import generate_attention_benchmark_script as gen_fn
+    elif operator == "geglu":
+        from .triton_geglu import generate_geglu_benchmark_script as gen_fn
     else:
         raise ValueError(f"Unknown operator: {operator}")
 
@@ -461,6 +470,37 @@ def _pytorch_baseline_snippet(operator: str) -> str:
             ms_c = triton.testing.do_bench(lambda: compiled_attn(q, k, v, cf), warmup=10, rep=50)
             tflops_c = flops / (ms_c * 1e-3) / 1e12
             compile_baselines.append({"shape_name": shape.get("name", ""), "ms": round(ms_c, 4), "tflops": round(tflops_c, 2)})
+        except Exception as exc:
+            compile_baselines.append({"shape_name": shape.get("name", ""), "error": str(exc)[:200]})
+    output["pytorch_baselines"] = pytorch_baselines
+    output["compile_baselines"] = compile_baselines
+'''
+    elif operator == "geglu":
+        return '''
+    # Measure PyTorch eager and torch.compile GeGLU baselines
+    pytorch_baselines = []
+    compile_baselines = []
+
+    def _geglu(gate, up):
+        return torch.nn.functional.gelu(up.to(torch.float32), approximate="tanh").to(torch.float16) * gate
+    compiled_geglu = torch.compile(_geglu, mode="max-autotune", dynamic=False)
+
+    for shape in shapes:
+        n_rows  = shape["n_rows"]
+        ffn_dim = shape["ffn_dim"]
+        gate = torch.randn((n_rows, ffn_dim), device="cuda", dtype=torch.float16)
+        up   = torch.randn((n_rows, ffn_dim), device="cuda", dtype=torch.float16)
+        # Read gate + up, write out — 3 tensors of fp16
+        bytes_moved = 3 * n_rows * ffn_dim * 2
+        ms = triton.testing.do_bench(lambda: _geglu(gate, up), warmup=25, rep=100)
+        gb_per_s = bytes_moved / (ms * 1e-3) / 1e9
+        pytorch_baselines.append({"shape_name": shape.get("name", ""), "ms": round(ms, 4), "gb_per_s": round(gb_per_s, 2), "tflops": round(gb_per_s, 2)})
+        try:
+            for _ in range(3):
+                compiled_geglu(gate, up)
+            ms_c = triton.testing.do_bench(lambda: compiled_geglu(gate, up), warmup=10, rep=50)
+            gb_c = bytes_moved / (ms_c * 1e-3) / 1e9
+            compile_baselines.append({"shape_name": shape.get("name", ""), "ms": round(ms_c, 4), "gb_per_s": round(gb_c, 2), "tflops": round(gb_c, 2)})
         except Exception as exc:
             compile_baselines.append({"shape_name": shape.get("name", ""), "error": str(exc)[:200]})
     output["pytorch_baselines"] = pytorch_baselines

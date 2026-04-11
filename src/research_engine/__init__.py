@@ -33,6 +33,7 @@ from . import triton_layernorm  # noqa: F401  (registers layernorm)
 from . import triton_cross_entropy  # noqa: F401  (registers cross_entropy)
 from . import triton_attention  # noqa: F401  (registers attention)
 from . import triton_rotary  # noqa: F401  (registers rotary)
+from . import triton_geglu  # noqa: F401  (registers geglu)
 from .triton_operators import REGISTRY as TRITON_OPERATORS  # noqa: F401
 
 __all__ = [
