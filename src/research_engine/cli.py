@@ -270,6 +270,15 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         help="path to a trained CostModel pickle (enables cost-model-ranked selection)",
     )
+    triton_parser.add_argument(
+        "--bandit",
+        action="store_true",
+        help=(
+            "use Thompson-sampling bandit selector instead of the standard "
+            "frontier-slot selector; exploits empirical reward history in the "
+            "config database via Beta posteriors per shape bucket"
+        ),
+    )
 
     kb_parser = subparsers.add_parser(
         "kernelbench-eval",
@@ -782,15 +791,27 @@ def _run_generic_operator_iterate(*, spec, args, db, shapes) -> int:
                 cost_model = None
 
     # Use the generalized selector with full slotting logic
-    configs = select_configs_for_operator(
-        spec=spec,
-        database=db,
-        hardware=hardware,
-        shapes=shapes,
-        max_configs=args.configs_per_run,
-        proposed_configs=proposed_configs,
-        cost_model=cost_model,
-    )
+    if getattr(args, "bandit", False):
+        from .bandit_selector import BanditSelector
+        _bandit = BanditSelector()
+        configs = _bandit.select_configs(
+            spec=spec,
+            database=db,
+            hardware=hardware,
+            shapes=shapes,
+            max_configs=args.configs_per_run,
+            proposed_configs=proposed_configs,
+        )
+    else:
+        configs = select_configs_for_operator(
+            spec=spec,
+            database=db,
+            hardware=hardware,
+            shapes=shapes,
+            max_configs=args.configs_per_run,
+            proposed_configs=proposed_configs,
+            cost_model=cost_model,
+        )
 
     # Generate benchmark script
     benchmark_script = spec.benchmark_script_fn(configs, shapes)
@@ -1077,13 +1098,27 @@ def _run_triton_iterate(args) -> int:
                 cost_model = None
 
     # Select configs for this run
-    configs = select_configs_for_run(
-        database=db,
-        hardware=hardware,
-        shapes=[{"M": s["M"], "N": s["N"], "K": s["K"]} for s in shapes],
-        max_configs=args.configs_per_run,
-        proposed_configs=proposed_configs,
-    )
+    matmul_shapes = [{"M": s["M"], "N": s["N"], "K": s["K"]} for s in shapes]
+    if getattr(args, "bandit", False):
+        from .bandit_selector import BanditSelector
+        from .triton_operators import REGISTRY as _REGISTRY
+        _bandit = BanditSelector()
+        configs = _bandit.select_configs(
+            spec=_REGISTRY.get("matmul"),
+            database=db,
+            hardware=hardware,
+            shapes=matmul_shapes,
+            max_configs=args.configs_per_run,
+            proposed_configs=proposed_configs,
+        )
+    else:
+        configs = select_configs_for_run(
+            database=db,
+            hardware=hardware,
+            shapes=matmul_shapes,
+            max_configs=args.configs_per_run,
+            proposed_configs=proposed_configs,
+        )
     # If cost model present, re-rank grid candidates (matmul path uses its own
     # select_configs_for_run; the generic path uses select_configs_for_operator).
     # The cost model is most valuable in the generic path below.
