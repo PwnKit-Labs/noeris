@@ -41,17 +41,31 @@ ROTARY_CURATED_CONFIGS = [
 
 
 # (batch, seq, heads, head_dim)
+#
+# Gemma 3/4 use DUAL-BASE RoPE: local layers (5 of 6 in the 5:1 pattern) use
+# theta=10,000, global layers use theta=1,000,000 with p-RoPE (proportional)
+# scaling. These are the same kernel — the only difference is the precomputed
+# cos/sin tables fed in. We nonetheless keep separate buckets so the bandit's
+# (shape, config) cache distinguishes them; the rope_theta field is metadata
+# used by the reference and benchmark_one but not by the kernel itself.
 ROTARY_SHAPE_BUCKETS = [
-    {"name": "llama7b_short", "batch": 1, "seq": 512, "heads": 32, "head_dim": 128},
-    {"name": "llama7b_med", "batch": 1, "seq": 2048, "heads": 32, "head_dim": 128},
-    {"name": "llama7b_long", "batch": 1, "seq": 4096, "heads": 32, "head_dim": 128},
-    {"name": "mistral_long", "batch": 1, "seq": 8192, "heads": 32, "head_dim": 128},
-    {"name": "gpt_neox", "batch": 2, "seq": 2048, "heads": 16, "head_dim": 64},
-    {"name": "gqa_small", "batch": 2, "seq": 1024, "heads": 8, "head_dim": 128},
-    # Gemma 4 family: head_dim=256 (vs LLaMA's 128); BLOCK_SIZE must cover 128 pairs.
-    # E2B/E4B use 8 heads; 26B MoE uses 16 heads.
-    {"name": "gemma4_2b_rope", "batch": 1, "seq": 4096, "heads": 8, "head_dim": 256},
-    {"name": "gemma4_26b_rope", "batch": 1, "seq": 4096, "heads": 16, "head_dim": 256},
+    {"name": "llama7b_short", "batch": 1, "seq": 512, "heads": 32, "head_dim": 128, "rope_theta": 10000},
+    {"name": "llama7b_med", "batch": 1, "seq": 2048, "heads": 32, "head_dim": 128, "rope_theta": 10000},
+    {"name": "llama7b_long", "batch": 1, "seq": 4096, "heads": 32, "head_dim": 128, "rope_theta": 10000},
+    {"name": "mistral_long", "batch": 1, "seq": 8192, "heads": 32, "head_dim": 128, "rope_theta": 10000},
+    {"name": "gpt_neox", "batch": 2, "seq": 2048, "heads": 16, "head_dim": 64, "rope_theta": 10000},
+    {"name": "gqa_small", "batch": 2, "seq": 1024, "heads": 8, "head_dim": 128, "rope_theta": 10000},
+    # Gemma 4 local layers — theta=10k (standard LLaMA-family base)
+    # head_dim=256 (vs LLaMA's 128); BLOCK_SIZE must cover 128 pairs
+    {"name": "gemma4_e2b_rope_local", "batch": 1, "seq": 4096, "heads": 8, "head_dim": 256, "rope_theta": 10000, "use_prope": False},
+    {"name": "gemma4_26b_a4b_rope_local", "batch": 1, "seq": 4096, "heads": 16, "head_dim": 256, "rope_theta": 10000, "use_prope": False},
+    {"name": "gemma4_31b_rope_local", "batch": 1, "seq": 4096, "heads": 32, "head_dim": 256, "rope_theta": 10000, "use_prope": False},
+    # Gemma 4 global layers — theta=1M with p-RoPE scaling, head_dim=512
+    {"name": "gemma4_26b_a4b_rope_global", "batch": 1, "seq": 4096, "heads": 16, "head_dim": 512, "rope_theta": 1000000, "use_prope": True},
+    {"name": "gemma4_31b_rope_global", "batch": 1, "seq": 4096, "heads": 32, "head_dim": 512, "rope_theta": 1000000, "use_prope": True},
+    # Backwards-compat alias for the pre-#34 bucket naming
+    {"name": "gemma4_2b_rope", "batch": 1, "seq": 4096, "heads": 8, "head_dim": 256, "rope_theta": 10000, "use_prope": False},
+    {"name": "gemma4_26b_rope", "batch": 1, "seq": 4096, "heads": 16, "head_dim": 256, "rope_theta": 10000, "use_prope": False},
 ]
 
 
@@ -62,16 +76,33 @@ def rotary_config_id(config: dict[str, int]) -> str:
 def rotary_shape_bucket_key(shape: dict[str, int]) -> str:
     """Classify a RoPE shape into a bucket.
 
-    Gemma 4 uses head_dim=256 (LLaMA uses 128), which is the discriminating
-    feature for the gemma4_*_rope buckets.  Within Gemma, heads=8 maps to the
-    E2B/E4B variants and heads=16 maps to the 26B MoE.
+    Gemma 4 uses asymmetric per-layer-type RoPE:
+      * head_dim=256 + theta=10k   -> local layer  (5 of 6 in the 5:1 pattern)
+      * head_dim=512 + theta=1M    -> global layer (1 of 6) with p-RoPE scaling
+
+    Within Gemma local (head_dim=256), heads=8 maps to E2B/E4B, heads=16 to
+    26B-A4B, heads=32 to 31B Dense. Within Gemma global (head_dim=512), heads=16
+    is 26B-A4B (16:2 GQA) and heads=32 is 31B Dense (32:4 GQA).
     """
     seq = shape.get("seq", 0)
     hd = shape.get("head_dim", 0)
     heads = shape.get("heads", 0)
-    # Gemma 4: head_dim=256 distinguishes it from all other tracked models.
+    use_prope = bool(shape.get("use_prope", False))
+    rope_theta = shape.get("rope_theta", 10000)
+
+    # Gemma 4 global layers (head_dim=512 is unique; p-RoPE or theta>=1M signals it too)
+    if hd >= 512 or (hd >= 256 and (use_prope or rope_theta >= 1_000_000)):
+        if heads >= 32:
+            return "gemma4_31b_rope_global"
+        return "gemma4_26b_a4b_rope_global"
+    # Gemma 4 local layers (head_dim=256 with standard theta)
     if hd >= 256:
-        return "gemma4_26b_rope" if heads >= 16 else "gemma4_2b_rope"
+        if heads >= 32:
+            return "gemma4_31b_rope_local"
+        if heads >= 16:
+            return "gemma4_26b_a4b_rope_local"
+        return "gemma4_e2b_rope_local"
+    # Non-Gemma fall-through
     if seq >= 8192:
         return "mistral_long"
     if seq >= 4096:

@@ -182,23 +182,61 @@ class TestRotaryGemma4Buckets(unittest.TestCase):
         return {b["name"] for b in ROTARY_SHAPE_BUCKETS}
 
     def test_gemma4_2b_rope_bucket_present(self):
+        # Backwards-compat alias still present
         self.assertIn("gemma4_2b_rope", self._bucket_names())
 
     def test_gemma4_26b_rope_bucket_present(self):
+        # Backwards-compat alias still present
         self.assertIn("gemma4_26b_rope", self._bucket_names())
 
+    def test_gemma4_e2b_rope_local_bucket_present(self):
+        self.assertIn("gemma4_e2b_rope_local", self._bucket_names())
+
+    def test_gemma4_26b_a4b_rope_local_bucket_present(self):
+        self.assertIn("gemma4_26b_a4b_rope_local", self._bucket_names())
+
+    def test_gemma4_26b_a4b_rope_global_bucket_present(self):
+        self.assertIn("gemma4_26b_a4b_rope_global", self._bucket_names())
+
+    def test_gemma4_31b_rope_global_bucket_present(self):
+        self.assertIn("gemma4_31b_rope_global", self._bucket_names())
+
     def test_classifier_2b_rope(self):
-        # E2B/E4B: 8 heads, head_dim=256
+        # E2B/E4B: 8 heads, head_dim=256, local theta=10k — post-#34 routes to
+        # the more specific bucket name
         self.assertEqual(
             rotary_shape_bucket_key({"batch": 1, "seq": 4096, "heads": 8, "head_dim": 256}),
-            "gemma4_2b_rope",
+            "gemma4_e2b_rope_local",
         )
 
     def test_classifier_26b_rope(self):
-        # 26B MoE: 16 heads, head_dim=256
+        # 26B-A4B local: 16 heads, head_dim=256
         self.assertEqual(
             rotary_shape_bucket_key({"batch": 1, "seq": 4096, "heads": 16, "head_dim": 256}),
-            "gemma4_26b_rope",
+            "gemma4_26b_a4b_rope_local",
+        )
+
+    def test_classifier_31b_rope_local(self):
+        # 31B local: 32 heads, head_dim=256
+        self.assertEqual(
+            rotary_shape_bucket_key({"batch": 1, "seq": 4096, "heads": 32, "head_dim": 256}),
+            "gemma4_31b_rope_local",
+        )
+
+    def test_classifier_26b_rope_global(self):
+        # 26B-A4B global: head_dim=512, theta=1M, p-RoPE on
+        self.assertEqual(
+            rotary_shape_bucket_key({"batch": 1, "seq": 4096, "heads": 16, "head_dim": 512,
+                                     "rope_theta": 1_000_000, "use_prope": True}),
+            "gemma4_26b_a4b_rope_global",
+        )
+
+    def test_classifier_31b_rope_global(self):
+        # 31B global: head_dim=512, theta=1M, p-RoPE on
+        self.assertEqual(
+            rotary_shape_bucket_key({"batch": 1, "seq": 4096, "heads": 32, "head_dim": 512,
+                                     "rope_theta": 1_000_000, "use_prope": True}),
+            "gemma4_31b_rope_global",
         )
 
     def test_existing_llama7b_long_not_reclassified(self):
