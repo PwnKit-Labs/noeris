@@ -336,6 +336,7 @@ def _claims_from_sources(
                         "richer claim extraction when a stronger memory layer is attached."
                     ),
                     evidence_refs=[source.identifier],
+                    evidence_kind="source-derived",
                 )
             )
         else:
@@ -347,6 +348,7 @@ def _claims_from_sources(
                         "Repository source identified as potentially relevant to the topic."
                     ),
                     evidence_refs=[source.identifier],
+                    evidence_kind="source-derived",
                 )
             )
     return claims

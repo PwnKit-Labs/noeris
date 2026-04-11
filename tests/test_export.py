@@ -33,6 +33,8 @@ class ExportBundleTests(unittest.TestCase):
         )
         self.assertIn("Source Confidence", summary)
         self.assertIn("claims", lineage)
+        self.assertIn("linked_sources", lineage)
+        self.assertIn("assessment", lineage)
 
     def test_long_context_export_writes_required_artifacts(self) -> None:
         record = ResearchPipeline().run_record_for(

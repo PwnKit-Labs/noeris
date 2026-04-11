@@ -127,9 +127,36 @@ def _build_claim_lineage(record: ResearchRunRecord) -> dict[str, object]:
         }
         for source in record.memo.sources
     }
+    source_assessment_map = {
+        assessment.source_id: {
+            "confidence": assessment.confidence,
+            "rationale": assessment.rationale,
+        }
+        for assessment in record.memo.source_assessments
+    }
+    contradiction_map: dict[str, list[dict[str, object]]] = {}
+    for contradiction in record.memo.contradictions:
+        for claim_title in contradiction.claim_titles:
+            contradiction_map.setdefault(claim_title, []).append(
+                {
+                    "title": contradiction.title,
+                    "summary": contradiction.summary,
+                    "severity": contradiction.severity,
+                }
+            )
     claim_entries = []
     for claim in record.memo.claims:
-        linked_sources = [source_map[ref] for ref in claim.evidence_refs if ref in source_map]
+        linked_sources = []
+        for ref in claim.evidence_refs:
+            if ref not in source_map:
+                continue
+            linked_sources.append(
+                {
+                    **source_map[ref],
+                    "source_id": ref,
+                    "assessment": source_assessment_map.get(ref),
+                }
+            )
         supported_by = [
             hypothesis.title
             for hypothesis in record.memo.hypotheses
@@ -140,8 +167,10 @@ def _build_claim_lineage(record: ResearchRunRecord) -> dict[str, object]:
                 "claim_title": claim.title,
                 "claim_summary": claim.summary,
                 "source": claim.source,
+                "evidence_kind": claim.evidence_kind,
                 "evidence_refs": claim.evidence_refs,
                 "linked_sources": linked_sources,
+                "contradictions": contradiction_map.get(claim.title, []),
                 "supporting_hypotheses": supported_by,
             }
         )

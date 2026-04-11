@@ -18,6 +18,7 @@ class Claim:
     source: str
     summary: str
     evidence_refs: list[str] = field(default_factory=list)
+    evidence_kind: str = "derived"
 
 
 @dataclass(slots=True)

@@ -250,6 +250,7 @@ class ResearchPipelineTests(unittest.TestCase):
         self.assertEqual(memo.experiments[0].benchmark_id, None)
         self.assertTrue(memo.experiments[0].required_artifacts)
         self.assertTrue(memo.claims[0].evidence_refs)
+        self.assertEqual(memo.claims[0].evidence_kind, "source-derived")
 
     def test_pipeline_accepts_component_overrides(self) -> None:
         pipeline = ResearchPipeline(

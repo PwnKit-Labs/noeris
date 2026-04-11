@@ -441,6 +441,7 @@ def _sanitize_claims(
                 source=source,
                 summary=summary,
                 evidence_refs=evidence_refs,
+                evidence_kind="llm-extracted",
             )
         )
     return claims[:5]
