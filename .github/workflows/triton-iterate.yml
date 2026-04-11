@@ -6,6 +6,10 @@ on:
     - cron: "0 15 * * *"
   workflow_dispatch:
     inputs:
+      operator:
+        description: "Operator to search (matmul, rmsnorm, softmax, layernorm, cross_entropy, all)"
+        required: false
+        default: "all"
       gpu:
         description: "GPU type for Modal execution"
         required: false
@@ -33,10 +37,15 @@ env:
 jobs:
   triton-iterate:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     permissions:
       actions: write
       contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        operator: [matmul, rmsnorm, softmax, layernorm, cross_entropy]
     env:
       AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
       AZURE_OPENAI_BASE_URL: ${{ vars.AZURE_OPENAI_BASE_URL }}
@@ -59,6 +68,7 @@ jobs:
       - name: Restore config database
         env:
           GH_TOKEN: ${{ github.token }}
+          NOERIS_OPERATOR: ${{ matrix.operator }}
         run: |
           python - <<'PY'
           import json
@@ -82,11 +92,12 @@ jobs:
               )
           )
 
+          operator = os.environ.get("NOERIS_OPERATOR", "matmul")
           for run in runs:
               run_id = str(run.get("databaseId", "")).strip()
               if not run_id or run_id == current_run_id or run.get("conclusion") != "success":
                   continue
-              artifact_name = f"triton-iterate-{run_id}"
+              artifact_name = f"triton-iterate-{run_id}-{operator}"
               with tempfile.TemporaryDirectory() as temp_dir:
                   try:
                       subprocess.run(
@@ -108,6 +119,7 @@ jobs:
       - name: Run Triton kernel search
         run: |
           python -m research_engine.cli triton-iterate \
+            --operator "${{ matrix.operator }}" \
             --gpu "${{ github.event.inputs.gpu || 'A100' }}" \
             --configs-per-run "${{ github.event.inputs.configs_per_run || '8' }}" \
             --shapes "${{ github.event.inputs.shapes || 'standard' }}" \
@@ -169,7 +181,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: triton-iterate-${{ github.run_id }}
+          name: triton-iterate-${{ github.run_id }}-${{ matrix.operator }}
           path: |
             triton-iterate-run.json
             auto-chain-decision.json

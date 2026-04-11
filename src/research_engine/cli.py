@@ -230,7 +230,7 @@ def build_parser() -> argparse.ArgumentParser:
     triton_parser.add_argument(
         "--operator",
         default="matmul",
-        choices=["matmul", "rmsnorm", "softmax"],
+        choices=["matmul", "rmsnorm", "softmax", "layernorm", "cross_entropy"],
         help="which Triton operator to search",
     )
     triton_parser.add_argument(
@@ -273,7 +273,7 @@ def build_parser() -> argparse.ArgumentParser:
     kb_parser.add_argument(
         "--operator",
         default="",
-        choices=["", "matmul", "rmsnorm", "softmax"],
+        choices=["", "matmul", "rmsnorm", "softmax", "layernorm", "cross_entropy"],
         help="restrict to one operator, or leave empty for all",
     )
     kb_parser.add_argument(
@@ -592,34 +592,13 @@ def _run_kernelbench_eval(args) -> int:
 def _run_generic_operator_iterate(*, spec, args, db, shapes) -> int:
     """Run kernel search for any operator via its TritonOperatorSpec."""
     from .modal_runner import run_benchmark_batch_modal_generic
+    from .triton_operators import select_configs_for_operator
 
     operator_name = spec.name
     hardware = args.gpu
 
-    # Select configs: curated + grid exploration, no incumbent lookup yet
-    # (TODO: generalize select_configs_for_run to operators)
-    configs: list[dict] = []
-    seen_ids: set[str] = set()
-    for config in spec.curated_configs:
-        cid = spec.config_id_fn(config)
-        if cid not in seen_ids:
-            seen_ids.add(cid)
-            configs.append(config)
-            if len(configs) >= args.configs_per_run:
-                break
-
-    # Add grid exploration if we have budget
-    if len(configs) < args.configs_per_run:
-        grid = spec.grid_generator_fn(include_curated=False, max_configs=50)
-        for config in grid:
-            cid = spec.config_id_fn(config)
-            if cid not in seen_ids:
-                seen_ids.add(cid)
-                configs.append(config)
-                if len(configs) >= args.configs_per_run:
-                    break
-
-    # LLM proposer (if enabled)
+    # LLM proposer (if enabled) — runs first so its suggestions feed into selection
+    proposed_configs: list[dict] = []
     proposal_result: dict = {"source": "none"}
     if args.llm:
         try:
@@ -631,15 +610,19 @@ def _run_generic_operator_iterate(*, spec, args, db, shapes) -> int:
                 hardware=hardware,
                 target_shapes=shapes,
             )
-            for config in proposal_result.get("configs", [])[:3]:
-                cid = spec.config_id_fn(config)
-                if cid not in seen_ids:
-                    seen_ids.add(cid)
-                    configs.append(config)
-                    if len(configs) >= args.configs_per_run + 3:
-                        break
+            proposed_configs = proposal_result.get("configs", [])
         except LlmConfigurationError as exc:
             proposal_result = {"source": "llm_config_error", "error": str(exc)}
+
+    # Use the generalized selector with full slotting logic
+    configs = select_configs_for_operator(
+        spec=spec,
+        database=db,
+        hardware=hardware,
+        shapes=shapes,
+        max_configs=args.configs_per_run,
+        proposed_configs=proposed_configs,
+    )
 
     # Generate benchmark script
     benchmark_script = spec.benchmark_script_fn(configs, shapes)
@@ -757,9 +740,9 @@ def _parse_operator_shape(operator_name: str, shape_str: str) -> dict:
     parts = shape_str.split("x")
     if operator_name == "matmul":
         return {"M": int(parts[0]), "N": int(parts[1]), "K": int(parts[2])}
-    elif operator_name in ("rmsnorm",):
+    elif operator_name in ("rmsnorm", "layernorm"):
         return {"n_rows": int(parts[0]), "hidden_dim": int(parts[1])}
-    elif operator_name in ("softmax",):
+    elif operator_name in ("softmax", "cross_entropy"):
         return {"n_rows": int(parts[0]), "n_cols": int(parts[1])}
     return {"raw": shape_str}
 

@@ -29,6 +29,8 @@ from .pipeline import ResearchPipeline
 from . import triton_kernels  # noqa: F401  (registers matmul)
 from . import triton_rmsnorm  # noqa: F401  (registers rmsnorm)
 from . import triton_softmax  # noqa: F401  (registers softmax)
+from . import triton_layernorm  # noqa: F401  (registers layernorm)
+from . import triton_cross_entropy  # noqa: F401  (registers cross_entropy)
 from .triton_operators import REGISTRY as TRITON_OPERATORS  # noqa: F401
 
 __all__ = [

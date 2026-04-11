@@ -47,6 +47,18 @@ KERNELBENCH_SUBSET = {
         {"id": "kb_L1_softmax_large", "n_rows": 4096, "n_cols": 4096, "level": 1},
         {"id": "kb_L2_softmax_vocab", "n_rows": 2048, "n_cols": 32000, "level": 2},
     ],
+    "layernorm": [
+        {"id": "kb_L1_layernorm_small", "n_rows": 1024, "hidden_dim": 768, "level": 1},
+        {"id": "kb_L1_layernorm_bert", "n_rows": 4096, "hidden_dim": 1024, "level": 1},
+        {"id": "kb_L2_layernorm_gpt", "n_rows": 4096, "hidden_dim": 1600, "level": 2},
+        {"id": "kb_L2_layernorm_large", "n_rows": 8192, "hidden_dim": 4096, "level": 2},
+    ],
+    "cross_entropy": [
+        {"id": "kb_L1_ce_gpt2", "n_rows": 1024, "n_cols": 50257, "level": 1},
+        {"id": "kb_L1_ce_llama", "n_rows": 2048, "n_cols": 32000, "level": 1},
+        {"id": "kb_L2_ce_long_llama", "n_rows": 4096, "n_cols": 32000, "level": 2},
+        {"id": "kb_L2_ce_llama3", "n_rows": 2048, "n_cols": 128256, "level": 2},
+    ],
 }
 
 
@@ -174,6 +186,10 @@ def build_benchmark_script_with_baseline(
         from .triton_rmsnorm import generate_rmsnorm_benchmark_script as gen_fn
     elif operator == "softmax":
         from .triton_softmax import generate_softmax_benchmark_script as gen_fn
+    elif operator == "layernorm":
+        from .triton_layernorm import generate_layernorm_benchmark_script as gen_fn
+    elif operator == "cross_entropy":
+        from .triton_cross_entropy import generate_cross_entropy_benchmark_script as gen_fn
     else:
         raise ValueError(f"Unknown operator: {operator}")
 
@@ -239,6 +255,35 @@ def _pytorch_baseline_snippet(operator: str) -> str:
         x = torch.randn((n_rows, n_cols), device="cuda", dtype=torch.float16)
         ms = triton.testing.do_bench(lambda: torch.softmax(x.to(torch.float32), dim=-1).to(torch.float16), warmup=25, rep=100)
         bytes_moved = 2 * n_rows * n_cols * 2
+        gb_per_s = bytes_moved / (ms * 1e-3) / 1e9
+        pytorch_baselines.append({"shape_name": shape.get("name", ""), "ms": round(ms, 4), "gb_per_s": round(gb_per_s, 2), "tflops": round(gb_per_s, 2)})
+    output["pytorch_baselines"] = pytorch_baselines
+'''
+    elif operator == "layernorm":
+        return '''
+    # Measure PyTorch LayerNorm baseline
+    pytorch_baselines = []
+    for shape in shapes:
+        n_rows, hidden_dim = shape["n_rows"], shape["hidden_dim"]
+        x = torch.randn((n_rows, hidden_dim), device="cuda", dtype=torch.float16)
+        w = torch.randn((hidden_dim,), device="cuda", dtype=torch.float16)
+        b = torch.randn((hidden_dim,), device="cuda", dtype=torch.float16)
+        ms = triton.testing.do_bench(lambda: torch.nn.functional.layer_norm(x, (hidden_dim,), w, b, eps=1e-5), warmup=25, rep=100)
+        bytes_moved = 2 * n_rows * hidden_dim * 2 + hidden_dim * 4
+        gb_per_s = bytes_moved / (ms * 1e-3) / 1e9
+        pytorch_baselines.append({"shape_name": shape.get("name", ""), "ms": round(ms, 4), "gb_per_s": round(gb_per_s, 2), "tflops": round(gb_per_s, 2)})
+    output["pytorch_baselines"] = pytorch_baselines
+'''
+    elif operator == "cross_entropy":
+        return '''
+    # Measure PyTorch cross_entropy baseline
+    pytorch_baselines = []
+    for shape in shapes:
+        n_rows, n_cols = shape["n_rows"], shape["n_cols"]
+        logits = torch.randn((n_rows, n_cols), device="cuda", dtype=torch.float16)
+        target = torch.randint(0, n_cols, (n_rows,), device="cuda", dtype=torch.long)
+        ms = triton.testing.do_bench(lambda: torch.nn.functional.cross_entropy(logits.to(torch.float32), target, reduction="none"), warmup=25, rep=100)
+        bytes_moved = n_rows * n_cols * 2 + n_rows * 8 + n_rows * 2
         gb_per_s = bytes_moved / (ms * 1e-3) / 1e9
         pytorch_baselines.append({"shape_name": shape.get("name", ""), "ms": round(ms, 4), "gb_per_s": round(gb_per_s, 2), "tflops": round(gb_per_s, 2)})
     output["pytorch_baselines"] = pytorch_baselines

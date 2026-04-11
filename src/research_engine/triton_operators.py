@@ -77,3 +77,72 @@ def register_operator(spec: TritonOperatorSpec) -> TritonOperatorSpec:
     """Decorator-friendly operator registration."""
     REGISTRY.register(spec)
     return spec
+
+
+def select_configs_for_operator(
+    *,
+    spec: TritonOperatorSpec,
+    database,  # ConfigDatabase
+    hardware: str,
+    shapes: list[dict],
+    max_configs: int = 8,
+    proposed_configs: list[dict[str, int]] | None = None,
+) -> list[dict[str, int]]:
+    """Generalized config selection that works for any registered operator.
+
+    Slot allocation (in priority order):
+    1. Incumbent — best known config from database (per shape bucket)
+    2. LLM-proposed configs
+    3. Curated starting configs not yet tested
+    4. Grid exploration — untested systematic configs
+    """
+    selected: list[dict[str, int]] = []
+    seen_ids: set[str] = set()
+
+    def _add(config: dict[str, int]) -> bool:
+        cid = spec.config_id_fn(config)
+        if cid in seen_ids or len(selected) >= max_configs:
+            return False
+        seen_ids.add(cid)
+        selected.append(config)
+        return True
+
+    # Slot 1: incumbent (best across the target shapes)
+    if database is not None and shapes:
+        for shape in shapes:
+            bucket = spec.shape_bucket_fn(shape)
+            best = database.get_best_config(
+                shape=shape, hardware=hardware,
+                operator=spec.name, bucket=bucket,
+            )
+            if best is not None:
+                _add(best)
+                break
+
+    # Slot 2: LLM-proposed configs
+    for config in proposed_configs or []:
+        _add(config)
+
+    # Tested configs for this operator on this hardware
+    tested_ids: set[str] = set()
+    if database is not None:
+        for key, record in database.records.items():
+            if not key.startswith(f"{spec.name}:"):
+                continue
+            if hardware and not key.endswith(f":{hardware}"):
+                continue
+            for result in record.results:
+                tested_ids.add(result.get("config_id", ""))
+
+    # Slot 3: curated configs not yet tested
+    for config in spec.curated_configs:
+        if spec.config_id_fn(config) not in tested_ids:
+            _add(config)
+
+    # Slot 4: grid exploration — untested configs
+    grid = spec.grid_generator_fn(include_curated=False, max_configs=500)
+    for config in grid:
+        if spec.config_id_fn(config) not in tested_ids:
+            _add(config)
+
+    return selected
