@@ -13,11 +13,14 @@ the output, making it memory-bandwidth-bound. Fusing avoids materializing
 the intermediate GELU result and reduces memory traffic by ~1/3 compared to
 two separate ops (GELU + elementwise multiply).
 
-Gemma 4 FFN dimensions (ffn_dim = intermediate size):
-  E2B  : hidden=2304,  ffn_dim=5632   (SwiGLU-compatible geometry)
-  E4B  : hidden=3584,  ffn_dim=14336
-  26B A4B: hidden=2048, ffn_dim=16384  (MoE)
-  31B Dense: hidden=4096, ffn_dim=24576
+Gemma 4 FFN dimensions (ffn_dim = intermediate size). Verified against
+the authoritative HF config.json files on 2026-04-11:
+  E2B            : hidden=1536,  ffn_dim=6144    (google/gemma-4-E2B-it)
+  E4B            : hidden=2560,  ffn_dim=10240   (google/gemma-4-E4B-it)
+  26B-A4B expert : hidden=2816,  ffn_dim=2112    (per expert, 128 experts,
+                                                  top-8 active + 1 shared;
+                                                  google/gemma-4-26B-A4B-it)
+  31B Dense      : hidden=5376,  ffn_dim=21504   (google/gemma-4-31B)
 
 Reference: Gemma 2 tech report (arXiv:2408.00118).
 """
@@ -54,12 +57,17 @@ GEGLU_CURATED_CONFIGS = [
 # Shape buckets: (n_rows, ffn_dim) pairs for Gemma 4 and a small test shape.
 # n_rows = batch_size * seq_len (token count hitting the MLP)
 # ffn_dim = intermediate size (each of gate and up has this width)
+#
+# Values are pulled directly from each model's HF config.json (2026-04-11).
+# Note: "gemma4_26b_a4b_expert" is per-expert; the MoE block dispatches
+# top-8 of 128 experts per token + 1 shared expert, so the aggregate work
+# per token is ~9 * this bucket.
 GEGLU_SHAPE_BUCKETS = [
-    {"name": "test_small",    "n_rows": 512,  "ffn_dim": 1024},
-    {"name": "gemma4_e2b",   "n_rows": 2048, "ffn_dim": 5632},
-    {"name": "gemma4_e4b",   "n_rows": 2048, "ffn_dim": 14336},
-    {"name": "gemma4_26b",   "n_rows": 2048, "ffn_dim": 16384},
-    {"name": "gemma4_31b",   "n_rows": 2048, "ffn_dim": 24576},
+    {"name": "test_small",              "n_rows": 512,  "ffn_dim": 1024},
+    {"name": "gemma4_e2b",              "n_rows": 2048, "ffn_dim": 6144},
+    {"name": "gemma4_e4b",              "n_rows": 2048, "ffn_dim": 10240},
+    {"name": "gemma4_26b_a4b_expert",   "n_rows": 2048, "ffn_dim": 2112},
+    {"name": "gemma4_31b",              "n_rows": 2048, "ffn_dim": 21504},
 ]
 
 
@@ -68,16 +76,21 @@ def geglu_config_id(config: dict[str, int]) -> str:
 
 
 def geglu_shape_bucket_key(shape: dict[str, int]) -> str:
-    """Classify a GeGLU shape into the nearest Gemma 4 bucket."""
+    """Classify a GeGLU shape into the nearest Gemma 4 bucket.
+
+    Ordering matters: the 26B-A4B expert bucket (ffn=2112) sits between
+    the test_small bucket (ffn<=1024) and the E2B bucket (ffn=6144), so
+    we check it explicitly before the ascending ffn_dim bands.
+    """
     fd = shape.get("ffn_dim", 0)
     if fd <= 1024:
         return "test_small"
-    if fd <= 5632:
+    if fd <= 2112:
+        return "gemma4_26b_a4b_expert"
+    if fd <= 6144:
         return "gemma4_e2b"
-    if fd <= 14336:
+    if fd <= 10240:
         return "gemma4_e4b"
-    if fd <= 16384:
-        return "gemma4_26b"
     return "gemma4_31b"
 
 

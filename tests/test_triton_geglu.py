@@ -50,33 +50,48 @@ class TestShapeBuckets(unittest.TestCase):
         )
 
     def test_gemma4_e2b(self) -> None:
+        # E2B ffn_dim = 6144 (google/gemma-4-E2B-it config.json)
         self.assertEqual(
-            geglu_shape_bucket_key({"n_rows": 2048, "ffn_dim": 5632}),
+            geglu_shape_bucket_key({"n_rows": 2048, "ffn_dim": 6144}),
             "gemma4_e2b",
         )
 
     def test_gemma4_e4b(self) -> None:
+        # E4B ffn_dim = 10240 (google/gemma-4-E4B-it config.json)
         self.assertEqual(
-            geglu_shape_bucket_key({"n_rows": 2048, "ffn_dim": 14336}),
+            geglu_shape_bucket_key({"n_rows": 2048, "ffn_dim": 10240}),
             "gemma4_e4b",
         )
 
-    def test_gemma4_26b(self) -> None:
+    def test_gemma4_26b_a4b_expert(self) -> None:
+        # 26B-A4B per-expert ffn_dim = 2112 (not 16384). MoE with 128 experts,
+        # top-8 active + 1 shared (google/gemma-4-26B-A4B-it config.json).
         self.assertEqual(
-            geglu_shape_bucket_key({"n_rows": 2048, "ffn_dim": 16384}),
-            "gemma4_26b",
+            geglu_shape_bucket_key({"n_rows": 2048, "ffn_dim": 2112}),
+            "gemma4_26b_a4b_expert",
         )
 
     def test_gemma4_31b(self) -> None:
+        # 31B dense ffn_dim = 21504 (google/gemma-4-31B config.json), not 24576.
         self.assertEqual(
-            geglu_shape_bucket_key({"n_rows": 2048, "ffn_dim": 24576}),
+            geglu_shape_bucket_key({"n_rows": 2048, "ffn_dim": 21504}),
             "gemma4_31b",
         )
 
     def test_large_ffn_falls_to_31b_bucket(self) -> None:
-        # Any ffn_dim above 24576 should map to the 31b bucket
+        # Any ffn_dim above 10240 that is not a known smaller-model bucket
+        # should fall through to the 31b (widest) bucket.
         self.assertEqual(
             geglu_shape_bucket_key({"n_rows": 4096, "ffn_dim": 32768}),
+            "gemma4_31b",
+        )
+
+    def test_old_stale_ffn_dim_31b_still_routes_to_31b(self) -> None:
+        # The pre-fix stale constant 24576 should still land in the 31b bucket
+        # (it's larger than 10240, which is e4b). Guards against regression
+        # if someone re-imports an old artifact.
+        self.assertEqual(
+            geglu_shape_bucket_key({"n_rows": 2048, "ffn_dim": 24576}),
             "gemma4_31b",
         )
 

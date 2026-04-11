@@ -9,9 +9,11 @@ _Research pass completed 2026-04-11. Source: agent research + authoritative upst
 | Variant | Total params | Active | Layers | Hidden | FFN | Heads (Q/KV local) | Heads (Q/KV global) | head_dim local / global | Window | Local:Global | Vocab | Ctx |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | E2B | 5.1B | 2.3B | 35 | 1536 | 6144 | 8 / 1 | 8 / 1 | 256 / 256 | 512 | 4:1 | 262144 | 128k |
-| E4B | 8B | 4.5B | — | — | — | — | — | 256 / — | 512 | — | 262144 | 128k |
+| E4B | 8B | 4.5B | 42 | 2560 | 10240 | 8 / 2 | 8 / 2 | 256 / 256 | 512 | — | 262144 | 128k |
 | 26B-A4B (MoE) | 26B | 4B | 30 | 2816 | 2112 (per expert) | 16 / 8 | 16 / 2 | 256 / 512 | 1024 | 5:1 | 262144 | 256k |
 | 31B Dense | 30.7B | 30.7B | 60 | 5376 | 21504 | 32 / 16 | 32 / 4 | 256 / 512 | 1024 | 5:1 | 262144 | 256k |
+
+_E4B / E2B / 26B-A4B / 31B rows all pulled verbatim from each HF `config.json` on 2026-04-11 (E4B: hidden=2560, ffn=10240, 42 layers, 8Q/2KV; previously listed as "—" pending verification)._
 
 ### Cross-cutting facts
 - **GQA always-on**, global layers use more aggressive ratio (32:4 = 8 Q per 1 KV in 31B global).
@@ -34,7 +36,7 @@ _Research pass completed 2026-04-11. Source: agent research + authoritative upst
 | cross_entropy | `triton_cross_entropy.py` | Has 256k vocab bucket |
 | attention | `triton_attention.py` | Causal + sliding-window + use_qk_norm flag; **no GQA num_kv_heads**, no head_dim=512 bucket |
 | rotary | `triton_rotary.py` | Has Gemma 26B head_dim=256 bucket; no dual-base (10k vs 1M), no p-RoPE |
-| geglu | `triton_geglu.py` | **Constants wrong** (ffn_dim=24576 for 31B should be 21504; 26B per-expert is 2112, not 16384) |
+| geglu | `triton_geglu.py` | **Fixed 2026-04-11** — see HF config.json citations above; bucket `gemma4_26b` renamed to `gemma4_26b_a4b_expert` |
 
 ## 3. Gaps by severity
 

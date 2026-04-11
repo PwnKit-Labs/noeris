@@ -108,10 +108,12 @@ KERNELBENCH_SUBSET = {
     ],
     "geglu": [
         # Level 2: Gemma 4 FFN shapes (n_rows = batch*seq tokens, ffn_dim = intermediate size)
-        {"id": "kb_L2_geglu_gemma2b",  "n_rows": 2048, "ffn_dim": 5632,  "level": 2},
-        {"id": "kb_L2_geglu_gemma4b",  "n_rows": 2048, "ffn_dim": 14336, "level": 2},
-        {"id": "kb_L2_geglu_gemma26b", "n_rows": 2048, "ffn_dim": 16384, "level": 2},
-        {"id": "kb_L2_geglu_gemma31b", "n_rows": 2048, "ffn_dim": 24576, "level": 2},
+        # All ffn_dim values verified against HF config.json (2026-04-11). See
+        # triton_geglu.GEGLU_SHAPE_BUCKETS for citations.
+        {"id": "kb_L2_geglu_gemma4_e2b",              "n_rows": 2048, "ffn_dim": 6144,  "level": 2},
+        {"id": "kb_L2_geglu_gemma4_e4b",              "n_rows": 2048, "ffn_dim": 10240, "level": 2},
+        {"id": "kb_L2_geglu_gemma4_26b_a4b_expert",   "n_rows": 2048, "ffn_dim": 2112,  "level": 2},
+        {"id": "kb_L2_geglu_gemma4_31b",              "n_rows": 2048, "ffn_dim": 21504, "level": 2},
     ],
     "rotary": [
         {"id": "kb_L2_rotary_llama7b", "batch": 1, "seq": 4096, "heads": 32, "head_dim": 128, "level": 2},
