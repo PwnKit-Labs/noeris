@@ -39,21 +39,27 @@ RMSNORM_CURATED_CONFIGS = [
 ]
 
 
-# Shape buckets: (batch*seq, hidden_dim) pairs typical of LLM workloads
+# Shape buckets: (batch*seq, hidden_dim) pairs typical of LLM workloads.
+# affine_mode: 0 = standard y = x * rstd * w
+#              1 = gemma y = x * rstd * (1 + w)  (Gemma 3/4 style)
 RMSNORM_SHAPE_BUCKETS = [
-    {"name": "small_hidden", "n_rows": 1024, "hidden_dim": 768},
-    {"name": "gpt2_base", "n_rows": 4096, "hidden_dim": 768},
-    {"name": "llama_160m", "n_rows": 2048, "hidden_dim": 1024},
-    {"name": "bert_base", "n_rows": 4096, "hidden_dim": 768},
-    {"name": "llama_7b", "n_rows": 4096, "hidden_dim": 4096},
-    {"name": "llama_13b", "n_rows": 4096, "hidden_dim": 5120},
-    {"name": "llama_70b", "n_rows": 2048, "hidden_dim": 8192},
-    {"name": "mixtral", "n_rows": 8192, "hidden_dim": 4096},
-    # Gemma 4 family (released April 2026) — hidden_dim values unique to Gemma
-    {"name": "gemma4_e2b", "n_rows": 2048, "hidden_dim": 2048},
-    {"name": "gemma4_e4b", "n_rows": 2048, "hidden_dim": 2560},
-    {"name": "gemma4_26b", "n_rows": 4096, "hidden_dim": 4096},
-    {"name": "gemma4_31b", "n_rows": 4096, "hidden_dim": 5376},
+    {"name": "small_hidden", "n_rows": 1024, "hidden_dim": 768, "affine_mode": 0},
+    {"name": "gpt2_base", "n_rows": 4096, "hidden_dim": 768, "affine_mode": 0},
+    {"name": "llama_160m", "n_rows": 2048, "hidden_dim": 1024, "affine_mode": 0},
+    {"name": "bert_base", "n_rows": 4096, "hidden_dim": 768, "affine_mode": 0},
+    {"name": "llama_7b", "n_rows": 4096, "hidden_dim": 4096, "affine_mode": 0},
+    {"name": "llama_13b", "n_rows": 4096, "hidden_dim": 5120, "affine_mode": 0},
+    {"name": "llama_70b", "n_rows": 2048, "hidden_dim": 8192, "affine_mode": 0},
+    {"name": "mixtral", "n_rows": 8192, "hidden_dim": 4096, "affine_mode": 0},
+    # Gemma 4 family (released April 2026) — hidden_dim values from HF config.json.
+    # Gemma 3/4 use affine_mode=1: y = x * rstd * (1 + w), because trained weights
+    # are small perturbations around 0. See vLLM's GemmaRMSNorm CustomOp, issue #46.
+    # hidden_dim values per HF config.json (issue #45):
+    #   E2B -> 1536, E4B -> 2560, 26B-A4B -> 2816, 31B -> 5376
+    {"name": "gemma4_e2b", "n_rows": 2048, "hidden_dim": 1536, "affine_mode": 1},
+    {"name": "gemma4_e4b", "n_rows": 2048, "hidden_dim": 2560, "affine_mode": 1},
+    {"name": "gemma4_26b", "n_rows": 4096, "hidden_dim": 2816, "affine_mode": 1},
+    {"name": "gemma4_31b", "n_rows": 4096, "hidden_dim": 5376, "affine_mode": 1},
 ]
 
 
@@ -65,8 +71,10 @@ def rmsnorm_shape_bucket_key(shape: dict[str, int]) -> str:
     """Classify an RMSNorm shape into a bucket.
 
     Gemma 4 family shapes are detected by their exact hidden_dim values:
-    - 2048 → gemma4_e2b
+    - 1536 → gemma4_e2b  (HF config.json, issue #45)
+    - 2048 → gemma4_e2b  (legacy alias; preserved for backward compat)
     - 2560 → gemma4_e4b  (unique to Gemma; LLaMA does not use this width)
+    - 2816 → gemma4_26b  (HF config.json for gemma-4-26B-A4B, issue #45)
     - 4096 with n_rows >= 4096 → gemma4_26b  (disambiguated from llama_7b by row count)
     - 5376 → gemma4_31b  (unique to Gemma; sits between llama_13b and llama_70b)
     """
@@ -78,10 +86,14 @@ def rmsnorm_shape_bucket_key(shape: dict[str, int]) -> str:
         return "gpt2_base"
     if h <= 1024:
         return "llama_160m"
+    if h == 1536:
+        return "gemma4_e2b"
     if h == 2048:
         return "gemma4_e2b"
     if h == 2560:
         return "gemma4_e4b"
+    if h == 2816:
+        return "gemma4_26b"
     if h <= 4096:
         if n > 4096:
             return "mixtral"
@@ -164,11 +176,16 @@ def rmsnorm_kernel(
     n_cols,
     eps,
     BLOCK_SIZE: tl.constexpr,
+    AFFINE_MODE: tl.constexpr,
 ):
     """Parameterized RMSNorm kernel.
 
     Computes y = x * w / sqrt(mean(x^2) + eps) for each row.
     One program per row, BLOCK_SIZE elements processed in parallel.
+
+    AFFINE_MODE=0: standard y = x * rstd * w
+    AFFINE_MODE=1: gemma    y = x * rstd * (1 + w)
+    Constexpr branch is compiled away, so there is zero runtime cost.
     """
     row_idx = tl.program_id(0)
     x_ptr += row_idx * x_row_stride
@@ -185,11 +202,14 @@ def rmsnorm_kernel(
 
     # Apply weight and store
     w = tl.load(w_ptr + offs, mask=mask, other=0.0).to(tl.float32)
-    y = x * rstd * w
+    if AFFINE_MODE == 0:
+        y = x * rstd * w
+    else:
+        y = x * rstd * (1.0 + w)
     tl.store(y_ptr + offs, y.to(tl.float16), mask=mask)
 
 
-def rmsnorm(x, w, config, eps=1e-6):
+def rmsnorm(x, w, config, eps=1e-6, affine_mode: int = 0):
     n_rows, n_cols = x.shape
     y = torch.empty_like(x)
     BLOCK_SIZE = max(config["BLOCK_SIZE"], triton.next_power_of_2(n_cols))
@@ -198,28 +218,31 @@ def rmsnorm(x, w, config, eps=1e-6):
         x.stride(0), y.stride(0),
         n_cols, eps,
         BLOCK_SIZE=BLOCK_SIZE,
+        AFFINE_MODE=affine_mode,
         num_warps=config["num_warps"],
         num_stages=config["num_stages"],
     )
     return y
 
 
-def torch_rmsnorm(x, w, eps=1e-6):
+def torch_rmsnorm(x, w, eps=1e-6, affine_mode: int = 0):
     variance = x.to(torch.float32).pow(2).mean(-1, keepdim=True)
-    x = x * torch.rsqrt(variance + eps)
-    return (x * w).to(torch.float16)
+    x_n = x * torch.rsqrt(variance + eps)
+    if affine_mode == 1:
+        return (x_n * (1.0 + w)).to(torch.float16)
+    return (x_n * w).to(torch.float16)
 
 
-def benchmark_one(n_rows, hidden_dim, config, dtype=torch.float16):
+def benchmark_one(n_rows, hidden_dim, config, dtype=torch.float16, affine_mode: int = 0):
     try:
         x = torch.randn((n_rows, hidden_dim), device="cuda", dtype=dtype)
         w = torch.randn((hidden_dim,), device="cuda", dtype=dtype)
-        ref = torch_rmsnorm(x, w)
-        out = rmsnorm(x, w, config)
+        ref = torch_rmsnorm(x, w, affine_mode=affine_mode)
+        out = rmsnorm(x, w, config, affine_mode=affine_mode)
         max_err = (out - ref).abs().max().item()
         if max_err > 0.05:
             return {{"correct": False, "max_err": max_err, "ms": None, "gb_per_s": None, "tflops": None}}
-        ms = triton.testing.do_bench(lambda: rmsnorm(x, w, config), warmup=25, rep=100)
+        ms = triton.testing.do_bench(lambda: rmsnorm(x, w, config, affine_mode=affine_mode), warmup=25, rep=100)
         # Memory bandwidth: read x (n_rows*hidden_dim*2 bytes) + read w (hidden_dim*2 bytes) + write y
         bytes_moved = 2 * n_rows * hidden_dim * 2 + hidden_dim * 2
         gb_per_s = bytes_moved / (ms * 1e-3) / 1e9
@@ -248,7 +271,8 @@ def main():
         for shape in shapes:
             n_rows = shape["n_rows"]
             hidden_dim = shape["hidden_dim"]
-            result = benchmark_one(n_rows, hidden_dim, config)
+            affine_mode = shape.get("affine_mode", 0)
+            result = benchmark_one(n_rows, hidden_dim, config, affine_mode=affine_mode)
             result["shape"] = f"{{n_rows}}x{{hidden_dim}}"
             result["shape_name"] = shape.get("name", "")
             shape_results.append(result)
