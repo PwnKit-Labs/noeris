@@ -400,5 +400,174 @@ class BenchmarkScriptWindowTests(unittest.TestCase):
         self.assertIn("make_sliding_window_mask", script)
 
 
+
+# ---------------------------------------------------------------------------
+# QK-norm shape bucket routing
+# ---------------------------------------------------------------------------
+
+class QKNormShapeBucketTests(unittest.TestCase):
+    """USE_QK_NORM=True shapes must route to dedicated gemma4_qknorm* buckets."""
+
+    def test_qknorm_local_bucket(self):
+        shape = {
+            "seq_len": 4096, "head_dim": 256, "heads": 16,
+            "window_size": 1024, "use_qk_norm": True,
+        }
+        self.assertEqual(attention_shape_bucket_key(shape), "gemma4_qknorm")
+
+    def test_qknorm_global_bucket(self):
+        shape = {
+            "seq_len": 4096, "head_dim": 256, "heads": 16,
+            "window_size": -1, "use_qk_norm": True,
+        }
+        self.assertEqual(attention_shape_bucket_key(shape), "gemma4_qknorm_global")
+
+    def test_qknorm_global_bucket_no_window_key(self):
+        shape = {"seq_len": 4096, "head_dim": 256, "heads": 16, "use_qk_norm": True}
+        self.assertEqual(attention_shape_bucket_key(shape), "gemma4_qknorm_global")
+
+    def test_no_qknorm_flag_uses_window_bucket(self):
+        shape = {"seq_len": 4096, "head_dim": 256, "heads": 16, "window_size": 1024}
+        self.assertEqual(attention_shape_bucket_key(shape), "gemma4_local_1024")
+
+    def test_qknorm_false_uses_window_bucket(self):
+        shape = {
+            "seq_len": 4096, "head_dim": 256, "heads": 16,
+            "window_size": 1024, "use_qk_norm": False,
+        }
+        self.assertEqual(attention_shape_bucket_key(shape), "gemma4_local_1024")
+
+    def test_gemma4_qknorm_buckets_present_in_shape_list(self):
+        names = {s["name"] for s in ATTENTION_SHAPE_BUCKETS}
+        self.assertIn("gemma4_qknorm", names)
+        self.assertIn("gemma4_qknorm_global", names)
+
+    def test_gemma4_qknorm_bucket_has_correct_fields(self):
+        bucket = next(s for s in ATTENTION_SHAPE_BUCKETS if s["name"] == "gemma4_qknorm")
+        self.assertEqual(bucket["head_dim"], 256)
+        self.assertEqual(bucket["window_size"], 1024)
+        self.assertTrue(bucket["use_qk_norm"])
+        self.assertTrue(bucket["is_causal"])
+
+    def test_gemma4_qknorm_global_bucket_has_correct_fields(self):
+        bucket = next(s for s in ATTENTION_SHAPE_BUCKETS if s["name"] == "gemma4_qknorm_global")
+        self.assertEqual(bucket["head_dim"], 256)
+        self.assertEqual(bucket.get("window_size", -1), -1)
+        self.assertTrue(bucket["use_qk_norm"])
+        self.assertTrue(bucket["is_causal"])
+
+    def test_use_qk_norm_false_regression_does_not_reroute(self):
+        shapes_without_qknorm = [
+            {"seq_len": 4096, "head_dim": 256, "heads": 16, "window_size": 1024},
+            {"seq_len": 4096, "head_dim": 128, "heads": 16},
+            {"seq_len": 8192, "head_dim": 128, "heads": 32},
+        ]
+        for shape in shapes_without_qknorm:
+            key = attention_shape_bucket_key(shape)
+            self.assertNotIn("qknorm", key, f"Shape {shape} unexpectedly routed to {key!r}")
+
+
+# ---------------------------------------------------------------------------
+# QK-norm benchmark script validity
+# ---------------------------------------------------------------------------
+
+class QKNormBenchmarkScriptTests(unittest.TestCase):
+
+    def _make_script(self, shapes):
+        configs = [{"BLOCK_M": 64, "BLOCK_N": 64, "num_warps": 4, "num_stages": 3}]
+        return generate_attention_benchmark_script(configs, shapes)
+
+    def test_script_embeds_use_qk_norm_constexpr(self):
+        shapes = [{"name": "x", "batch": 1, "heads": 8, "seq_len": 512, "head_dim": 64}]
+        script = self._make_script(shapes)
+        self.assertIn("USE_QK_NORM", script)
+
+    def test_script_with_qknorm_shape_is_valid_python(self):
+        shapes = [
+            {"name": "gemma4_qknorm", "batch": 1, "heads": 16,
+             "seq_len": 4096, "head_dim": 256, "is_causal": True,
+             "window_size": 1024, "use_qk_norm": True}
+        ]
+        script = self._make_script(shapes)
+        compile(script, "<benchmark_qknorm>", "exec")
+
+    def test_script_with_global_qknorm_shape_is_valid_python(self):
+        shapes = [
+            {"name": "gemma4_qknorm_global", "batch": 1, "heads": 16,
+             "seq_len": 4096, "head_dim": 256, "is_causal": True,
+             "use_qk_norm": True}
+        ]
+        script = self._make_script(shapes)
+        compile(script, "<benchmark_qknorm_global>", "exec")
+
+    def test_script_contains_qknorm_rms_logic(self):
+        shapes = [{"name": "x", "batch": 1, "heads": 8, "seq_len": 512, "head_dim": 64}]
+        script = self._make_script(shapes)
+        self.assertIn("q_rstd", script)
+        self.assertIn("k_rstd", script)
+        self.assertIn("1e-6", script)
+
+    def test_script_benchmark_one_passes_use_qk_norm(self):
+        shapes = [{"name": "x", "batch": 1, "heads": 8, "seq_len": 512, "head_dim": 64}]
+        script = self._make_script(shapes)
+        self.assertIn("use_qk_norm", script)
+
+    def test_script_reference_uses_rms_norm_when_qknorm(self):
+        shapes = [{"name": "x", "batch": 1, "heads": 8, "seq_len": 512, "head_dim": 64}]
+        script = self._make_script(shapes)
+        self.assertIn("rms_norm", script)
+
+    def test_script_qknorm_false_produces_valid_python(self):
+        shapes = [
+            {"name": "no_norm", "batch": 1, "heads": 8,
+             "seq_len": 512, "head_dim": 64, "use_qk_norm": False}
+        ]
+        script = self._make_script(shapes)
+        compile(script, "<benchmark_no_norm>", "exec")
+
+    def test_script_contains_qscale_kscale_pointers(self):
+        shapes = [{"name": "x", "batch": 1, "heads": 8, "seq_len": 512, "head_dim": 64}]
+        script = self._make_script(shapes)
+        self.assertIn("QScale", script)
+        self.assertIn("KScale", script)
+
+
+# ---------------------------------------------------------------------------
+# KernelBench new QK-norm problems
+# ---------------------------------------------------------------------------
+
+class KernelBenchQKNormProblemsTests(unittest.TestCase):
+    def _attn_ids(self):
+        return {p["id"] for p in KERNELBENCH_SUBSET["attention"]}
+
+    def test_qknorm_local_problem_present(self):
+        self.assertIn("kb_L3_attn_gemma_qknorm_local", self._attn_ids())
+
+    def test_qknorm_global_problem_present(self):
+        self.assertIn("kb_L3_attn_gemma_qknorm_global", self._attn_ids())
+
+    def test_qknorm_local_has_correct_fields(self):
+        problems = {p["id"]: p for p in KERNELBENCH_SUBSET["attention"]}
+        prob = problems["kb_L3_attn_gemma_qknorm_local"]
+        self.assertEqual(prob.get("window_size"), 1024)
+        self.assertTrue(prob.get("is_causal"))
+        self.assertTrue(prob.get("use_qk_norm"))
+        self.assertEqual(prob.get("level"), 3)
+        self.assertEqual(prob.get("head_dim"), 256)
+
+    def test_qknorm_global_has_correct_fields(self):
+        problems = {p["id"]: p for p in KERNELBENCH_SUBSET["attention"]}
+        prob = problems["kb_L3_attn_gemma_qknorm_global"]
+        self.assertNotEqual(prob.get("window_size", -1), 1024)
+        self.assertTrue(prob.get("is_causal"))
+        self.assertTrue(prob.get("use_qk_norm"))
+        self.assertEqual(prob.get("level"), 3)
+
+    def test_existing_attn_problems_unaffected(self):
+        ids = self._attn_ids()
+        self.assertIn("kb_L3_attn_gemma_local", ids)
+        self.assertIn("kb_L3_attn_gemma_slide_causal", ids)
+        self.assertIn("kb_L3_attn_llama7b_causal", ids)
+
 if __name__ == "__main__":
     unittest.main()

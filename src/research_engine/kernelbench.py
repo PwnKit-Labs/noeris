@@ -101,6 +101,10 @@ KERNELBENCH_SUBSET = {
         # Sliding-window local attention (Gemma 3 / 4 style — 5 of 6 layers)
         {"id": "kb_L3_attn_gemma_local", "batch": 1, "heads": 16, "seq_len": 4096, "head_dim": 256, "is_causal": True, "window_size": 1024, "level": 3},
         {"id": "kb_L3_attn_gemma_slide_causal", "batch": 2, "heads": 16, "seq_len": 2048, "head_dim": 128, "is_causal": True, "window_size": 1024, "level": 3},
+        # QK-norm + sliding-window (Gemma 3/4 local layer with fused QK-RMSNorm)
+        {"id": "kb_L3_attn_gemma_qknorm_local", "batch": 1, "heads": 16, "seq_len": 4096, "head_dim": 256, "is_causal": True, "window_size": 1024, "use_qk_norm": True, "level": 3},
+        # QK-norm + global attention (Gemma 3/4 global layer — 1 of every 6 layers)
+        {"id": "kb_L3_attn_gemma_qknorm_global", "batch": 1, "heads": 16, "seq_len": 4096, "head_dim": 256, "is_causal": True, "use_qk_norm": True, "level": 3},
     ],
     "geglu": [
         # Level 2: Gemma 4 FFN shapes (n_rows = batch*seq tokens, ffn_dim = intermediate size)
@@ -453,7 +457,8 @@ def _pytorch_baseline_snippet(operator: str) -> str:
 '''
     elif operator == "attention":
         return '''
-    # Measure PyTorch eager and torch.compile SDPA baselines (supports causal + sliding window)
+    # Measure PyTorch eager and torch.compile SDPA baselines.
+    # Supports causal masking, sliding-window, and QK-norm (Gemma 3/4 style).
     pytorch_baselines = []
     compile_baselines = []
 
@@ -466,6 +471,12 @@ def _pytorch_baseline_snippet(operator: str) -> str:
             return left_bound & (cols <= rows)
         return left_bound & ((cols - rows) < window_size)
 
+    def _apply_qk_norm(q, k, head_dim):
+        """Per-row RMSNorm on Q and K (Gemma 3/4 style, epsilon=1e-6)."""
+        q_n = torch.nn.functional.rms_norm(q.float(), (head_dim,)).half()
+        k_n = torch.nn.functional.rms_norm(k.float(), (head_dim,)).half()
+        return q_n, k_n
+
     def _attn_plain(q, k, v, cf):
         return torch.nn.functional.scaled_dot_product_attention(q, k, v, is_causal=cf)
 
@@ -474,8 +485,20 @@ def _pytorch_baseline_snippet(operator: str) -> str:
             q, k, v, attn_mask=mask, is_causal=False
         )
 
+    def _attn_qknorm_plain(q, k, v, cf, hd):
+        q_n, k_n = _apply_qk_norm(q, k, hd)
+        return torch.nn.functional.scaled_dot_product_attention(q_n, k_n, v, is_causal=cf)
+
+    def _attn_qknorm_windowed(q, k, v, mask, hd):
+        q_n, k_n = _apply_qk_norm(q, k, hd)
+        return torch.nn.functional.scaled_dot_product_attention(
+            q_n, k_n, v, attn_mask=mask, is_causal=False
+        )
+
     compiled_attn_plain = torch.compile(_attn_plain, mode="max-autotune", dynamic=False)
     compiled_attn_windowed = torch.compile(_attn_windowed, mode="max-autotune", dynamic=False)
+    compiled_attn_qknorm_plain = torch.compile(_attn_qknorm_plain, mode="max-autotune", dynamic=False)
+    compiled_attn_qknorm_windowed = torch.compile(_attn_qknorm_windowed, mode="max-autotune", dynamic=False)
 
     for shape in shapes:
         batch = shape["batch"]
@@ -484,6 +507,7 @@ def _pytorch_baseline_snippet(operator: str) -> str:
         head_dim = shape["head_dim"]
         is_causal = bool(shape.get("is_causal", False))
         window_size = int(shape.get("window_size", -1))
+        use_qk_norm = bool(shape.get("use_qk_norm", False))
         q = torch.randn((batch, heads, seq_len, head_dim), device="cuda", dtype=torch.float16)
         k = torch.randn((batch, heads, seq_len, head_dim), device="cuda", dtype=torch.float16)
         v = torch.randn((batch, heads, seq_len, head_dim), device="cuda", dtype=torch.float16)
@@ -494,15 +518,29 @@ def _pytorch_baseline_snippet(operator: str) -> str:
             ws_mask = None
             window_factor = 0.5 if is_causal else 1.0
         flops = 4.0 * batch * heads * seq_len * seq_len * head_dim * window_factor
-        if window_size > 0:
+        if use_qk_norm and window_size > 0:
+            ms = triton.testing.do_bench(lambda: _attn_qknorm_windowed(q, k, v, ws_mask, head_dim), warmup=10, rep=50)
+        elif use_qk_norm:
+            cf = is_causal
+            ms = triton.testing.do_bench(lambda: _attn_qknorm_plain(q, k, v, cf, head_dim), warmup=10, rep=50)
+        elif window_size > 0:
             ms = triton.testing.do_bench(lambda: _attn_windowed(q, k, v, ws_mask), warmup=10, rep=50)
         else:
             cf = is_causal
             ms = triton.testing.do_bench(lambda: _attn_plain(q, k, v, cf), warmup=10, rep=50)
         tflops = flops / (ms * 1e-3) / 1e12
-        pytorch_baselines.append({"shape_name": shape.get("name", ""), "ms": round(ms, 4), "tflops": round(tflops, 2), "window_size": window_size})
+        pytorch_baselines.append({"shape_name": shape.get("name", ""), "ms": round(ms, 4), "tflops": round(tflops, 2), "window_size": window_size, "use_qk_norm": use_qk_norm})
         try:
-            if window_size > 0:
+            if use_qk_norm and window_size > 0:
+                for _ in range(3):
+                    compiled_attn_qknorm_windowed(q, k, v, ws_mask, head_dim)
+                ms_c = triton.testing.do_bench(lambda: compiled_attn_qknorm_windowed(q, k, v, ws_mask, head_dim), warmup=10, rep=50)
+            elif use_qk_norm:
+                cf = is_causal
+                for _ in range(3):
+                    compiled_attn_qknorm_plain(q, k, v, cf, head_dim)
+                ms_c = triton.testing.do_bench(lambda: compiled_attn_qknorm_plain(q, k, v, cf, head_dim), warmup=10, rep=50)
+            elif window_size > 0:
                 for _ in range(3):
                     compiled_attn_windowed(q, k, v, ws_mask)
                 ms_c = triton.testing.do_bench(lambda: compiled_attn_windowed(q, k, v, ws_mask), warmup=10, rep=50)
@@ -512,7 +550,7 @@ def _pytorch_baseline_snippet(operator: str) -> str:
                     compiled_attn_plain(q, k, v, cf)
                 ms_c = triton.testing.do_bench(lambda: compiled_attn_plain(q, k, v, cf), warmup=10, rep=50)
             tflops_c = flops / (ms_c * 1e-3) / 1e12
-            compile_baselines.append({"shape_name": shape.get("name", ""), "ms": round(ms_c, 4), "tflops": round(tflops_c, 2), "window_size": window_size})
+            compile_baselines.append({"shape_name": shape.get("name", ""), "ms": round(ms_c, 4), "tflops": round(tflops_c, 2), "window_size": window_size, "use_qk_norm": use_qk_norm})
         except Exception as exc:
             compile_baselines.append({"shape_name": shape.get("name", ""), "error": str(exc)[:200]})
     output["pytorch_baselines"] = pytorch_baselines

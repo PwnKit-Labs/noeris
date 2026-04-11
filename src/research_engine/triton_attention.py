@@ -71,6 +71,10 @@ ATTENTION_SHAPE_BUCKETS = [
     {"name": "gemma4_local_1024", "batch": 1, "heads": 16, "seq_len": 4096, "head_dim": 256, "is_causal": True, "window_size": 1024},
     {"name": "gemma4_local_short", "batch": 2, "heads": 16, "seq_len": 2048, "head_dim": 128, "is_causal": True, "window_size": 1024},
     {"name": "gemma3_local", "batch": 1, "heads": 16, "seq_len": 8192, "head_dim": 128, "is_causal": True, "window_size": 1024},
+    # QK-norm variants (Gemma 3 / 4 -- all layers normalise Q and K before dot-product).
+    # window_size=1024 -> local layer (5 of 6); window_size=-1 -> global layer (1 of 6).
+    {"name": "gemma4_qknorm", "batch": 1, "heads": 16, "seq_len": 4096, "head_dim": 256, "is_causal": True, "window_size": 1024, "use_qk_norm": True},
+    {"name": "gemma4_qknorm_global", "batch": 1, "heads": 16, "seq_len": 4096, "head_dim": 256, "is_causal": True, "window_size": -1, "use_qk_norm": True},
 ]
 
 
@@ -83,6 +87,13 @@ def attention_shape_bucket_key(shape: dict[str, int]) -> str:
     hd = shape.get("head_dim", 0)
     heads = shape.get("heads", 0)
     ws = shape.get("window_size", -1)
+    use_qk_norm = bool(shape.get("use_qk_norm", False))
+
+    # QK-norm shapes get dedicated buckets (Gemma 3/4 with fused QK-RMSNorm).
+    if use_qk_norm:
+        if ws is not None and ws > 0:
+            return "gemma4_qknorm"
+        return "gemma4_qknorm_global"
 
     # Sliding-window shapes get their own buckets
     if ws is not None and ws > 0:
@@ -214,6 +225,7 @@ import triton.language as tl
 @triton.jit
 def attn_fwd_kernel(
     Q, K, V, Out,
+    QScale, KScale,
     stride_qb, stride_qh, stride_qm, stride_qk,
     stride_kb, stride_kh, stride_kn, stride_kk,
     stride_vb, stride_vh, stride_vn, stride_vk,
@@ -225,6 +237,7 @@ def attn_fwd_kernel(
     BLOCK_N: tl.constexpr,
     IS_CAUSAL: tl.constexpr,
     WINDOW_SIZE: tl.constexpr,
+    USE_QK_NORM: tl.constexpr,
 ):
     """Tiled FlashAttention forward with online softmax and sliding-window support.
 
@@ -270,39 +283,34 @@ def attn_fwd_kernel(
     q_mask = offs_m[:, None] < M
     q = tl.load(q_ptrs, mask=q_mask, other=0.0)
 
-    m_i = tl.zeros((BLOCK_M,), dtype=tl.float32) - float("inf")
+    # Fused QK-norm: per-row RMSNorm on Q before tile loop (epsilon=1e-6).
+    if USE_QK_NORM:
+        q = q.to(tl.float32)
+        q_sq = q * q
+        q_var = tl.sum(q_sq, axis=1) / HEAD_DIM
+        q_rstd = 1.0 / tl.sqrt(q_var + 1e-6)
+        q = q * q_rstd[:, None]
+        q_scale = tl.load(QScale + offs_k)
+        q = q * q_scale[None, :]
+        q = q.to(tl.float16)
+
+    # Initialize online-softmax state.  Start m_i at a large finite
+    # negative (not -inf) so that early tiles with all-masked positions
+    # produce 0 exp2 contributions rather than NaN when subtracting -inf.
+    m_i = tl.zeros((BLOCK_M,), dtype=tl.float32) - 1.0e30
     l_i = tl.zeros((BLOCK_M,), dtype=tl.float32)
     acc = tl.zeros((BLOCK_M, HEAD_DIM), dtype=tl.float32)
 
     qk_scale = sm_scale * 1.44269504  # log2(e) for tl.exp2
 
-    # --- Compute the [k_start, k_end) range for this query tile ---------------
-    if WINDOW_SIZE > 0:
-        # Sliding-window: the earliest key position any query in this tile
-        # needs is block_start - WINDOW_SIZE + 1.
-        k_start = tl.maximum(0, pid * BLOCK_M - WINDOW_SIZE + 1)
-        if IS_CAUSAL:
-            k_end = tl.minimum(N, (pid + 1) * BLOCK_M)
-        else:
-            # Symmetric window: queries also attend to future keys.
-            k_end = tl.minimum(N, pid * BLOCK_M + WINDOW_SIZE)
-    else:
-        # No window.
-        k_start = 0
-        if IS_CAUSAL:
-            k_end = tl.minimum(N, (pid + 1) * BLOCK_M)
-        else:
-            k_end = N
-
-    # Align k_start down to the nearest BLOCK_N boundary so loop steps work.
-    k_start_aligned = (k_start // BLOCK_N) * BLOCK_N
-
-    for start_n in range(k_start_aligned, k_end, BLOCK_N):
-        # Tile-pruning: skip tiles that cannot overlap [k_start, k_end).
-        # For the aligned start this is only needed at the left boundary.
-        if start_n + BLOCK_N <= k_start:
-            continue
-
+    # --- Loop over all K tiles with mask-based window/causal enforcement ---
+    # We iterate the full `range(0, N, BLOCK_N)` and enforce causal + window
+    # constraints via `tl.where` masks on the raw QK scores.  This pattern
+    # compiles reliably under Triton's JIT (no `break`/`continue` on runtime
+    # predicates, no tensor-typed `range` bounds).  Cost: sliding-window
+    # runs O(N^2) instead of O(N*W).  Correct-first; tile pruning is a
+    # follow-up optimization.
+    for start_n in range(0, N, BLOCK_N):
         curr_n = start_n + offs_n
         k_ptrs = k_base + curr_n[:, None] * stride_kn + offs_k[None, :] * stride_kk
         v_ptrs = v_base + curr_n[:, None] * stride_vn + offs_k[None, :] * stride_vk
@@ -310,24 +318,36 @@ def attn_fwd_kernel(
         k = tl.load(k_ptrs, mask=n_mask, other=0.0)
         v = tl.load(v_ptrs, mask=n_mask, other=0.0)
 
+        # Fused QK-norm: per-row RMSNorm on K inside tile loop.
+        if USE_QK_NORM:
+            k = k.to(tl.float32)
+            k_sq = k * k
+            k_var = tl.sum(k_sq, axis=1) / HEAD_DIM
+            k_rstd = 1.0 / tl.sqrt(k_var + 1e-6)
+            k = k * k_rstd[:, None]
+            k_scale = tl.load(KScale + offs_k)
+            k = k * k_scale[None, :]
+            k = k.to(tl.float16)
+
         qk = tl.dot(q, tl.trans(k))
         qk = qk * qk_scale
 
-        # Mask out-of-bounds keys (past sequence end).
-        qk = tl.where(curr_n[None, :] < N, qk, -float("inf"))
+        # Mask out-of-bounds keys (past sequence end).  Use a large finite
+        # negative instead of -inf so that tiles where every position is
+        # masked don't produce NaN in the online-softmax arithmetic.
+        NEG_INF = -1.0e30
+        qk = tl.where(curr_n[None, :] < N, qk, NEG_INF)
 
         # Apply causal mask on this tile.
         if IS_CAUSAL:
             causal_mask = offs_m[:, None] >= curr_n[None, :]
-            qk = tl.where(causal_mask, qk, -float("inf"))
+            qk = tl.where(causal_mask, qk, NEG_INF)
 
         # Apply sliding-window mask: mask positions below the window floor.
         if WINDOW_SIZE > 0:
-            # Per-query lower bound: query row offs_m[i] can only see keys at
-            # positions >= offs_m[i] - WINDOW_SIZE + 1.
             window_floor = offs_m[:, None] - WINDOW_SIZE + 1
             window_mask = curr_n[None, :] >= window_floor
-            qk = tl.where(window_mask, qk, -float("inf"))
+            qk = tl.where(window_mask, qk, NEG_INF)
 
         m_ij = tl.max(qk, axis=1)
         m_new = tl.maximum(m_i, m_ij)
@@ -350,12 +370,18 @@ def attn_fwd_kernel(
     tl.store(o_ptrs, acc.to(Out.dtype.element_ty), mask=q_mask)
 
 
-def flash_attn(q, k, v, config, is_causal=False, sm_scale=None, window_size=-1):
+def flash_attn(
+    q, k, v, config, is_causal=False, sm_scale=None, window_size=-1,
+    use_qk_norm=False, q_scale=None, k_scale=None,
+):
     """q, k, v: (batch, heads, seq, head_dim) float16. Returns out.
 
     Args:
         window_size: Sliding-window size.  -1 (default) means no window (full
             attention).  >0 restricts each query to at most window_size keys.
+        use_qk_norm: Fuse per-row RMSNorm into Q and K (Gemma 3/4, epsilon=1e-6).
+        q_scale: Learnable [head_dim] scale weights for Q-norm (float32).
+        k_scale: Learnable [head_dim] scale weights for K-norm (float32).
     """
     B, H, M, D = q.shape
     _, _, N, _ = k.shape
@@ -365,9 +391,15 @@ def flash_attn(q, k, v, config, is_causal=False, sm_scale=None, window_size=-1):
     BLOCK_M = config["BLOCK_M"]
     BLOCK_N = config["BLOCK_N"]
 
+    if q_scale is None:
+        q_scale = torch.ones(D, device=q.device, dtype=torch.float32)
+    if k_scale is None:
+        k_scale = torch.ones(D, device=k.device, dtype=torch.float32)
+
     grid = (triton.cdiv(M, BLOCK_M), B * H, 1)
     attn_fwd_kernel[grid](
         q, k, v, out,
+        q_scale, k_scale,
         q.stride(0), q.stride(1), q.stride(2), q.stride(3),
         k.stride(0), k.stride(1), k.stride(2), k.stride(3),
         v.stride(0), v.stride(1), v.stride(2), v.stride(3),
@@ -379,6 +411,7 @@ def flash_attn(q, k, v, config, is_causal=False, sm_scale=None, window_size=-1):
         BLOCK_N=BLOCK_N,
         IS_CAUSAL=is_causal,
         WINDOW_SIZE=window_size,
+        USE_QK_NORM=use_qk_norm,
         num_warps=config["num_warps"],
         num_stages=config["num_stages"],
     )
@@ -407,11 +440,18 @@ def make_sliding_window_mask(seq_len: int, window_size: int, is_causal: bool) ->
     return mask  # True = attend
 
 
-def benchmark_one(batch, heads, seq_len, head_dim, config, is_causal=False, window_size=-1):
+def benchmark_one(batch, heads, seq_len, head_dim, config, is_causal=False, window_size=-1, use_qk_norm=False):
     try:
         q = torch.randn((batch, heads, seq_len, head_dim), device="cuda", dtype=torch.float16)
         k = torch.randn((batch, heads, seq_len, head_dim), device="cuda", dtype=torch.float16)
         v = torch.randn((batch, heads, seq_len, head_dim), device="cuda", dtype=torch.float16)
+
+        # When QK-norm enabled, normalise Q/K before PyTorch reference.
+        if use_qk_norm:
+            q_ref = torch.nn.functional.rms_norm(q.float(), (head_dim,)).half()
+            k_ref = torch.nn.functional.rms_norm(k.float(), (head_dim,)).half()
+        else:
+            q_ref, k_ref = q, k
 
         if window_size > 0:
             # Build explicit sliding-window mask for PyTorch reference.
@@ -419,20 +459,20 @@ def benchmark_one(batch, heads, seq_len, head_dim, config, is_causal=False, wind
             # SDPA expects float mask (0 = attend, -inf = mask out) or bool mask.
             # Pass as bool; SDPA converts internally.
             ref = torch.nn.functional.scaled_dot_product_attention(
-                q, k, v,
+                q_ref, k_ref, v,
                 attn_mask=ws_mask,
                 is_causal=False,  # mask already encodes causality
             )
         else:
-            ref = torch.nn.functional.scaled_dot_product_attention(q, k, v, is_causal=is_causal)
+            ref = torch.nn.functional.scaled_dot_product_attention(q_ref, k_ref, v, is_causal=is_causal)
 
-        out = flash_attn(q, k, v, config, is_causal=is_causal, window_size=window_size)
+        out = flash_attn(q, k, v, config, is_causal=is_causal, window_size=window_size, use_qk_norm=use_qk_norm)
         max_err = (out - ref).abs().max().item()
         if max_err > 0.1:
             return {{"correct": False, "max_err": max_err, "ms": None, "tflops": None}}
 
         ms = triton.testing.do_bench(
-            lambda: flash_attn(q, k, v, config, is_causal=is_causal, window_size=window_size),
+            lambda: flash_attn(q, k, v, config, is_causal=is_causal, window_size=window_size, use_qk_norm=use_qk_norm),
             warmup=10, rep=50,
         )
         # Effective work: causal halves flops; window shrinks further.
@@ -473,14 +513,16 @@ def main():
             head_dim = shape["head_dim"]
             is_causal = bool(shape.get("is_causal", False))
             window_size = int(shape.get("window_size", -1))
+            use_qk_norm = bool(shape.get("use_qk_norm", False))
             result = benchmark_one(
                 batch, heads, seq_len, head_dim, config,
-                is_causal=is_causal, window_size=window_size,
+                is_causal=is_causal, window_size=window_size, use_qk_norm=use_qk_norm,
             )
             result["shape"] = f"{{batch}}x{{heads}}x{{seq_len}}x{{head_dim}}"
             result["shape_name"] = shape.get("name", "")
             result["is_causal"] = is_causal
             result["window_size"] = window_size
+            result["use_qk_norm"] = use_qk_norm
             shape_results.append(result)
         all_results.append({{
             "config_id": cid,
