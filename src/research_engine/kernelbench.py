@@ -20,49 +20,76 @@ from pathlib import Path
 from typing import Any
 
 
-# A curated subset of KernelBench-style problems that map onto operators
-# we currently support. These are public shapes from the KernelBench Level 1
-# and Level 2 problem sets. We include them as test cases, not as the
-# official KernelBench loader (which requires HuggingFace datasets access).
+# Expanded KernelBench-style problem set covering 50+ problems across
+# 6 operators at difficulty levels 1-3. Shapes are drawn from real LLM
+# workloads (GPT-2, BERT, LLaMA, Mistral, GPT-NeoX) plus systematic
+# stress tests at Level 1.
 KERNELBENCH_SUBSET = {
     "matmul": [
-        {"id": "kb_L1_matmul_small", "M": 512, "N": 512, "K": 512, "level": 1},
-        {"id": "kb_L1_matmul_medium", "M": 1024, "N": 1024, "K": 1024, "level": 1},
-        {"id": "kb_L1_matmul_large", "M": 2048, "N": 2048, "K": 2048, "level": 1},
-        {"id": "kb_L1_matmul_xlarge", "M": 4096, "N": 4096, "K": 4096, "level": 1},
-        {"id": "kb_L1_matmul_tall", "M": 8192, "N": 1024, "K": 1024, "level": 1},
+        # Level 1: systematic stress shapes
+        {"id": "kb_L1_matmul_128", "M": 128, "N": 128, "K": 128, "level": 1},
+        {"id": "kb_L1_matmul_256", "M": 256, "N": 256, "K": 256, "level": 1},
+        {"id": "kb_L1_matmul_512", "M": 512, "N": 512, "K": 512, "level": 1},
+        {"id": "kb_L1_matmul_1024", "M": 1024, "N": 1024, "K": 1024, "level": 1},
+        {"id": "kb_L1_matmul_2048", "M": 2048, "N": 2048, "K": 2048, "level": 1},
+        {"id": "kb_L1_matmul_4096", "M": 4096, "N": 4096, "K": 4096, "level": 1},
+        {"id": "kb_L1_matmul_tall_4k", "M": 4096, "N": 1024, "K": 1024, "level": 1},
+        {"id": "kb_L1_matmul_tall_8k", "M": 8192, "N": 1024, "K": 1024, "level": 1},
+        {"id": "kb_L1_matmul_wide", "M": 1024, "N": 8192, "K": 1024, "level": 1},
         {"id": "kb_L1_matmul_deep", "M": 1024, "N": 1024, "K": 8192, "level": 1},
-        {"id": "kb_L2_matmul_llm_qkv", "M": 4096, "N": 4096, "K": 512, "level": 2},
-        {"id": "kb_L2_matmul_llm_mlp", "M": 4096, "N": 11008, "K": 4096, "level": 2},
+        # Level 2: LLM-shaped workloads
+        {"id": "kb_L2_gpt2_qkv", "M": 1024, "N": 2304, "K": 768, "level": 2},
+        {"id": "kb_L2_gpt2_out", "M": 1024, "N": 768, "K": 768, "level": 2},
+        {"id": "kb_L2_gpt2_mlp_up", "M": 1024, "N": 3072, "K": 768, "level": 2},
+        {"id": "kb_L2_gpt2_mlp_down", "M": 1024, "N": 768, "K": 3072, "level": 2},
+        {"id": "kb_L2_llama7b_qkv", "M": 4096, "N": 12288, "K": 4096, "level": 2},
+        {"id": "kb_L2_llama7b_mlp_up", "M": 4096, "N": 11008, "K": 4096, "level": 2},
+        {"id": "kb_L2_llama7b_mlp_down", "M": 4096, "N": 4096, "K": 11008, "level": 2},
+        {"id": "kb_L2_bert_qkv", "M": 512, "N": 3072, "K": 1024, "level": 2},
+        {"id": "kb_L2_mistral_mlp", "M": 4096, "N": 14336, "K": 4096, "level": 2},
     ],
     "rmsnorm": [
-        {"id": "kb_L1_rmsnorm_small", "n_rows": 1024, "hidden_dim": 768, "level": 1},
-        {"id": "kb_L1_rmsnorm_base", "n_rows": 4096, "hidden_dim": 768, "level": 1},
+        {"id": "kb_L1_rmsnorm_gpt2", "n_rows": 1024, "hidden_dim": 768, "level": 1},
+        {"id": "kb_L1_rmsnorm_bert", "n_rows": 4096, "hidden_dim": 1024, "level": 1},
+        {"id": "kb_L1_rmsnorm_gpt_xl", "n_rows": 4096, "hidden_dim": 1600, "level": 1},
         {"id": "kb_L2_rmsnorm_llama7b", "n_rows": 4096, "hidden_dim": 4096, "level": 2},
         {"id": "kb_L2_rmsnorm_llama13b", "n_rows": 4096, "hidden_dim": 5120, "level": 2},
+        {"id": "kb_L2_rmsnorm_llama70b", "n_rows": 2048, "hidden_dim": 8192, "level": 2},
+        {"id": "kb_L2_rmsnorm_mixtral", "n_rows": 8192, "hidden_dim": 4096, "level": 2},
     ],
     "softmax": [
+        {"id": "kb_L1_softmax_tiny", "n_rows": 1024, "n_cols": 256, "level": 1},
         {"id": "kb_L1_softmax_small", "n_rows": 1024, "n_cols": 512, "level": 1},
         {"id": "kb_L1_softmax_medium", "n_rows": 2048, "n_cols": 1024, "level": 1},
         {"id": "kb_L1_softmax_large", "n_rows": 4096, "n_cols": 4096, "level": 1},
-        {"id": "kb_L2_softmax_vocab", "n_rows": 2048, "n_cols": 32000, "level": 2},
+        {"id": "kb_L2_softmax_attn_short", "n_rows": 8192, "n_cols": 512, "level": 2},
+        {"id": "kb_L2_softmax_attn_long", "n_rows": 2048, "n_cols": 4096, "level": 2},
+        {"id": "kb_L2_softmax_vocab_gpt2", "n_rows": 1024, "n_cols": 50257, "level": 2},
+        {"id": "kb_L2_softmax_vocab_llama", "n_rows": 2048, "n_cols": 32000, "level": 2},
     ],
     "layernorm": [
-        {"id": "kb_L1_layernorm_small", "n_rows": 1024, "hidden_dim": 768, "level": 1},
-        {"id": "kb_L1_layernorm_bert", "n_rows": 4096, "hidden_dim": 1024, "level": 1},
-        {"id": "kb_L2_layernorm_gpt", "n_rows": 4096, "hidden_dim": 1600, "level": 2},
-        {"id": "kb_L2_layernorm_large", "n_rows": 8192, "hidden_dim": 4096, "level": 2},
+        {"id": "kb_L1_layernorm_gpt2", "n_rows": 1024, "hidden_dim": 768, "level": 1},
+        {"id": "kb_L1_layernorm_bert_base", "n_rows": 4096, "hidden_dim": 768, "level": 1},
+        {"id": "kb_L1_layernorm_bert_large", "n_rows": 4096, "hidden_dim": 1024, "level": 1},
+        {"id": "kb_L2_layernorm_gpt_xl", "n_rows": 4096, "hidden_dim": 1600, "level": 2},
+        {"id": "kb_L2_layernorm_neox", "n_rows": 4096, "hidden_dim": 4096, "level": 2},
+        {"id": "kb_L2_layernorm_long_seq", "n_rows": 8192, "hidden_dim": 768, "level": 2},
     ],
     "cross_entropy": [
+        {"id": "kb_L1_ce_bert", "n_rows": 4096, "n_cols": 30522, "level": 1},
         {"id": "kb_L1_ce_gpt2", "n_rows": 1024, "n_cols": 50257, "level": 1},
+        {"id": "kb_L1_ce_gpt2_long", "n_rows": 2048, "n_cols": 50257, "level": 1},
         {"id": "kb_L1_ce_llama", "n_rows": 2048, "n_cols": 32000, "level": 1},
-        {"id": "kb_L2_ce_long_llama", "n_rows": 4096, "n_cols": 32000, "level": 2},
-        {"id": "kb_L2_ce_llama3", "n_rows": 2048, "n_cols": 128256, "level": 2},
+        {"id": "kb_L2_ce_mistral", "n_rows": 4096, "n_cols": 32000, "level": 2},
+        {"id": "kb_L2_ce_long_llama", "n_rows": 8192, "n_cols": 32000, "level": 2},
+        {"id": "kb_L2_ce_llama3_128k", "n_rows": 2048, "n_cols": 128256, "level": 2},
     ],
     "attention": [
-        {"id": "kb_L2_attn_short", "batch": 4, "heads": 16, "seq_len": 512, "head_dim": 64, "level": 2},
-        {"id": "kb_L2_attn_med", "batch": 2, "heads": 16, "seq_len": 2048, "head_dim": 128, "level": 2},
-        {"id": "kb_L3_attn_long", "batch": 1, "heads": 16, "seq_len": 4096, "head_dim": 128, "level": 3},
+        {"id": "kb_L2_attn_short_64", "batch": 4, "heads": 16, "seq_len": 512, "head_dim": 64, "level": 2},
+        {"id": "kb_L2_attn_short_128", "batch": 4, "heads": 16, "seq_len": 512, "head_dim": 128, "level": 2},
+        {"id": "kb_L2_attn_med_128", "batch": 2, "heads": 16, "seq_len": 2048, "head_dim": 128, "level": 2},
+        {"id": "kb_L3_attn_long_64", "batch": 1, "heads": 16, "seq_len": 4096, "head_dim": 64, "level": 3},
+        {"id": "kb_L3_attn_long_128", "batch": 1, "heads": 16, "seq_len": 4096, "head_dim": 128, "level": 3},
         {"id": "kb_L3_attn_llama7b", "batch": 1, "heads": 32, "seq_len": 4096, "head_dim": 128, "level": 3},
     ],
 }
