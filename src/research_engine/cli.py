@@ -837,7 +837,10 @@ def _propose_operator_configs(
 
 def _run_triton_iterate(args) -> int:
     """Run the Triton kernel search loop for any registered operator."""
-    from .modal_runner import run_benchmark_batch_modal_generic
+    from .modal_runner import (
+        run_benchmark_batch_modal,
+        run_benchmark_batch_modal_generic,
+    )
     from .triton_operators import REGISTRY
 
     operator_name = getattr(args, "operator", "matmul")
