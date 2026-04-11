@@ -1,0 +1,54 @@
+{
+  "operator": "attention",
+  "gpu": "A100",
+  "iterations": 5,
+  "configs_per_run": 6,
+  "include_curated": false,
+  "shapes": [
+    "short_64",
+    "short_128",
+    "med_128",
+    "long_64",
+    "long_128",
+    "llama7b"
+  ],
+  "cost_model": {
+    "path": ".noeris/cost-model.pkl",
+    "training_size": 516
+  },
+  "conditions": {
+    "baseline": {
+      "trajectory": [
+        84.90166666666667,
+        85.03333333333333,
+        85.03333333333333,
+        85.03333333333333,
+        85.03333333333333
+      ],
+      "final_best": 85.03333333333333,
+      "delta_vs_baseline_pct": 0.0
+    },
+    "cost_model": {
+      "trajectory": [
+        141.23333333333335,
+        141.29833333333335,
+        141.29833333333335,
+        141.29833333333335,
+        141.29833333333335
+      ],
+      "final_best": 141.29833333333335,
+      "delta_vs_baseline_pct": 66.17
+    },
+    "bandit": {
+      "trajectory": [
+        134.93666666666667,
+        134.95000000000002,
+        134.95000000000002,
+        134.95000000000002,
+        134.95000000000002
+      ],
+      "final_best": 134.95000000000002,
+      "delta_vs_baseline_pct": 58.7
+    }
+  }
+}
