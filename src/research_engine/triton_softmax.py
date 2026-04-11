@@ -42,6 +42,14 @@ SOFTMAX_SHAPE_BUCKETS = [
     {"name": "attn_long", "n_rows": 4096, "n_cols": 8192},
     {"name": "vocab_small", "n_rows": 1024, "n_cols": 32000},
     {"name": "vocab_llama", "n_rows": 2048, "n_cols": 32000},
+    # Gemma 4 final-logits path — 262144 vocab with optional softcap=30.
+    # Gemma 4 31B retains a final-logits softcap (per Kaitchup arch breakdown).
+    # Smaller Gemma 4 variants do not use a softcap but still use the 262k vocab.
+    {"name": "gemma4_262k_vocab", "n_rows": 2048, "n_cols": 262144},
+    {"name": "gemma4_31b_softcap", "n_rows": 2048, "n_cols": 262144, "softcap": 30.0},
+    # Upstream KernelBench L1 #23 (Softmax) shape — (4096, 393216) fp32
+    # 7× wider than vocab_llama; separate bucket so bandit does not mix priors.
+    {"name": "kb_l1_23_huge", "n_rows": 4096, "n_cols": 393216},
 ]
 
 
@@ -50,9 +58,24 @@ def softmax_config_id(config: dict[str, int]) -> str:
 
 
 def softmax_shape_bucket_key(shape: dict[str, int]) -> str:
-    """Classify a softmax shape."""
+    """Classify a softmax shape.
+
+    Post-#40/#43: the softcap variant gets its own bucket so bandit priors
+    do not mix between `softcap=0` (standard softmax) and `softcap>0`
+    (Gemma 4 31B final logits).  The KernelBench L1 #23 wide-softmax shape
+    (4096 × 393216 fp32) also gets its own bucket since no existing
+    vocab bucket is within 7× of that column count.
+    """
     cols = shape.get("n_cols", 0)
     rows = shape.get("n_rows", 0)
+    softcap = float(shape.get("softcap", 0.0) or 0.0)
+    # Upstream KernelBench L1 #23: (4096, 393216) — separate huge bucket
+    if cols >= 300_000:
+        return "kb_l1_23_huge"
+    # Gemma 4 262k vocab: two buckets depending on whether the final-logits
+    # softcap is active (31B Dense uses softcap=30; other variants do not).
+    if cols >= 200_000:
+        return "gemma4_31b_softcap" if softcap > 0.0 else "gemma4_262k_vocab"
     if cols >= 16384:
         return "vocab_llama" if rows >= 2048 else "vocab_small"
     if cols >= 4096:
@@ -131,9 +154,16 @@ def softmax_kernel(
     x_row_stride,
     y_row_stride,
     n_cols,
+    softcap,
     BLOCK_SIZE: tl.constexpr,
+    USE_SOFTCAP: tl.constexpr,
 ):
-    """Numerically-stable softmax: y = exp(x - max(x)) / sum(...)"""
+    """Numerically-stable softmax with optional softcap pre-step.
+
+    Standard:         y = exp(x - max(x)) / sum(...)
+    With softcap:     x = softcap * tanh(x / softcap);  then standard softmax.
+    Gemma 4 31B final logits use softcap=30.0.
+    """
     row_idx = tl.program_id(0)
     x_ptr += row_idx * x_row_stride
     y_ptr += row_idx * y_row_stride
@@ -141,6 +171,10 @@ def softmax_kernel(
     mask = offs < n_cols
 
     x = tl.load(x_ptr + offs, mask=mask, other=-float("inf")).to(tl.float32)
+    if USE_SOFTCAP:
+        # softcap * tanh(x / softcap) — bounds magnitudes to [-softcap, softcap]
+        inv_softcap = 1.0 / softcap
+        x = softcap * (2.0 / (1.0 + tl.exp(-2.0 * x * inv_softcap)) - 1.0)
     row_max = tl.max(x, axis=0)
     x_shifted = x - row_max
     exp_x = tl.exp(x_shifted)
@@ -150,30 +184,37 @@ def softmax_kernel(
     tl.store(y_ptr + offs, y.to(tl.float16), mask=mask)
 
 
-def softmax(x, config):
+def softmax(x, config, softcap=0.0):
     n_rows, n_cols = x.shape
     y = torch.empty_like(x)
     BLOCK_SIZE = max(config["BLOCK_SIZE"], triton.next_power_of_2(n_cols))
+    use_softcap = float(softcap) > 0.0
     softmax_kernel[(n_rows,)](
         x, y,
         x.stride(0), y.stride(0),
         n_cols,
+        float(softcap) if use_softcap else 1.0,
         BLOCK_SIZE=BLOCK_SIZE,
+        USE_SOFTCAP=use_softcap,
         num_warps=config["num_warps"],
         num_stages=config["num_stages"],
     )
     return y
 
 
-def benchmark_one(n_rows, n_cols, config, dtype=torch.float16):
+def benchmark_one(n_rows, n_cols, config, dtype=torch.float16, softcap=0.0):
     try:
         x = torch.randn((n_rows, n_cols), device="cuda", dtype=dtype)
-        ref = torch.softmax(x.to(torch.float32), dim=-1).to(torch.float16)
-        out = softmax(x, config)
+        x_f32 = x.to(torch.float32)
+        if float(softcap) > 0.0:
+            sc = float(softcap)
+            x_f32 = sc * torch.tanh(x_f32 / sc)
+        ref = torch.softmax(x_f32, dim=-1).to(torch.float16)
+        out = softmax(x, config, softcap=softcap)
         max_err = (out - ref).abs().max().item()
         if max_err > 0.05:
             return {{"correct": False, "max_err": max_err, "ms": None, "gb_per_s": None, "tflops": None}}
-        ms = triton.testing.do_bench(lambda: softmax(x, config), warmup=25, rep=100)
+        ms = triton.testing.do_bench(lambda: softmax(x, config, softcap=softcap), warmup=25, rep=100)
         bytes_moved = 2 * n_rows * n_cols * 2  # read x + write y
         gb_per_s = bytes_moved / (ms * 1e-3) / 1e9
         return {{
@@ -201,9 +242,11 @@ def main():
         for shape in shapes:
             n_rows = shape["n_rows"]
             n_cols = shape["n_cols"]
-            result = benchmark_one(n_rows, n_cols, config)
+            softcap = float(shape.get("softcap", 0.0) or 0.0)
+            result = benchmark_one(n_rows, n_cols, config, softcap=softcap)
             result["shape"] = f"{{n_rows}}x{{n_cols}}"
             result["shape_name"] = shape.get("name", "")
+            result["softcap"] = softcap
             shape_results.append(result)
         all_results.append({{
             "config_id": cid,
