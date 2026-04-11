@@ -79,6 +79,7 @@ class ArxivAtomSourceProvider(SourceProvider):
             identifier = self._entry_text(entry, "atom:id")
             title = self._entry_text(entry, "atom:title")
             summary = self._entry_text(entry, "atom:summary")
+            updated_at = self._entry_text(entry, "atom:updated")
             if not identifier or not title:
                 continue
             sources.append(
@@ -88,6 +89,7 @@ class ArxivAtomSourceProvider(SourceProvider):
                     title=self._clean_text(title),
                     locator=identifier,
                     excerpt=self._clean_text(summary),
+                    updated_at=self._clean_text(updated_at) or None,
                 )
             )
         return sources
@@ -136,6 +138,7 @@ class GitHubRepositorySourceProvider(SourceProvider):
                     title=full_name,
                     locator=html_url,
                     excerpt=(item.get("description") or "").strip(),
+                    updated_at=(item.get("updated_at") or "").strip() or None,
                 )
             )
         return sources

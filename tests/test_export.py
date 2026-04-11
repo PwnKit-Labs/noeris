@@ -36,6 +36,7 @@ class ExportBundleTests(unittest.TestCase):
         self.assertIn("claims", lineage)
         self.assertIn("linked_sources", lineage)
         self.assertIn("assessment", lineage)
+        self.assertIn("updated_at", lineage)
         self.assertIn("## Claims", brief)
         self.assertIn("## Hypotheses", brief)
 

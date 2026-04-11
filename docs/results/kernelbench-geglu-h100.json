@@ -1,0 +1,112 @@
+{
+  "metadata": {
+    "hardware": "H100",
+    "operators": [
+      "geglu"
+    ]
+  },
+  "fast_p_scores": {
+    "vs_eager": {
+      "1.0": {
+        "level_2": 1.0,
+        "overall": 1.0
+      },
+      "1.5": {
+        "level_2": 1.0,
+        "overall": 1.0
+      },
+      "2.0": {
+        "level_2": 1.0,
+        "overall": 1.0
+      },
+      "3.0": {
+        "level_2": 0.75,
+        "overall": 0.75
+      }
+    },
+    "vs_compile": {
+      "1.0": {
+        "level_2": 1.0,
+        "overall": 1.0
+      },
+      "1.5": {
+        "level_2": 1.0,
+        "overall": 1.0
+      },
+      "2.0": {
+        "level_2": 0.75,
+        "overall": 0.75
+      },
+      "3.0": {
+        "level_2": 0.0,
+        "overall": 0.0
+      }
+    }
+  },
+  "results": [
+    {
+      "problem_id": "kb_L2_geglu_gemma2b",
+      "operator": "geglu",
+      "level": 2,
+      "shape": {
+        "n_rows": 2048,
+        "ffn_dim": 5632
+      },
+      "our_metric": 1999.02,
+      "our_config_id": "bs4096_w16_s1",
+      "pytorch_baseline": 555.73,
+      "compile_baseline": 815.96,
+      "speedup_vs_eager": 3.597106508556313,
+      "speedup_vs_compile": 2.44989950487769,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L2_geglu_gemma4b",
+      "operator": "geglu",
+      "level": 2,
+      "shape": {
+        "n_rows": 2048,
+        "ffn_dim": 14336
+      },
+      "our_metric": 2120.35,
+      "our_config_id": "bs4096_w16_s1",
+      "pytorch_baseline": 586.86,
+      "compile_baseline": 1025.88,
+      "speedup_vs_eager": 3.613042292880755,
+      "speedup_vs_compile": 2.0668596716964944,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L2_geglu_gemma26b",
+      "operator": "geglu",
+      "level": 2,
+      "shape": {
+        "n_rows": 2048,
+        "ffn_dim": 16384
+      },
+      "our_metric": 2287.3,
+      "our_config_id": "bs4096_w16_s1",
+      "pytorch_baseline": 591.73,
+      "compile_baseline": 978.09,
+      "speedup_vs_eager": 3.8654453889442824,
+      "speedup_vs_compile": 2.3385373534132854,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L2_geglu_gemma31b",
+      "operator": "geglu",
+      "level": 2,
+      "shape": {
+        "n_rows": 2048,
+        "ffn_dim": 24576
+      },
+      "our_metric": 1601.34,
+      "our_config_id": "bs4096_w16_s1",
+      "pytorch_baseline": 604.51,
+      "compile_baseline": 1051.28,
+      "speedup_vs_eager": 2.648988436915849,
+      "speedup_vs_compile": 1.523228825812343,
+      "correct": true
+    }
+  ]
+}

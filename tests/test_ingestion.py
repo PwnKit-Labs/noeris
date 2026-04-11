@@ -16,6 +16,7 @@ ARXIV_SAMPLE = """<?xml version="1.0" encoding="UTF-8"?>
   <entry>
     <id>http://arxiv.org/abs/2501.00001v1</id>
     <title>  Test Paper Title  </title>
+    <updated>2026-04-10T12:34:56Z</updated>
     <summary>
       This is a sample abstract.
     </summary>
@@ -40,6 +41,7 @@ class FakeHttpClient:
                     "full_name": "openai/example-repo",
                     "html_url": "https://github.com/openai/example-repo",
                     "description": "Example repository",
+                    "updated_at": "2026-04-09T08:00:00Z",
                 }
             ]
         }
@@ -65,6 +67,7 @@ class IngestionProviderTests(unittest.TestCase):
         self.assertEqual(len(sources), 1)
         self.assertEqual(sources[0].kind, "paper")
         self.assertEqual(sources[0].title, "Test Paper Title")
+        self.assertEqual(sources[0].updated_at, "2026-04-10T12:34:56Z")
         self.assertIn("search_query=", client.calls[0][0])
 
     def test_github_provider_parses_repository_results(self) -> None:
@@ -78,6 +81,7 @@ class IngestionProviderTests(unittest.TestCase):
         self.assertEqual(len(sources), 1)
         self.assertEqual(sources[0].identifier, "github://openai/example-repo")
         self.assertEqual(sources[0].kind, "repository")
+        self.assertEqual(sources[0].updated_at, "2026-04-09T08:00:00Z")
         self.assertEqual(
             client.calls[0][1]["X-GitHub-Api-Version"],
             "2022-11-28",

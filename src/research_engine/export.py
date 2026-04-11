@@ -196,6 +196,7 @@ def _build_claim_lineage(record: ResearchRunRecord) -> dict[str, object]:
             "kind": source.kind,
             "title": source.title,
             "locator": source.locator,
+            "updated_at": source.updated_at,
         }
         for source in record.memo.sources
     }

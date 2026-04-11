@@ -28,6 +28,7 @@ class ResearchSource:
     title: str
     locator: str
     excerpt: str
+    updated_at: str | None = None
 
 
 @dataclass(slots=True)
