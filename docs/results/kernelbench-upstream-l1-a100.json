@@ -1,0 +1,142 @@
+{
+  "metadata": {
+    "hardware": "NVIDIA A100-SXM4-40GB",
+    "timer": "cuda_event",
+    "problem_count": 12,
+    "timer_echoed": "cuda_event"
+  },
+  "results": [
+    {
+      "problem": "1_Square_matrix_multiplication_.py",
+      "operator": "matmul",
+      "upstream_ms": 9.33581,
+      "noeris_ms": 7.2279,
+      "speedup": 1.292,
+      "correct": true,
+      "external_h100_ms": 2.66,
+      "notes": "N=4096 fp32 square matmul; maps straight to Noeris matmul.",
+      "error": ""
+    },
+    {
+      "problem": "6_Matmul_with_large_K_dimension_.py",
+      "operator": "matmul",
+      "upstream_ms": 3.63981,
+      "noeris_ms": 3.73094,
+      "speedup": 0.976,
+      "correct": true,
+      "external_h100_ms": 1.3,
+      "notes": "M=N=256, K=524288 fp32 \u2014 pathological large-K shape.",
+      "error": ""
+    },
+    {
+      "problem": "7_Matmul_with_small_K_dimension_.py",
+      "operator": "matmul",
+      "upstream_ms": 7.72762,
+      "noeris_ms": 7.75117,
+      "speedup": 0.997,
+      "correct": true,
+      "external_h100_ms": 4.06,
+      "notes": "Small K (likely 32) \u2014 tests partition-K strategy.",
+      "error": ""
+    },
+    {
+      "problem": "8_Matmul_with_irregular_shapes_.py",
+      "operator": "matmul",
+      "upstream_ms": 15.5305,
+      "noeris_ms": 15.48646,
+      "speedup": 1.003,
+      "correct": true,
+      "external_h100_ms": 6.38,
+      "notes": "Non-power-of-two shapes; exercises masking.",
+      "error": ""
+    },
+    {
+      "problem": "9_Tall_skinny_matrix_multiplication_.py",
+      "operator": "matmul",
+      "upstream_ms": 4.21632,
+      "noeris_ms": 4.01101,
+      "speedup": 1.051,
+      "correct": true,
+      "external_h100_ms": 2.59,
+      "notes": "M=32768, N=32, K=32768 fp32 \u2014 tall-skinny GEMV-ish.",
+      "error": ""
+    },
+    {
+      "problem": "23_Softmax.py",
+      "operator": "softmax",
+      "upstream_ms": 19.24864,
+      "noeris_ms": 19.23328,
+      "speedup": 1.001,
+      "correct": true,
+      "external_h100_ms": 8.52,
+      "notes": "(4096, 393216) fp32 softmax along dim=1.",
+      "error": ""
+    },
+    {
+      "problem": "26_GELU_.py",
+      "operator": "geglu",
+      "upstream_ms": 9.63533,
+      "noeris_ms": 84.10778,
+      "speedup": 0.115,
+      "correct": true,
+      "external_h100_ms": 4.3,
+      "notes": "(4096, 393216) fp32 GELU. Noeris has no standalone GELU; we reuse the GeGLU kernel with gate=1 to approximate, or flag as Noeris-skipped. See adapter.",
+      "error": ""
+    },
+    {
+      "problem": "36_RMSNorm_.py",
+      "operator": "rmsnorm",
+      "upstream_ms": 28.88038,
+      "noeris_ms": 122.05824,
+      "speedup": 0.237,
+      "correct": true,
+      "external_h100_ms": 14.2,
+      "notes": "4D (112, 64, 512, 512) fp32 \u2014 NORMALIZED ALONG DIM=1 (features), NOT the last dim. Noeris rmsnorm normalizes along the last dim of a 2D (rows, hidden) tensor. Adapter has to permute dim 1 to the innermost before flattening to (rows, 64).",
+      "error": ""
+    },
+    {
+      "problem": "40_LayerNorm.py",
+      "operator": "layernorm",
+      "upstream_ms": 10.24922,
+      "noeris_ms": 9.91539,
+      "speedup": 1.034,
+      "correct": true,
+      "external_h100_ms": 8.12,
+      "notes": "4D (16, 64, 256, 256) fp32; normalized_shape=(64, 256, 256) i.e. normalize over dim 1,2,3 together. Adapter flattens to (16, 64*256*256).",
+      "error": ""
+    },
+    {
+      "problem": "88_MinGPTNewGelu.py",
+      "operator": "geglu",
+      "upstream_ms": 3.54253,
+      "noeris_ms": 3.54099,
+      "speedup": 1.0,
+      "correct": true,
+      "external_h100_ms": 1.65,
+      "notes": "(8192, 8192) fp32 tanh-approx GELU. Noeris GeGLU kernel computes gate * GELU_tanh(up); adapter passes ones as gate.",
+      "error": ""
+    },
+    {
+      "problem": "95_CrossEntropyLoss.py",
+      "operator": "cross_entropy",
+      "upstream_ms": 0.83866,
+      "noeris_ms": 0.83763,
+      "speedup": 1.001,
+      "correct": true,
+      "external_h100_ms": 0.477,
+      "notes": "(32768, 4096) fp32 logits + int64 targets.",
+      "error": ""
+    },
+    {
+      "problem": "97_ScaledDotProductAttention.py",
+      "operator": "attention",
+      "upstream_ms": 41.93792,
+      "noeris_ms": 42.33114,
+      "speedup": 0.991,
+      "correct": true,
+      "external_h100_ms": 8.45,
+      "notes": "(32, 32, 512, 1024) fp32 non-causal SDPA. head_dim=1024 is large \u2014 Noeris attention kernel may not have a bucket for it. Runner will report correct/incorrect and skip gracefully on kernel failure.",
+      "error": ""
+    }
+  ]
+}
