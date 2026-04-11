@@ -265,6 +265,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=".noeris/triton-configs.json",
         help="path to the shape-indexed config database",
     )
+    triton_parser.add_argument(
+        "--cost-model",
+        default="",
+        help="path to a trained CostModel pickle (enables cost-model-ranked selection)",
+    )
 
     kb_parser = subparsers.add_parser(
         "kernelbench-eval",
@@ -318,6 +323,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Use persistent Modal session (one warm container across all iterations)",
     )
     ablation_parser.add_argument("--output", default=".noeris/ablation-report.json")
+
+    train_parser = subparsers.add_parser(
+        "train-cost-model",
+        help="Train a learned cost model from one or more ConfigDatabase files",
+    )
+    train_parser.add_argument(
+        "--db-paths",
+        nargs="+",
+        default=[".noeris/triton-configs.json"],
+        help="Paths to ConfigDatabase JSON files to use as training data",
+    )
+    train_parser.add_argument(
+        "--output",
+        default=".noeris/cost-model.pkl",
+        help="Where to save the trained model",
+    )
 
     return parser
 
@@ -575,6 +596,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "ablation":
         return _run_ablation(args)
 
+    if args.command == "train-cost-model":
+        return _run_train_cost_model(args)
+
     try:
         pipeline = build_pipeline(
             use_llm=args.llm,
@@ -591,6 +615,22 @@ def main(argv: list[str] | None = None) -> int:
         constraints=args.constraint,
     )
     print(json.dumps(pipeline.run_cycle_dict(topic), indent=2))
+    return 0
+
+
+def _run_train_cost_model(args) -> int:
+    """Train and save the learned cost model."""
+    from .cost_model import CostModel
+
+    model = CostModel()
+    stats = model.train_from_databases(args.db_paths)
+    output = _Path(args.output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    model.save(output)
+    print(json.dumps(
+        {"output_path": str(output), "stats": stats},
+        indent=2,
+    ))
     return 0
 
 
@@ -696,6 +736,18 @@ def _run_generic_operator_iterate(*, spec, args, db, shapes) -> int:
         except LlmConfigurationError as exc:
             proposal_result = {"source": "llm_config_error", "error": str(exc)}
 
+    # Load cost model if provided (passes to selector as a filter)
+    cost_model = None
+    if getattr(args, "cost_model", ""):
+        from .cost_model import CostModel
+        from pathlib import Path as _P
+        cm_path = _P(args.cost_model)
+        if cm_path.exists():
+            try:
+                cost_model = CostModel.load(cm_path)
+            except Exception:
+                cost_model = None
+
     # Use the generalized selector with full slotting logic
     configs = select_configs_for_operator(
         spec=spec,
@@ -704,6 +756,7 @@ def _run_generic_operator_iterate(*, spec, args, db, shapes) -> int:
         shapes=shapes,
         max_configs=args.configs_per_run,
         proposed_configs=proposed_configs,
+        cost_model=cost_model,
     )
 
     # Generate benchmark script
@@ -971,6 +1024,18 @@ def _run_triton_iterate(args) -> int:
         except LlmConfigurationError as exc:
             proposal_result = {"source": "llm_config_error", "error": str(exc)}
 
+    # Load cost model if provided
+    cost_model = None
+    if getattr(args, "cost_model", ""):
+        from .cost_model import CostModel
+        from pathlib import Path as _P
+        cm_path = _P(args.cost_model)
+        if cm_path.exists():
+            try:
+                cost_model = CostModel.load(cm_path)
+            except Exception:
+                cost_model = None
+
     # Select configs for this run
     configs = select_configs_for_run(
         database=db,
@@ -979,6 +1044,9 @@ def _run_triton_iterate(args) -> int:
         max_configs=args.configs_per_run,
         proposed_configs=proposed_configs,
     )
+    # If cost model present, re-rank grid candidates (matmul path uses its own
+    # select_configs_for_run; the generic path uses select_configs_for_operator).
+    # The cost model is most valuable in the generic path below.
 
     # Run ALL configs in a single GPU call (one cold start)
     if args.local:

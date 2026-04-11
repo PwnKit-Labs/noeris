@@ -49,6 +49,7 @@ class SeedResearchMemory(ResearchMemory):
         topic: ResearchTopic,
         sources: list[ResearchSource],
     ) -> ResearchContext:
+        claims = _claims_from_sources(topic=topic, sources=sources)
         return ResearchContext(
             topic=topic.name,
             sources=sources,
@@ -60,17 +61,7 @@ class SeedResearchMemory(ResearchMemory):
                 )
                 for source in sources
             ],
-            claims=[
-                Claim(
-                    title=f"Known work related to {topic.name}",
-                    source="seed",
-                    summary=(
-                        "This placeholder claim represents the future literature, "
-                        "repo ingestion, and prior-art graph."
-                    ),
-                    evidence_refs=[source.identifier for source in sources],
-                )
-            ],
+            claims=claims,
             open_questions=[
                 "Which bounded experiment is cheap enough to run first?",
                 "Which paper or repo claims are most likely to be underexplored?",
@@ -313,6 +304,52 @@ def _topic_benchmark(topic: ResearchTopic):
     if topic.benchmark_id:
         return get_benchmark(topic.benchmark_id)
     return benchmark_from_topic_constraints(topic.constraints)
+
+
+def _claims_from_sources(
+    *,
+    topic: ResearchTopic,
+    sources: list[ResearchSource],
+) -> list[Claim]:
+    if not sources:
+        return [
+            Claim(
+                title=f"Known work related to {topic.name}",
+                source="seed",
+                summary=(
+                    "This placeholder claim represents the future literature, "
+                    "repo ingestion, and prior-art graph."
+                ),
+                evidence_refs=[],
+            )
+        ]
+
+    claims: list[Claim] = []
+    for source in sources[:3]:
+        if source.kind == "paper":
+            claims.append(
+                Claim(
+                    title=f"{source.title} is relevant to {topic.name}",
+                    source=source.identifier,
+                    summary=(
+                        "Derived from the source title and excerpt; replace with "
+                        "richer claim extraction when a stronger memory layer is attached."
+                    ),
+                    evidence_refs=[source.identifier],
+                )
+            )
+        else:
+            claims.append(
+                Claim(
+                    title=f"{source.title} may contain useful implementation evidence",
+                    source=source.identifier,
+                    summary=(
+                        "Repository source identified as potentially relevant to the topic."
+                    ),
+                    evidence_refs=[source.identifier],
+                )
+            )
+    return claims
 
 
 def _experiment_name(index: int, topic: ResearchTopic) -> str:

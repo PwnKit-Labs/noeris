@@ -1,94 +1,51 @@
 # Research Memory
 
-## Goal
+Noeris should preserve more than raw source lists.
 
-Noeris should not treat research as a pile of notes or one giant prompt.
+The minimum useful research-memory unit is:
 
-For long-running benchmark work, it needs explicit memory that survives across runs, preserves evidence quality, and makes contradictions visible.
+- source
+- assessment
+- claim
+- contradiction
+- hypothesis linkage
 
-## Recommended Shape
+## Why This Matters
 
-Use a hybrid memory model:
+Without explicit lineage, the system can say:
 
-1. Episodic layer
-   - each run
-   - each benchmark result
-   - each failed candidate
-   - cost / latency / artifact summaries
+- "this source mattered"
+- "this claim mattered"
 
-2. Semantic layer
-   - claims
-   - source assessments
-   - contradiction records
-   - stable benchmark facts
-   - intervention patterns
+but not:
 
-3. Link layer
-   - claim -> source
-   - hypothesis -> supporting claims
-   - experiment -> benchmark
-   - result -> candidate / baseline
-   - contradiction -> affected claims
+- which source produced which claim
+- which claims actually supported a hypothesis
+- which claims stayed unsupported across runs
 
-## What To Store
+## Current Artifact
 
-Minimum graph entities:
+Every exported run bundle should include:
 
-- `Source`
-- `Claim`
-- `Hypothesis`
-- `Experiment`
-- `Result`
-- `Contradiction`
-- `Run`
+- `claim-lineage.json`
 
-Minimum edge types:
+That file should make source-to-claim-to-hypothesis linkage visible without requiring a reader to dig through nested run JSON manually.
 
-- `supports`
-- `contradicts`
-- `derived_from`
-- `tested_by`
-- `supersedes`
-- `same_family_as`
+## Current State
 
-## Why This Shape
+The current seed memory layer now derives simple claims directly from the discovered sources.
 
-This gives Noeris:
+That is still shallow, but it is better than a single generic placeholder claim because it gives every track:
 
-- cross-run memory instead of prompt-only memory
-- explicit evidence quality instead of flat text
-- contradiction-aware ranking instead of novelty theater
-- candidate lineage for long searches like matmul
+- per-source evidence refs
+- source confidence notes
+- a basic lineage artifact
 
-## Matmul Implication
+## Next Step
 
-The matmul lane will need many candidate attempts.
+The next real upgrade is richer live claim extraction:
 
-That means memory must support:
+- better claim synthesis from paper abstracts and repo descriptions
+- contradiction detection across multiple sources
+- persistent cross-run memory updates
 
-- candidate family tracking
-- baseline lineage
-- failure clustering
-- shape-specific performance deltas
-- superseded candidate records
-
-Without that structure, repeated candidate generation will just rediscover the same weak ideas.
-
-## Near-Term Build Order
-
-1. Keep the current run-history surface.
-2. Add stable IDs for claims and hypotheses.
-3. Add candidate lineage for matmul search.
-4. Add source freshness timestamps and confidence change tracking.
-5. Add contradiction-aware reranking across prior runs, not just inside one run.
-
-## Non-Goal
-
-Do not jump straight to a heavyweight graph database.
-
-The first useful version can remain file-backed and benchmark-scoped as long as:
-
-- entities are explicit
-- links are explicit
-- history is queryable
-- contradictions are preserved

@@ -25,6 +25,10 @@ def export_run_bundle(record: ResearchRunRecord, output_dir: str | Path) -> Path
         encoding="utf-8",
     )
     (base_dir / "summary.md").write_text(_render_summary(record), encoding="utf-8")
+    (base_dir / "claim-lineage.json").write_text(
+        json.dumps(_build_claim_lineage(record), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     _write_result_artifacts(record, base_dir)
     return base_dir
 
@@ -112,3 +116,39 @@ def _write_result_artifacts(record: ResearchRunRecord, base_dir: Path) -> None:
                     json.dumps(payload, indent=2, sort_keys=True) + "\n",
                     encoding="utf-8",
                 )
+
+
+def _build_claim_lineage(record: ResearchRunRecord) -> dict[str, object]:
+    source_map = {
+        source.identifier: {
+            "kind": source.kind,
+            "title": source.title,
+            "locator": source.locator,
+        }
+        for source in record.memo.sources
+    }
+    claim_entries = []
+    for claim in record.memo.claims:
+        linked_sources = [source_map[ref] for ref in claim.evidence_refs if ref in source_map]
+        supported_by = [
+            hypothesis.title
+            for hypothesis in record.memo.hypotheses
+            if claim.title in hypothesis.supporting_claims
+        ]
+        claim_entries.append(
+            {
+                "claim_title": claim.title,
+                "claim_summary": claim.summary,
+                "source": claim.source,
+                "evidence_refs": claim.evidence_refs,
+                "linked_sources": linked_sources,
+                "supporting_hypotheses": supported_by,
+            }
+        )
+    return {
+        "topic": record.memo.topic,
+        "benchmark_id": record.benchmark_id,
+        "source_count": len(record.memo.sources),
+        "claim_count": len(record.memo.claims),
+        "claims": claim_entries,
+    }

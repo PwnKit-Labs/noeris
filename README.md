@@ -164,6 +164,7 @@ docs/                      Design docs, thesis, roadmap
 ```
 
 See [`docs/RESEARCH_OS.md`](docs/RESEARCH_OS.md) for the substrate / track / lane / study framing.
+See [`docs/RESEARCH_MEMORY.md`](docs/RESEARCH_MEMORY.md) for the current lineage and memory model.
 
 ## Quick Start
 

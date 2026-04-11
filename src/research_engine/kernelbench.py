@@ -110,7 +110,9 @@ class ProblemResult:
     our_best_metric: float
     our_best_config_id: str
     pytorch_baseline_metric: float = 0.0
-    speedup: float = 0.0
+    compile_baseline_metric: float = 0.0
+    speedup: float = 0.0  # vs eager
+    compile_speedup: float = 0.0  # vs torch.compile
     correct: bool = False
 
 
@@ -121,28 +123,40 @@ class KernelBenchReport:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def compute_fast_p(self) -> None:
-        """Compute fast_p scores at each threshold, grouped by level."""
+        """Compute fast_p scores vs both eager and compile baselines, by level."""
         by_level: dict[int, list[ProblemResult]] = {}
         for result in self.results:
             by_level.setdefault(result.level, []).append(result)
 
-        scores: dict[float, dict[str, float]] = {}
+        scores: dict[str, dict[float, dict[str, float]]] = {
+            "vs_eager": {},
+            "vs_compile": {},
+        }
         for p in FAST_P_THRESHOLDS:
-            scores[p] = {}
+            scores["vs_eager"][p] = {}
+            scores["vs_compile"][p] = {}
             for level, problems in by_level.items():
                 if not problems:
                     continue
-                passing = sum(
+                eager_passing = sum(
                     1 for r in problems if r.correct and r.speedup >= p
                 )
-                scores[p][f"level_{level}"] = round(passing / len(problems), 3)
-            # Overall
-            all_problems = [r for r in self.results]
-            if all_problems:
-                passing = sum(
-                    1 for r in all_problems if r.correct and r.speedup >= p
+                compile_passing = sum(
+                    1 for r in problems
+                    if r.correct and r.compile_speedup >= p and r.compile_baseline_metric > 0
                 )
-                scores[p]["overall"] = round(passing / len(all_problems), 3)
+                scores["vs_eager"][p][f"level_{level}"] = round(eager_passing / len(problems), 3)
+                scores["vs_compile"][p][f"level_{level}"] = round(compile_passing / len(problems), 3)
+
+            all_problems = self.results
+            if all_problems:
+                eager_all = sum(1 for r in all_problems if r.correct and r.speedup >= p)
+                compile_all = sum(
+                    1 for r in all_problems
+                    if r.correct and r.compile_speedup >= p and r.compile_baseline_metric > 0
+                )
+                scores["vs_eager"][p]["overall"] = round(eager_all / len(all_problems), 3)
+                scores["vs_compile"][p]["overall"] = round(compile_all / len(all_problems), 3)
         self.fast_p_scores = scores
 
     def to_dict(self) -> dict:
@@ -158,7 +172,9 @@ class KernelBenchReport:
                     "our_metric": r.our_best_metric,
                     "our_config_id": r.our_best_config_id,
                     "pytorch_baseline": r.pytorch_baseline_metric,
-                    "speedup": r.speedup,
+                    "compile_baseline": r.compile_baseline_metric,
+                    "speedup_vs_eager": r.speedup,
+                    "speedup_vs_compile": r.compile_speedup,
                     "correct": r.correct,
                 }
                 for r in self.results
@@ -166,39 +182,54 @@ class KernelBenchReport:
         }
 
     def summary_text(self) -> str:
-        """Render a human-readable summary."""
+        """Render a human-readable summary with both baselines."""
         lines = [
             "# KernelBench-style Evaluation",
             "",
             f"Hardware: {self.metadata.get('hardware', 'unknown')}",
             f"Problems evaluated: {len(self.results)}",
             "",
-            "## fast_p Scores",
+            "## fast_p vs PyTorch eager",
             "",
             "| Threshold | Overall | Level 1 | Level 2 |",
             "|-----------|---------|---------|---------|",
         ]
+        eager_scores = self.fast_p_scores.get("vs_eager", {})
         for p in FAST_P_THRESHOLDS:
-            row = self.fast_p_scores.get(p, {})
+            row = eager_scores.get(p, {})
             lines.append(
-                f"| fast_{p} | "
-                f"{row.get('overall', 0):.1%} | "
-                f"{row.get('level_1', 0):.1%} | "
-                f"{row.get('level_2', 0):.1%} |"
+                f"| fast_{p} | {row.get('overall', 0):.1%} | "
+                f"{row.get('level_1', 0):.1%} | {row.get('level_2', 0):.1%} |"
+            )
+        lines.extend(["", "## fast_p vs torch.compile max-autotune", "",
+                      "| Threshold | Overall | Level 1 | Level 2 |",
+                      "|-----------|---------|---------|---------|"])
+        compile_scores = self.fast_p_scores.get("vs_compile", {})
+        for p in FAST_P_THRESHOLDS:
+            row = compile_scores.get(p, {})
+            lines.append(
+                f"| fast_{p} | {row.get('overall', 0):.1%} | "
+                f"{row.get('level_1', 0):.1%} | {row.get('level_2', 0):.1%} |"
             )
         lines.extend([
             "",
             "## Per-Problem Results",
             "",
-            "| Problem | Operator | Level | Our Metric | PyTorch | Speedup | Config |",
-            "|---------|----------|-------|-----------|---------|---------|--------|",
+            "| Problem | Operator | Level | Our | Eager | vs-Eager | Compile | vs-Compile | Config |",
+            "|---|---|---|---|---|---|---|---|---|",
         ])
         for r in self.results:
-            speedup = f"{r.speedup:.2f}x" if r.correct else "FAIL"
+            eager_str = f"{r.speedup:.2f}x" if r.correct else "FAIL"
+            compile_str = (
+                f"{r.compile_speedup:.2f}x"
+                if r.correct and r.compile_baseline_metric > 0
+                else "—"
+            )
             lines.append(
                 f"| {r.problem_id} | {r.operator} | {r.level} | "
-                f"{r.our_best_metric:.1f} | {r.pytorch_baseline_metric:.1f} | "
-                f"{speedup} | `{r.our_best_config_id}` |"
+                f"{r.our_best_metric:.1f} | {r.pytorch_baseline_metric:.1f} | {eager_str} | "
+                f"{r.compile_baseline_metric:.1f} | {compile_str} | "
+                f"`{r.our_best_config_id}` |"
             )
         return "\n".join(lines) + "\n"
 
@@ -252,84 +283,163 @@ def build_benchmark_script_with_baseline(
 
 
 def _pytorch_baseline_snippet(operator: str) -> str:
-    """Generate inline code that measures PyTorch baselines for all shapes."""
+    """Generate inline code that measures PyTorch eager AND torch.compile baselines."""
     if operator == "matmul":
         return '''
-    # Measure PyTorch/cuBLAS baselines
+    # Measure PyTorch eager (cuBLAS) and torch.compile baselines
     pytorch_baselines = []
+    compile_baselines = []
+    compiled_matmul = torch.compile(lambda a, b: torch.matmul(a, b), mode="max-autotune", dynamic=False)
     for shape in shapes:
         M, N, K = shape["M"], shape["N"], shape["K"]
         a = torch.randn((M, K), device="cuda", dtype=torch.float16)
         b = torch.randn((K, N), device="cuda", dtype=torch.float16)
+        # Eager
         ms = triton.testing.do_bench(lambda: torch.matmul(a, b), warmup=25, rep=100)
         flops = 2.0 * M * N * K
         tflops = flops / (ms * 1e-3) / 1e12
         pytorch_baselines.append({"shape_name": shape.get("name", ""), "ms": round(ms, 4), "tflops": round(tflops, 2)})
+        # torch.compile (warm up first to trigger compilation)
+        try:
+            for _ in range(3):
+                compiled_matmul(a, b)
+            ms_c = triton.testing.do_bench(lambda: compiled_matmul(a, b), warmup=10, rep=50)
+            tflops_c = flops / (ms_c * 1e-3) / 1e12
+            compile_baselines.append({"shape_name": shape.get("name", ""), "ms": round(ms_c, 4), "tflops": round(tflops_c, 2)})
+        except Exception as exc:
+            compile_baselines.append({"shape_name": shape.get("name", ""), "error": str(exc)[:200]})
     output["pytorch_baselines"] = pytorch_baselines
+    output["compile_baselines"] = compile_baselines
 '''
     elif operator == "rmsnorm":
         return '''
-    # Measure PyTorch RMSNorm baseline
+    # Measure PyTorch eager and torch.compile RMSNorm baselines
     pytorch_baselines = []
+    compile_baselines = []
+
+    def _rms(x, w):
+        variance = x.to(torch.float32).pow(2).mean(-1, keepdim=True)
+        return (x * torch.rsqrt(variance + 1e-6) * w).to(torch.float16)
+    compiled_rms = torch.compile(_rms, mode="max-autotune", dynamic=False)
+
     for shape in shapes:
         n_rows, hidden_dim = shape["n_rows"], shape["hidden_dim"]
         x = torch.randn((n_rows, hidden_dim), device="cuda", dtype=torch.float16)
         w = torch.randn((hidden_dim,), device="cuda", dtype=torch.float16)
-        def ref():
-            variance = x.to(torch.float32).pow(2).mean(-1, keepdim=True)
-            return (x * torch.rsqrt(variance + 1e-6) * w).to(torch.float16)
-        ms = triton.testing.do_bench(ref, warmup=25, rep=100)
         bytes_moved = 2 * n_rows * hidden_dim * 2 + hidden_dim * 2
+        # Eager
+        ms = triton.testing.do_bench(lambda: _rms(x, w), warmup=25, rep=100)
         gb_per_s = bytes_moved / (ms * 1e-3) / 1e9
         pytorch_baselines.append({"shape_name": shape.get("name", ""), "ms": round(ms, 4), "gb_per_s": round(gb_per_s, 2), "tflops": round(gb_per_s, 2)})
+        # Compile
+        try:
+            for _ in range(3):
+                compiled_rms(x, w)
+            ms_c = triton.testing.do_bench(lambda: compiled_rms(x, w), warmup=10, rep=50)
+            gb_c = bytes_moved / (ms_c * 1e-3) / 1e9
+            compile_baselines.append({"shape_name": shape.get("name", ""), "ms": round(ms_c, 4), "gb_per_s": round(gb_c, 2), "tflops": round(gb_c, 2)})
+        except Exception as exc:
+            compile_baselines.append({"shape_name": shape.get("name", ""), "error": str(exc)[:200]})
     output["pytorch_baselines"] = pytorch_baselines
+    output["compile_baselines"] = compile_baselines
 '''
     elif operator == "softmax":
         return '''
-    # Measure PyTorch softmax baseline
+    # Measure PyTorch eager and torch.compile softmax baselines
     pytorch_baselines = []
+    compile_baselines = []
+
+    def _softmax(x):
+        return torch.softmax(x.to(torch.float32), dim=-1).to(torch.float16)
+    compiled_softmax = torch.compile(_softmax, mode="max-autotune", dynamic=False)
+
     for shape in shapes:
         n_rows, n_cols = shape["n_rows"], shape["n_cols"]
         x = torch.randn((n_rows, n_cols), device="cuda", dtype=torch.float16)
-        ms = triton.testing.do_bench(lambda: torch.softmax(x.to(torch.float32), dim=-1).to(torch.float16), warmup=25, rep=100)
         bytes_moved = 2 * n_rows * n_cols * 2
+        ms = triton.testing.do_bench(lambda: _softmax(x), warmup=25, rep=100)
         gb_per_s = bytes_moved / (ms * 1e-3) / 1e9
         pytorch_baselines.append({"shape_name": shape.get("name", ""), "ms": round(ms, 4), "gb_per_s": round(gb_per_s, 2), "tflops": round(gb_per_s, 2)})
+        try:
+            for _ in range(3):
+                compiled_softmax(x)
+            ms_c = triton.testing.do_bench(lambda: compiled_softmax(x), warmup=10, rep=50)
+            gb_c = bytes_moved / (ms_c * 1e-3) / 1e9
+            compile_baselines.append({"shape_name": shape.get("name", ""), "ms": round(ms_c, 4), "gb_per_s": round(gb_c, 2), "tflops": round(gb_c, 2)})
+        except Exception as exc:
+            compile_baselines.append({"shape_name": shape.get("name", ""), "error": str(exc)[:200]})
     output["pytorch_baselines"] = pytorch_baselines
+    output["compile_baselines"] = compile_baselines
 '''
     elif operator == "layernorm":
         return '''
-    # Measure PyTorch LayerNorm baseline
+    # Measure PyTorch eager and torch.compile LayerNorm baselines
     pytorch_baselines = []
+    compile_baselines = []
+
+    def _ln(x, w, b, hidden):
+        return torch.nn.functional.layer_norm(x, (hidden,), w, b, eps=1e-5)
+    compiled_ln = torch.compile(_ln, mode="max-autotune", dynamic=False)
+
     for shape in shapes:
         n_rows, hidden_dim = shape["n_rows"], shape["hidden_dim"]
         x = torch.randn((n_rows, hidden_dim), device="cuda", dtype=torch.float16)
         w = torch.randn((hidden_dim,), device="cuda", dtype=torch.float16)
         b = torch.randn((hidden_dim,), device="cuda", dtype=torch.float16)
-        ms = triton.testing.do_bench(lambda: torch.nn.functional.layer_norm(x, (hidden_dim,), w, b, eps=1e-5), warmup=25, rep=100)
         bytes_moved = 2 * n_rows * hidden_dim * 2 + hidden_dim * 4
+        ms = triton.testing.do_bench(lambda: _ln(x, w, b, hidden_dim), warmup=25, rep=100)
         gb_per_s = bytes_moved / (ms * 1e-3) / 1e9
         pytorch_baselines.append({"shape_name": shape.get("name", ""), "ms": round(ms, 4), "gb_per_s": round(gb_per_s, 2), "tflops": round(gb_per_s, 2)})
+        try:
+            for _ in range(3):
+                compiled_ln(x, w, b, hidden_dim)
+            ms_c = triton.testing.do_bench(lambda: compiled_ln(x, w, b, hidden_dim), warmup=10, rep=50)
+            gb_c = bytes_moved / (ms_c * 1e-3) / 1e9
+            compile_baselines.append({"shape_name": shape.get("name", ""), "ms": round(ms_c, 4), "gb_per_s": round(gb_c, 2), "tflops": round(gb_c, 2)})
+        except Exception as exc:
+            compile_baselines.append({"shape_name": shape.get("name", ""), "error": str(exc)[:200]})
     output["pytorch_baselines"] = pytorch_baselines
+    output["compile_baselines"] = compile_baselines
 '''
     elif operator == "cross_entropy":
         return '''
-    # Measure PyTorch cross_entropy baseline
+    # Measure PyTorch eager and torch.compile cross_entropy baselines
     pytorch_baselines = []
+    compile_baselines = []
+
+    def _ce(logits, target):
+        return torch.nn.functional.cross_entropy(logits.to(torch.float32), target, reduction="none")
+    compiled_ce = torch.compile(_ce, mode="max-autotune", dynamic=False)
+
     for shape in shapes:
         n_rows, n_cols = shape["n_rows"], shape["n_cols"]
         logits = torch.randn((n_rows, n_cols), device="cuda", dtype=torch.float16)
         target = torch.randint(0, n_cols, (n_rows,), device="cuda", dtype=torch.long)
-        ms = triton.testing.do_bench(lambda: torch.nn.functional.cross_entropy(logits.to(torch.float32), target, reduction="none"), warmup=25, rep=100)
         bytes_moved = n_rows * n_cols * 2 + n_rows * 8 + n_rows * 2
+        ms = triton.testing.do_bench(lambda: _ce(logits, target), warmup=25, rep=100)
         gb_per_s = bytes_moved / (ms * 1e-3) / 1e9
         pytorch_baselines.append({"shape_name": shape.get("name", ""), "ms": round(ms, 4), "gb_per_s": round(gb_per_s, 2), "tflops": round(gb_per_s, 2)})
+        try:
+            for _ in range(3):
+                compiled_ce(logits, target)
+            ms_c = triton.testing.do_bench(lambda: compiled_ce(logits, target), warmup=10, rep=50)
+            gb_c = bytes_moved / (ms_c * 1e-3) / 1e9
+            compile_baselines.append({"shape_name": shape.get("name", ""), "ms": round(ms_c, 4), "gb_per_s": round(gb_c, 2), "tflops": round(gb_c, 2)})
+        except Exception as exc:
+            compile_baselines.append({"shape_name": shape.get("name", ""), "error": str(exc)[:200]})
     output["pytorch_baselines"] = pytorch_baselines
+    output["compile_baselines"] = compile_baselines
 '''
     elif operator == "attention":
         return '''
-    # Measure PyTorch scaled_dot_product_attention baseline (supports causal)
+    # Measure PyTorch eager and torch.compile SDPA baselines (supports causal)
     pytorch_baselines = []
+    compile_baselines = []
+
+    def _attn(q, k, v, cf):
+        return torch.nn.functional.scaled_dot_product_attention(q, k, v, is_causal=cf)
+    compiled_attn = torch.compile(_attn, mode="max-autotune", dynamic=False)
+
     for shape in shapes:
         batch = shape["batch"]
         heads = shape["heads"]
@@ -339,13 +449,22 @@ def _pytorch_baseline_snippet(operator: str) -> str:
         q = torch.randn((batch, heads, seq_len, head_dim), device="cuda", dtype=torch.float16)
         k = torch.randn((batch, heads, seq_len, head_dim), device="cuda", dtype=torch.float16)
         v = torch.randn((batch, heads, seq_len, head_dim), device="cuda", dtype=torch.float16)
-        causal_flag = is_causal
-        ms = triton.testing.do_bench(lambda cf=causal_flag: torch.nn.functional.scaled_dot_product_attention(q, k, v, is_causal=cf), warmup=10, rep=50)
         causal_factor = 0.5 if is_causal else 1.0
         flops = 4.0 * batch * heads * seq_len * seq_len * head_dim * causal_factor
+        cf = is_causal
+        ms = triton.testing.do_bench(lambda: _attn(q, k, v, cf), warmup=10, rep=50)
         tflops = flops / (ms * 1e-3) / 1e12
         pytorch_baselines.append({"shape_name": shape.get("name", ""), "ms": round(ms, 4), "tflops": round(tflops, 2)})
+        try:
+            for _ in range(3):
+                compiled_attn(q, k, v, cf)
+            ms_c = triton.testing.do_bench(lambda: compiled_attn(q, k, v, cf), warmup=10, rep=50)
+            tflops_c = flops / (ms_c * 1e-3) / 1e12
+            compile_baselines.append({"shape_name": shape.get("name", ""), "ms": round(ms_c, 4), "tflops": round(tflops_c, 2)})
+        except Exception as exc:
+            compile_baselines.append({"shape_name": shape.get("name", ""), "error": str(exc)[:200]})
     output["pytorch_baselines"] = pytorch_baselines
+    output["compile_baselines"] = compile_baselines
 '''
     return ""
 
@@ -377,11 +496,17 @@ def evaluate_kernelbench(
         if not batch.success:
             continue
 
-        # pytorch_baselines was stashed in batch.extra
+        # pytorch_baselines and compile_baselines were stashed in batch.extra
         pytorch_baselines = (batch.extra or {}).get("pytorch_baselines", [])
+        compile_baselines = (batch.extra or {}).get("compile_baselines", [])
         baselines = {
             b["shape_name"]: b.get("tflops", 0)
             for b in pytorch_baselines
+        }
+        compile_map = {
+            b["shape_name"]: b.get("tflops", 0)
+            for b in compile_baselines
+            if "tflops" in b
         }
 
         # Per problem, find our best config
@@ -405,7 +530,11 @@ def evaluate_kernelbench(
                             correct = True
 
             baseline = baselines.get(pid, 0)
+            compile_baseline = compile_map.get(pid, 0)
             speedup = best_metric / baseline if baseline > 0 else 0
+            compile_speedup = (
+                best_metric / compile_baseline if compile_baseline > 0 else 0
+            )
 
             report.results.append(ProblemResult(
                 problem_id=pid,
@@ -415,7 +544,9 @@ def evaluate_kernelbench(
                 our_best_metric=best_metric,
                 our_best_config_id=best_config_id,
                 pytorch_baseline_metric=baseline,
+                compile_baseline_metric=compile_baseline,
                 speedup=speedup,
+                compile_speedup=compile_speedup,
                 correct=correct,
             ))
 

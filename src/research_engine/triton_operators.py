@@ -87,6 +87,8 @@ def select_configs_for_operator(
     shapes: list[dict],
     max_configs: int = 8,
     proposed_configs: list[dict[str, int]] | None = None,
+    cost_model=None,  # Optional CostModel
+    cost_model_candidates: int = 40,
 ) -> list[dict[str, int]]:
     """Generalized config selection that works for any registered operator.
 
@@ -140,8 +142,24 @@ def select_configs_for_operator(
             _add(config)
 
     # Slot 4: grid exploration — untested configs
-    grid = spec.grid_generator_fn(include_curated=False, max_configs=500)
-    for config in grid:
+    # If a cost model is provided, score the untested grid first and prefer
+    # high-predicted configs. This is the LLM + learned cost model hybrid.
+    grid_all = spec.grid_generator_fn(include_curated=False, max_configs=cost_model_candidates)
+    untested_grid = [c for c in grid_all if spec.config_id_fn(c) not in tested_ids]
+    if cost_model is not None and untested_grid:
+        ranked = cost_model.rank_configs(
+            configs=untested_grid,
+            shapes=shapes,
+            hardware=hardware,
+            operator=spec.name,
+            top_k=None,
+        )
+        # Use ranked order (highest-predicted first)
+        ordered_grid = [config for config, _ in ranked]
+    else:
+        ordered_grid = untested_grid
+
+    for config in ordered_grid:
         if spec.config_id_fn(config) not in tested_ids:
             _add(config)
 
