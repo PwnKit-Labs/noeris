@@ -74,10 +74,8 @@ def cross_entropy_shape_bucket_key(shape: dict[str, int]) -> str:
 
 
 def cross_entropy_shared_memory_check(config: dict[str, int]) -> bool:
-    bs = config.get("BLOCK_SIZE", 0)
-    ns = config.get("num_stages", 1)
-    shmem = bs * 4 * ns + 2048
-    return shmem <= 192_000
+    """Soft annotation only — always returns True. See module docstring."""
+    return True
 
 
 def generate_cross_entropy_grid(
@@ -103,8 +101,6 @@ def generate_cross_entropy_grid(
                     "num_warps": nw,
                     "num_stages": ns,
                 }
-                if not cross_entropy_shared_memory_check(config):
-                    continue
                 cid = cross_entropy_config_id(config)
                 if cid in seen:
                     continue

@@ -68,10 +68,8 @@ def layernorm_shape_bucket_key(shape: dict[str, int]) -> str:
 
 
 def layernorm_shared_memory_check(config: dict[str, int]) -> bool:
-    bs = config.get("BLOCK_SIZE", 0)
-    ns = config.get("num_stages", 1)
-    shmem = bs * 4 * ns + 1024
-    return shmem <= 192_000
+    """Soft annotation only — always returns True. See module docstring."""
+    return True
 
 
 def generate_layernorm_grid(
@@ -97,8 +95,6 @@ def generate_layernorm_grid(
                     "num_warps": nw,
                     "num_stages": ns,
                 }
-                if not layernorm_shared_memory_check(config):
-                    continue
                 cid = layernorm_config_id(config)
                 if cid in seen:
                     continue

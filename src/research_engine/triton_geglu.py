@@ -82,15 +82,12 @@ def geglu_shape_bucket_key(shape: dict[str, int]) -> str:
 
 
 def geglu_shared_memory_check(config: dict[str, int]) -> bool:
-    """Approximate shared memory limit check for A100 (192 KB per SM).
+    """Soft annotation only — always returns True.
 
-    The kernel loads gate + up (2 * BLOCK_SIZE fp16) per stage.
+    Feasibility is learned from runtime failures (reward=0). Retained for
+    backward compatibility.
     """
-    bs = config.get("BLOCK_SIZE", 0)
-    ns = config.get("num_stages", 1)
-    # 2 tensors * BLOCK_SIZE * 2 bytes (fp16) * num_stages + overhead
-    shmem = 2 * bs * 2 * ns + 1024
-    return shmem <= 192_000
+    return True
 
 
 def generate_geglu_grid(
@@ -116,8 +113,6 @@ def generate_geglu_grid(
                     "num_warps": nw,
                     "num_stages": ns,
                 }
-                if not geglu_shared_memory_check(config):
-                    continue
                 cid = geglu_config_id(config)
                 if cid in seen:
                     continue

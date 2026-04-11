@@ -96,12 +96,12 @@ def rmsnorm_shape_bucket_key(shape: dict[str, int]) -> str:
 
 
 def rmsnorm_shared_memory_check(config: dict[str, int]) -> bool:
-    """Approximate shared memory limit check for A100 (192 KB per SM)."""
-    bs = config.get("BLOCK_SIZE", 0)
-    ns = config.get("num_stages", 1)
-    # Each block loads BLOCK_SIZE fp16 elements, plus a few reductions
-    shmem = bs * 2 * ns + 1024
-    return shmem <= 192_000
+    """Soft annotation only — always returns True.
+
+    Feasibility is learned from runtime failures (recorded as reward=0 in
+    the bandit). Retained on the spec for backward compatibility.
+    """
+    return True
 
 
 def generate_rmsnorm_grid(
@@ -127,8 +127,6 @@ def generate_rmsnorm_grid(
                     "num_warps": nw,
                     "num_stages": ns,
                 }
-                if not rmsnorm_shared_memory_check(config):
-                    continue
                 cid = rmsnorm_config_id(config)
                 if cid in seen:
                     continue

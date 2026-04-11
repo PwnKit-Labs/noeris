@@ -25,7 +25,6 @@ stored in ConfigDatabase.records.
 from __future__ import annotations
 
 import logging
-import random
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -108,6 +107,15 @@ class BanditSelector:
 
     top_k_percent: float = _DEFAULT_TOP_K_PERCENT
     seed: int | None = None
+    # When True, fall back to spec.curated_configs as the warm-start seed
+    # set if a bucket has no history. When False (the default and the
+    # research-correct setting), warm-start from a uniform random sample of
+    # the operator's grid instead — the bandit then learns feasibility and
+    # quality from scratch with no hand-curated prior.
+    use_curated_seeds: bool = False
+    # Number of random configs to draw on a cold-start bucket. Roughly
+    # matches the historical curated count for each operator.
+    warm_start_size: int = 8
 
     # Internal state: cell_key -> {config_id -> _BetaArm}
     _arms: dict[str, dict[str, _BetaArm]] = field(default_factory=dict, init=False, repr=False)
@@ -147,12 +155,18 @@ class BanditSelector:
         """Replay all stored results into Beta posteriors.
 
         For each (operator, bucket, hardware) cell we:
-        1. Collect all correct results with a throughput metric.
-        2. Compute the top-K% threshold.
-        3. Update each config's arm: success if throughput >= threshold.
-
-        This method is idempotent — calling it twice on the same database
-        does not double-count observations because it resets arm state first.
+        1. Compute the top-K% throughput threshold over the *correct* runs
+           in that cell (failures contribute zero throughput and so cannot
+           be in the top-K, but they still need an arm).
+        2. For every recorded result (correct **or** failed) update the
+           corresponding arm:
+             - failures (correct=False or tflops<=0)  -> success=False
+             - correct results above the cell threshold -> success=True
+             - correct results below the threshold      -> success=False
+        This makes failed runs first-class evidence: a config that crashes
+        or produces wrong output gets its Beta posterior pushed toward
+        zero, exactly like a config that ran correctly but slowly. The
+        method is idempotent — arm state is cleared at the start.
         """
         self._arms.clear()
 
@@ -172,26 +186,38 @@ class BanditSelector:
             if hardware and rec_hardware != hardware:
                 continue
 
-            # Gather all correct tflops values for the cohort threshold
+            cell = self._cell_key(rec_operator, rec_bucket, rec_hardware)
+
+            # Compute the cohort top-K% threshold over the successful runs
+            # only (failed runs have no meaningful throughput).
             correct_results = [
                 r for r in record.results
                 if r.get("correct") and r.get("tflops") is not None and r["tflops"] > 0
             ]
-            if not correct_results:
-                continue
+            if correct_results:
+                tflops_values = [r["tflops"] for r in correct_results]
+                threshold = float(
+                    np.percentile(tflops_values, 100.0 - self.top_k_percent)
+                )
+            else:
+                # No successful runs in this cell yet — every observation we
+                # have is a failure, so the threshold is irrelevant; all
+                # arms will be marked failure below.
+                threshold = float("inf")
 
-            tflops_values = [r["tflops"] for r in correct_results]
-            threshold = float(np.percentile(tflops_values, 100.0 - self.top_k_percent))
-
-            cell = self._cell_key(rec_operator, rec_bucket, rec_hardware)
-
-            for result in correct_results:
+            for result in record.results:
                 cid = result.get("config_id", "")
                 config = result.get("config", {})
                 if not cid or not config:
                     continue
                 arm = self._get_or_create_arm(cell, cid, config)
-                arm.update(success=result["tflops"] >= threshold)
+                tflops = result.get("tflops") or 0.0
+                is_correct = bool(result.get("correct"))
+                if not is_correct or tflops <= 0:
+                    # Failed run: legitimate reward=0 sample.
+                    arm.update(success=False)
+                else:
+                    arm.update(success=tflops >= threshold)
 
         total_arms = sum(len(v) for v in self._arms.values())
         LOGGER.debug(
@@ -234,17 +260,19 @@ class BanditSelector:
         shapes: list[dict],
         max_configs: int = 8,
         proposed_configs: list[dict[str, int]] | None = None,
+        use_curated_seeds: bool | None = None,
     ) -> list[dict[str, int]]:
-        """Select configs using Thompson sampling, falling back to curated list.
+        """Select configs using Thompson sampling.
 
         Slot allocation:
         1. Thompson-sampled configs from empirical posteriors (per bucket).
         2. LLM-proposed configs (if provided).
-        3. Curated starting configs not yet benchmarked.
+        3. Cold-start warm-up: if a target bucket has *no* history, draw
+           ``warm_start_size`` configs uniformly at random from
+           ``spec.grid_generator_fn`` (or, if ``use_curated_seeds=True``,
+           from ``spec.curated_configs``). The bandit therefore learns
+           feasibility and quality from scratch with no hand-curated prior.
         4. Random grid exploration for any remaining slots.
-
-        This mirrors the slot structure of ``select_configs_for_operator`` so
-        the two selectors are interchangeable from the CLI's perspective.
 
         Args:
             spec: TritonOperatorSpec providing curated_configs, config_id_fn,
@@ -254,6 +282,8 @@ class BanditSelector:
             shapes: Target shape dicts for the run (operator-specific format).
             max_configs: Maximum number of configs to return.
             proposed_configs: Optional pre-computed LLM proposals.
+            use_curated_seeds: Override ``self.use_curated_seeds`` for this
+                call. ``None`` (default) uses the instance setting.
 
         Returns:
             Ordered list of config dicts (highest-priority first).
@@ -261,6 +291,9 @@ class BanditSelector:
         # Reload posteriors fresh from the database each call so we always
         # reflect the latest observed rewards without manual state management.
         self.load_from_database(database, operator=spec.name, hardware=hardware)
+
+        if use_curated_seeds is None:
+            use_curated_seeds = self.use_curated_seeds
 
         selected: list[dict[str, int]] = []
         seen_ids: set[str] = set()
@@ -273,13 +306,19 @@ class BanditSelector:
             selected.append(config)
             return True
 
-        # Slot 1: Thompson-sampled configs (one draw per bucket for the target shapes)
-        buckets_seen: set[str] = set()
+        # Slot 1: Thompson-sampled configs (one draw per bucket for the
+        # target shapes). Track which buckets have prior arms so we know
+        # which need a cold-start warm-up below.
+        bucket_order: list[str] = []
+        bucket_has_history: dict[str, bool] = {}
         for shape in shapes:
             bucket = spec.shape_bucket_fn(shape)
-            if bucket in buckets_seen:
+            if bucket in bucket_has_history:
                 continue
-            buckets_seen.add(bucket)
+            bucket_order.append(bucket)
+            cell = self._cell_key(spec.name, bucket, hardware)
+            bucket_has_history[bucket] = bool(self._arms.get(cell))
+
             ranked = self.ranked_configs_for_bucket(
                 operator=spec.name, bucket=bucket, hardware=hardware,
             )
@@ -293,6 +332,8 @@ class BanditSelector:
             _add(config)
 
         # Determine already-tested IDs for this operator+hardware pair
+        # (correct *or* failed — both are evidence for the bandit and we
+        # don't want to re-issue them on a warm-start).
         tested_ids: set[str] = set()
         for key, record in database.records.items():
             parts = key.split(":")
@@ -309,9 +350,35 @@ class BanditSelector:
             for result in record.results:
                 tested_ids.add(result.get("config_id", ""))
 
-        # Slot 3: curated configs not yet tested
-        for config in spec.curated_configs:
-            if spec.config_id_fn(config) not in tested_ids:
+        # Slot 3: cold-start warm-up. Only fires for buckets that have
+        # zero arms (i.e. no history at all). The default behaviour is to
+        # sample uniformly at random from the operator's grid; with
+        # ``use_curated_seeds=True`` callers can opt back into the legacy
+        # curated bootstrap for ablations.
+        cold_start_buckets = [b for b in bucket_order if not bucket_has_history[b]]
+        if cold_start_buckets and len(selected) < max_configs:
+            if use_curated_seeds:
+                seed_pool = list(spec.curated_configs)
+            else:
+                try:
+                    seed_pool = spec.grid_generator_fn(
+                        include_curated=False, max_configs=500,
+                    )
+                except TypeError:
+                    seed_pool = spec.grid_generator_fn(max_configs=500)
+                seed_pool = [
+                    c for c in seed_pool
+                    if spec.config_id_fn(c) not in tested_ids
+                ]
+                # Deterministic shuffle so reproducibility is preserved.
+                # Use the same RNG that powers Thompson sampling — it was
+                # seeded from ``self.seed`` in __post_init__.
+                indices = list(range(len(seed_pool)))
+                self._rng.shuffle(indices)
+                seed_pool = [seed_pool[i] for i in indices]
+
+            n_to_take = max(0, min(self.warm_start_size, max_configs - len(selected)))
+            for config in seed_pool[:n_to_take]:
                 _add(config)
 
         # Slot 4: random grid exploration for any remaining slots
@@ -321,9 +388,9 @@ class BanditSelector:
             except TypeError:
                 grid = spec.grid_generator_fn(max_configs=500)
             untested = [c for c in grid if spec.config_id_fn(c) not in tested_ids]
-            # Shuffle for diversity (avoid always picking the same grid prefix)
+            # Use the seeded RNG so the whole selection is reproducible.
             indices = list(range(len(untested)))
-            random.shuffle(indices)
+            self._rng.shuffle(indices)
             for i in indices:
                 _add(untested[i])
 

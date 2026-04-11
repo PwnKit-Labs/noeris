@@ -663,10 +663,11 @@ def _sanitize_triton_config(item: dict) -> dict[str, int] | None:
     except (TypeError, ValueError):
         return None
 
-    # Shared memory sanity check (rough: 2 bytes per element, A + B tiles)
-    shmem = (bm * bk + bk * bn) * 2 * ns
-    if shmem > 192_000:
-        return None
+    # Note: previously we filtered configs that exceeded a hand-coded
+    # 192 KB shared-memory budget here. Feasibility is now learned from
+    # runtime failures (recorded as reward=0 in the bandit) rather than
+    # enforced via a hardcoded prior. We still clamp value ranges and
+    # snap to powers of two above; only the shmem filter is removed.
 
     return {
         "BLOCK_SIZE_M": bm,

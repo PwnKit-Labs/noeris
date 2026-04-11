@@ -197,12 +197,16 @@ class LoadFromDatabaseTests(unittest.TestCase):
             selector.load_from_database(db, operator="matmul", hardware="A100")
             self.assertEqual(len(selector._arms), 0)
 
-    def test_incorrect_results_excluded(self) -> None:
-        """Results with correct=False must not affect posteriors."""
+    def test_incorrect_results_count_as_failures(self) -> None:
+        """Failed runs (correct=False) must update the arm with success=False.
+
+        This is the *learned feasibility* invariant: failed configs are
+        legitimate reward=0 samples and the bandit must remember them so
+        it doesn't keep re-issuing crashing configs forever.
+        """
         with tempfile.TemporaryDirectory() as tmpdir:
             db = _make_db(Path(tmpdir))
             cfg = _matmul_config()
-            # Insert a failed result manually
             db.record_result(
                 shape={"M": 2048, "N": 2048, "K": 2048, "bucket": "medium"},
                 hardware="A100",
@@ -216,8 +220,14 @@ class LoadFromDatabaseTests(unittest.TestCase):
             )
             selector = BanditSelector(seed=0)
             selector.load_from_database(db, operator="matmul", hardware="A100")
-            # No correct results -> no arms created
-            self.assertEqual(len(selector._arms), 0)
+
+            cell = "matmul:medium:A100"
+            self.assertIn(cell, selector._arms)
+            arm = selector._arms[cell][config_id(cfg)]
+            # alpha unchanged, beta incremented by 1.
+            self.assertAlmostEqual(arm.alpha, _PRIOR_ALPHA)
+            self.assertAlmostEqual(arm.beta, _PRIOR_BETA + 1.0)
+            self.assertLess(arm.expected_reward, 0.5)
 
 
 # ---------------------------------------------------------------------------
@@ -279,13 +289,19 @@ class SamplingPreferenceTests(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class EmptyDatabaseFallbackTests(unittest.TestCase):
-    """When the database is empty the selector must return curated configs."""
+    """When the database is empty the selector must warm-start from the grid.
+
+    The default behaviour (since the *learned feasibility* refactor) is to
+    sample uniformly at random from ``spec.grid_generator_fn`` rather than
+    from ``spec.curated_configs`` — the system should figure out what works
+    on its own. ``use_curated_seeds=True`` opts back into the legacy seeds.
+    """
 
     def _get_matmul_spec(self):
         from research_engine.triton_operators import REGISTRY
         return REGISTRY.get("matmul")
 
-    def test_empty_db_returns_curated_configs(self) -> None:
+    def test_empty_db_returns_some_configs(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db = _make_db(Path(tmpdir))
             spec = self._get_matmul_spec()
@@ -302,6 +318,116 @@ class EmptyDatabaseFallbackTests(unittest.TestCase):
             for cfg in configs:
                 self.assertIn("BLOCK_SIZE_M", cfg)
                 self.assertIn("num_warps", cfg)
+
+    def test_empty_db_warm_starts_from_grid_not_curated(self) -> None:
+        """Default warm-start configs must come from the grid, not the
+        hand-curated list."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = _make_db(Path(tmpdir))
+            spec = self._get_matmul_spec()
+            selector = BanditSelector(seed=0)
+            configs = selector.select_configs(
+                spec=spec,
+                database=db,
+                hardware="A100",
+                shapes=[{"M": 2048, "N": 2048, "K": 2048}],
+                max_configs=12,
+            )
+            grid = spec.grid_generator_fn(include_curated=False, max_configs=500)
+            grid_ids = {spec.config_id_fn(c) for c in grid}
+            curated_ids = {spec.config_id_fn(c) for c in spec.curated_configs}
+            # Every returned config must come from the grid (the warm-start
+            # source). Some grid configs may incidentally coincide with
+            # curated configs, but the warm-start mechanism is the grid.
+            for cfg in configs:
+                self.assertIn(spec.config_id_fn(cfg), grid_ids)
+            # And we must not have used a curated-only config (one that
+            # is in curated but not in the grid). This guarantees we are
+            # not silently re-routing through curated_configs.
+            curated_only = curated_ids - grid_ids
+            for cfg in configs:
+                self.assertNotIn(spec.config_id_fn(cfg), curated_only)
+
+    def test_empty_db_with_use_curated_seeds_returns_curated(self) -> None:
+        """Opting back in via use_curated_seeds=True restores the legacy
+        curated bootstrap."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = _make_db(Path(tmpdir))
+            spec = self._get_matmul_spec()
+            selector = BanditSelector(seed=0, use_curated_seeds=True)
+            configs = selector.select_configs(
+                spec=spec,
+                database=db,
+                hardware="A100",
+                shapes=[{"M": 2048, "N": 2048, "K": 2048}],
+                max_configs=8,
+            )
+            curated_ids = {spec.config_id_fn(c) for c in spec.curated_configs}
+            returned_ids = {spec.config_id_fn(c) for c in configs}
+            # At least one curated config should have been picked up by the
+            # warm-start path.
+            self.assertTrue(returned_ids & curated_ids)
+
+    def test_warm_start_is_deterministic_with_fixed_seed(self) -> None:
+        """Two selectors with the same seed must return the same warm-start."""
+        spec_factory = self._get_matmul_spec
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_a = _make_db(Path(tmpdir) / "a")
+            db_b = _make_db(Path(tmpdir) / "b")
+            sel_a = BanditSelector(seed=123)
+            sel_b = BanditSelector(seed=123)
+            cfgs_a = sel_a.select_configs(
+                spec=spec_factory(), database=db_a, hardware="A100",
+                shapes=[{"M": 2048, "N": 2048, "K": 2048}], max_configs=8,
+            )
+            cfgs_b = sel_b.select_configs(
+                spec=spec_factory(), database=db_b, hardware="A100",
+                shapes=[{"M": 2048, "N": 2048, "K": 2048}], max_configs=8,
+            )
+            self.assertEqual(
+                [config_id(c) for c in cfgs_a],
+                [config_id(c) for c in cfgs_b],
+            )
+
+    def test_history_present_skips_curated_warm_start(self) -> None:
+        """If the bucket already has history, we must NOT re-issue curated
+        configs through the warm-start path. The bandit's posteriors take
+        over."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = _make_db(Path(tmpdir))
+            spec = self._get_matmul_spec()
+            # Insert one prior result so the bucket has history.
+            sample_cfg = _matmul_config(bm=128, bn=128, bk=64)
+            db.record_result(
+                shape={"M": 2048, "N": 2048, "K": 2048},
+                hardware="A100",
+                config=sample_cfg,
+                tflops=180.0,
+                ms=1.0,
+                correct=True,
+                operator="matmul",
+            )
+            selector = BanditSelector(seed=0, use_curated_seeds=True)
+            configs = selector.select_configs(
+                spec=spec, database=db, hardware="A100",
+                shapes=[{"M": 2048, "N": 2048, "K": 2048}],
+                max_configs=8,
+            )
+            curated_ids = {spec.config_id_fn(c) for c in spec.curated_configs}
+            returned_ids = {spec.config_id_fn(c) for c in configs}
+            # The returned set will contain the historical config (slot 1)
+            # and grid-exploration configs (slot 4) but the curated warm-up
+            # path must have been bypassed because the bucket has history.
+            # We can't assert "no curated overlap" (curated may overlap with
+            # grid) but we can assert the historical winner is present.
+            self.assertIn(config_id(sample_cfg), returned_ids)
+            # Also: with seed=0, the curated-only-not-in-grid set should not
+            # appear (warm-start did not fire).
+            grid = spec.grid_generator_fn(include_curated=False, max_configs=500)
+            grid_ids = {spec.config_id_fn(c) for c in grid}
+            curated_only = curated_ids - grid_ids
+            for cid in returned_ids:
+                self.assertNotIn(cid, curated_only)
 
     def test_empty_db_respects_max_configs(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

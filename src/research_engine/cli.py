@@ -1061,7 +1061,9 @@ def _propose_operator_configs(
                 valid = False
                 break
             config[pname] = val
-        if valid and spec.shared_memory_check_fn(config):
+        # Note: we no longer filter by spec.shared_memory_check_fn here.
+        # Feasibility is learned by the bandit from runtime failures (reward=0).
+        if valid:
             configs.append(config)
 
     return {

@@ -280,14 +280,49 @@ class WindowShapeBucketTests(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class GridSharedMemoryTests(unittest.TestCase):
-    def test_all_grid_configs_pass_shmem(self):
-        """Every config produced by the grid generator passes the shmem limit."""
-        configs = generate_attention_grid(include_curated=False, max_configs=50)
-        for cfg in configs:
-            self.assertTrue(
-                attention_shared_memory_check(cfg),
-                f"Config {cfg} exceeds shmem limit"
-            )
+    """Verify that grid generation no longer filters by a hand-coded shmem
+    budget. Feasibility is now learned by the bandit from runtime failures
+    (reward=0). The shmem-check function is retained as a no-op for
+    backward compatibility with external callers."""
+
+    def test_shmem_check_is_now_a_noop(self):
+        """The check function returns True for every config — feasibility is
+        learned from runtime, not enforced by a hand-coded formula."""
+        for cfg in [
+            {"BLOCK_M": 16, "BLOCK_N": 16, "num_warps": 1, "num_stages": 1},
+            {"BLOCK_M": 128, "BLOCK_N": 128, "num_warps": 8, "num_stages": 4},
+            {"BLOCK_M": 256, "BLOCK_N": 256, "num_warps": 8, "num_stages": 8},
+        ]:
+            self.assertTrue(attention_shared_memory_check(cfg))
+
+    def test_grid_includes_large_tiles_previously_filtered(self):
+        """The grid must now contain BLOCK_M=128, BLOCK_N=128, num_stages>=2
+        configs that the old hardcoded head_dim=128 shmem check rejected."""
+        configs = generate_attention_grid(include_curated=False, max_configs=500)
+        large = [
+            c for c in configs
+            if c.get("BLOCK_M", 0) >= 128
+            and c.get("BLOCK_N", 0) >= 128
+            and c.get("num_stages", 0) >= 2
+        ]
+        self.assertGreater(
+            len(large),
+            1,
+            "Expected multiple BLOCK_M>=128, BLOCK_N>=128 configs after the "
+            "shmem filter was removed; got " + str(len(large)),
+        )
+
+    def test_grid_size_strictly_larger_without_filter(self):
+        """As a sanity check, the post-refactor grid must contain every config
+        that the old filter would have admitted, plus extras."""
+        configs = generate_attention_grid(include_curated=False, max_configs=500)
+        # Recompute what the old hardcoded filter would have admitted.
+        def _old_shmem_ok(c):
+            bm, bn, ns = c["BLOCK_M"], c["BLOCK_N"], c["num_stages"]
+            shmem = (bm * 128 + 2 * bn * 128) * 2 * ns + 2048
+            return shmem <= 192_000
+        passes_old = sum(1 for c in configs if _old_shmem_ok(c))
+        self.assertGreater(len(configs), passes_old)
 
     def test_curated_configs_have_valid_structure(self):
         """All curated configs have the required keys."""
@@ -295,11 +330,6 @@ class GridSharedMemoryTests(unittest.TestCase):
         for cfg in ATTENTION_CURATED_CONFIGS:
             for key in ("BLOCK_M", "BLOCK_N", "num_warps", "num_stages"):
                 self.assertIn(key, cfg, f"Curated config missing key {key}: {cfg}")
-
-    def test_large_num_stages_fails_shmem(self):
-        """A pathologically large config should fail the shmem check."""
-        bad = {"BLOCK_M": 128, "BLOCK_N": 128, "num_warps": 8, "num_stages": 4}
-        self.assertFalse(attention_shared_memory_check(bad))
 
 
 # ---------------------------------------------------------------------------

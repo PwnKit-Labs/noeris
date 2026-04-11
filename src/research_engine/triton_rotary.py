@@ -86,11 +86,12 @@ def rotary_shape_bucket_key(shape: dict[str, int]) -> str:
 
 
 def rotary_shared_memory_check(config: dict[str, int]) -> bool:
-    bs = config.get("BLOCK_SIZE", 0)
-    ns = config.get("num_stages", 1)
-    # Each block loads 2*BLOCK_SIZE fp16 (x_even, x_odd) plus cos/sin floats
-    shmem = bs * 2 * 2 * ns + bs * 2 * 4 * ns + 1024
-    return shmem <= 192_000
+    """Soft annotation only — always returns True.
+
+    Feasibility is learned from runtime failures (reward=0) instead of
+    a hand-tuned formula. Retained for backward compatibility.
+    """
+    return True
 
 
 def generate_rotary_grid(
@@ -116,8 +117,6 @@ def generate_rotary_grid(
                     "num_warps": nw,
                     "num_stages": ns,
                 }
-                if not rotary_shared_memory_check(config):
-                    continue
                 cid = rotary_config_id(config)
                 if cid in seen:
                     continue

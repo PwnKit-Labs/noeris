@@ -89,6 +89,10 @@ class TestShapeBuckets(unittest.TestCase):
 
 
 class TestSharedMemoryCheck(unittest.TestCase):
+    """The shmem check is now a no-op — feasibility is learned from runtime
+    failures (reward=0 in the bandit) rather than enforced by a hand-coded
+    formula. The function is retained for backward compatibility."""
+
     def test_small_block_passes(self) -> None:
         config = {"BLOCK_SIZE": 256, "num_warps": 2, "num_stages": 1}
         self.assertTrue(geglu_shared_memory_check(config))
@@ -97,10 +101,11 @@ class TestSharedMemoryCheck(unittest.TestCase):
         config = {"BLOCK_SIZE": 4096, "num_warps": 8, "num_stages": 1}
         self.assertTrue(geglu_shared_memory_check(config))
 
-    def test_oversized_config_fails(self) -> None:
-        # 4096 * 2 bytes * 2 tensors * 20 stages >> 192 KB
+    def test_oversized_config_now_passes(self) -> None:
+        """Pathologically large configs no longer get pre-filtered. The
+        bandit will learn at runtime that they crash and weight them down."""
         config = {"BLOCK_SIZE": 4096, "num_warps": 16, "num_stages": 20}
-        self.assertFalse(geglu_shared_memory_check(config))
+        self.assertTrue(geglu_shared_memory_check(config))
 
 
 class TestGridGenerator(unittest.TestCase):

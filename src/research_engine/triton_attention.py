@@ -117,17 +117,13 @@ def attention_shape_bucket_key(shape: dict[str, int]) -> str:
 
 
 def attention_shared_memory_check(config: dict[str, int]) -> bool:
-    """Approximate shared memory limit for A100 (192 KB per SM).
+    """Soft annotation only — always returns True.
 
-    Attention tiles: BLOCK_M x head_dim (Q) + BLOCK_N x head_dim (K) + BLOCK_N x head_dim (V)
-    Using max head_dim=128 and fp16 (2 bytes).
+    The system now learns feasibility from runtime failures (recorded as
+    reward=0) rather than filtering at grid-generation time. Kept on the
+    operator spec for backward compatibility with any external callers.
     """
-    bm = config.get("BLOCK_M", 0)
-    bn = config.get("BLOCK_N", 0)
-    ns = config.get("num_stages", 1)
-    max_head_dim = 128
-    shmem = (bm * max_head_dim + 2 * bn * max_head_dim) * 2 * ns + 2048
-    return shmem <= 192_000
+    return True
 
 
 def generate_attention_grid(
@@ -155,8 +151,6 @@ def generate_attention_grid(
                         "num_warps": nw,
                         "num_stages": ns,
                     }
-                    if not attention_shared_memory_check(config):
-                        continue
                     cid = attention_config_id(config)
                     if cid in seen:
                         continue
