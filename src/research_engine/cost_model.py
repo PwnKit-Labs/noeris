@@ -267,14 +267,20 @@ class CostModel:
             )
             self.regressor.fit(X, y)
 
-            # Simple holdout R^2 estimate via fit-score on 80/20 split
-            n = len(X)
+            # Shuffled 80/20 holdout R^2 (avoids ordering leakage when data
+            # is grouped by operator or hardware).
+            import random as _random
+            idx = list(range(len(X)))
+            _random.Random(42).shuffle(idx)
+            X_shuf = [X[i] for i in idx]
+            y_shuf = [y[i] for i in idx]
+            n = len(X_shuf)
             split = int(n * 0.8)
             if split < n:
                 from sklearn.ensemble import GradientBoostingRegressor as _G
                 aux = _G(n_estimators=200, max_depth=5, learning_rate=0.05, min_samples_leaf=3, random_state=42)
-                aux.fit(X[:split], y[:split])
-                score = aux.score(X[split:], y[split:])
+                aux.fit(X_shuf[:split], y_shuf[:split])
+                score = aux.score(X_shuf[split:], y_shuf[split:])
             else:
                 score = 1.0
             return {

@@ -81,7 +81,7 @@ class ModalBenchmarkSession:
 
         timeout_s = self.timeout_seconds
 
-        @app.function(gpu=gpu_type, image=image, timeout=timeout_s)
+        @app.function(gpu=gpu_type, image=image, timeout=timeout_s, serialized=True)
         def run_benchmark_script(script: str) -> dict:
             import subprocess
             import sys
