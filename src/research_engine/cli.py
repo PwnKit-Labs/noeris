@@ -303,6 +303,8 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["matmul", "rmsnorm", "softmax", "layernorm", "cross_entropy", "attention"],
     )
     ablation_parser.add_argument("--gpu", default="A100")
+    ablation_parser.add_argument("--trials", type=int, default=1,
+                                  help="Number of independent trials (set >1 for statistical reporting)")
     ablation_parser.add_argument("--iterations", type=int, default=5)
     ablation_parser.add_argument("--configs-per-run", type=int, default=8)
     ablation_parser.add_argument("--shapes", default="standard", choices=["tiny", "standard", "full"])
@@ -589,18 +591,29 @@ def main(argv: list[str] | None = None) -> int:
 
 def _run_ablation(args) -> int:
     """Run cross-run learning ablation: with database vs without."""
-    from .ablation import run_ablation
+    from .ablation import run_ablation, run_multi_trial_ablation
 
-    report = run_ablation(
-        operator=args.operator,
-        gpu=args.gpu,
-        iterations=args.iterations,
-        configs_per_run=args.configs_per_run,
-        use_llm=not args.no_llm,
-        shapes_set=args.shapes,
-        warm_up_database=args.warm_up,
-        warm_up_iterations=args.warm_up_iterations,
-    )
+    if getattr(args, "trials", 1) > 1:
+        report = run_multi_trial_ablation(
+            operator=args.operator,
+            gpu=args.gpu,
+            trials=args.trials,
+            iterations=args.iterations,
+            configs_per_run=args.configs_per_run,
+            use_llm=not args.no_llm,
+            shapes_set=args.shapes,
+        )
+    else:
+        report = run_ablation(
+            operator=args.operator,
+            gpu=args.gpu,
+            iterations=args.iterations,
+            configs_per_run=args.configs_per_run,
+            use_llm=not args.no_llm,
+            shapes_set=args.shapes,
+            warm_up_database=args.warm_up,
+            warm_up_iterations=args.warm_up_iterations,
+        )
 
     output_path = _Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)

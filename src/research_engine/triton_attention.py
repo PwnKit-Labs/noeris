@@ -46,13 +46,17 @@ ATTENTION_CURATED_CONFIGS = [
 # Shape buckets: (batch, num_heads, seq_len, head_dim)
 # These match LLM workload patterns.
 ATTENTION_SHAPE_BUCKETS = [
-    {"name": "short_64", "batch": 4, "heads": 32, "seq_len": 512, "head_dim": 64},
-    {"name": "short_128", "batch": 2, "heads": 16, "seq_len": 1024, "head_dim": 128},
-    {"name": "med_128", "batch": 2, "heads": 16, "seq_len": 2048, "head_dim": 128},
-    {"name": "long_64", "batch": 1, "heads": 16, "seq_len": 4096, "head_dim": 64},
-    {"name": "long_128", "batch": 1, "heads": 16, "seq_len": 4096, "head_dim": 128},
-    {"name": "llama7b", "batch": 1, "heads": 32, "seq_len": 4096, "head_dim": 128},
-    {"name": "mistral", "batch": 1, "heads": 32, "seq_len": 8192, "head_dim": 128},
+    {"name": "short_64", "batch": 4, "heads": 32, "seq_len": 512, "head_dim": 64, "is_causal": False},
+    {"name": "short_128", "batch": 2, "heads": 16, "seq_len": 1024, "head_dim": 128, "is_causal": False},
+    {"name": "med_128", "batch": 2, "heads": 16, "seq_len": 2048, "head_dim": 128, "is_causal": False},
+    {"name": "long_64", "batch": 1, "heads": 16, "seq_len": 4096, "head_dim": 64, "is_causal": False},
+    {"name": "long_128", "batch": 1, "heads": 16, "seq_len": 4096, "head_dim": 128, "is_causal": False},
+    {"name": "llama7b", "batch": 1, "heads": 32, "seq_len": 4096, "head_dim": 128, "is_causal": False},
+    {"name": "mistral", "batch": 1, "heads": 32, "seq_len": 8192, "head_dim": 128, "is_causal": False},
+    # Causal variants (for decoder-only LLMs)
+    {"name": "llama7b_causal", "batch": 1, "heads": 32, "seq_len": 4096, "head_dim": 128, "is_causal": True},
+    {"name": "mistral_causal", "batch": 1, "heads": 32, "seq_len": 8192, "head_dim": 128, "is_causal": True},
+    {"name": "long_128_causal", "batch": 1, "heads": 16, "seq_len": 4096, "head_dim": 128, "is_causal": True},
 ]
 
 
@@ -145,6 +149,9 @@ def generate_attention_benchmark_script(
 
 import json
 import platform
+# Parse configs and shapes from JSON to avoid Python literal issues (true/false)
+CONFIGS_JSON = {configs_json!r}
+SHAPES_JSON = {shapes_json!r}
 
 import torch
 import triton
@@ -163,10 +170,13 @@ def attn_fwd_kernel(
     HEAD_DIM: tl.constexpr,
     BLOCK_M: tl.constexpr,
     BLOCK_N: tl.constexpr,
+    IS_CAUSAL: tl.constexpr,
 ):
-    """Tiled FlashAttention forward (non-causal) with online softmax.
+    """Tiled FlashAttention forward with online softmax.
 
-    Each program handles one (batch, head, query-block) tile.
+    Supports both causal and non-causal modes via compile-time constant.
+    For causal mode, the inner loop stops at the diagonal and applies a
+    triangular mask on the diagonal tile.
     """
     pid = tl.program_id(0)
     off_bh = tl.program_id(1)
@@ -182,19 +192,23 @@ def attn_fwd_kernel(
     offs_k = tl.arange(0, HEAD_DIM)
     offs_n = tl.arange(0, BLOCK_N)
 
-    # Load Q block once, keep resident
     q_ptrs = q_base + offs_m[:, None] * stride_qm + offs_k[None, :] * stride_qk
     q_mask = offs_m[:, None] < M
     q = tl.load(q_ptrs, mask=q_mask, other=0.0)
 
-    # Online softmax state
     m_i = tl.zeros((BLOCK_M,), dtype=tl.float32) - float("inf")
     l_i = tl.zeros((BLOCK_M,), dtype=tl.float32)
     acc = tl.zeros((BLOCK_M, HEAD_DIM), dtype=tl.float32)
 
     qk_scale = sm_scale * 1.44269504  # log2(e) for tl.exp2
 
-    for start_n in range(0, N, BLOCK_N):
+    # In causal mode, we only need to iterate up to the query block end
+    if IS_CAUSAL:
+        n_end = tl.minimum((pid + 1) * BLOCK_M, N)
+    else:
+        n_end = N
+
+    for start_n in range(0, n_end, BLOCK_N):
         curr_n = start_n + offs_n
         k_ptrs = k_base + curr_n[:, None] * stride_kn + offs_k[None, :] * stride_kk
         v_ptrs = v_base + curr_n[:, None] * stride_vn + offs_k[None, :] * stride_vk
@@ -202,12 +216,15 @@ def attn_fwd_kernel(
         k = tl.load(k_ptrs, mask=n_mask, other=0.0)
         v = tl.load(v_ptrs, mask=n_mask, other=0.0)
 
-        # Scores: Q @ K.T
         qk = tl.dot(q, tl.trans(k))
         qk = qk * qk_scale
         qk = tl.where(curr_n[None, :] < N, qk, -float("inf"))
 
-        # Online softmax
+        # Apply causal mask on this tile
+        if IS_CAUSAL:
+            causal_mask = offs_m[:, None] >= curr_n[None, :]
+            qk = tl.where(causal_mask, qk, -float("inf"))
+
         m_ij = tl.max(qk, axis=1)
         m_new = tl.maximum(m_i, m_ij)
         alpha = tl.exp2(m_i - m_new)
@@ -220,13 +237,16 @@ def attn_fwd_kernel(
 
         m_i = m_new
 
-    acc = acc / l_i[:, None]
+    # Handle empty row (no keys attended to) — happens in causal mode
+    # if the row has no valid positions. Clamp l_i to avoid div-by-zero.
+    safe_l = tl.where(l_i > 0.0, l_i, 1.0)
+    acc = acc / safe_l[:, None]
 
     o_ptrs = o_base + offs_m[:, None] * stride_om + offs_k[None, :] * stride_ok
     tl.store(o_ptrs, acc.to(Out.dtype.element_ty), mask=q_mask)
 
 
-def flash_attn(q, k, v, config, sm_scale=None):
+def flash_attn(q, k, v, config, is_causal=False, sm_scale=None):
     """q, k, v: (batch, heads, seq, head_dim) float16. Returns out."""
     B, H, M, D = q.shape
     _, _, N, _ = k.shape
@@ -248,28 +268,32 @@ def flash_attn(q, k, v, config, sm_scale=None):
         HEAD_DIM=D,
         BLOCK_M=BLOCK_M,
         BLOCK_N=BLOCK_N,
+        IS_CAUSAL=is_causal,
         num_warps=config["num_warps"],
         num_stages=config["num_stages"],
     )
     return out
 
 
-def benchmark_one(batch, heads, seq_len, head_dim, config):
+def benchmark_one(batch, heads, seq_len, head_dim, config, is_causal=False):
     try:
         q = torch.randn((batch, heads, seq_len, head_dim), device="cuda", dtype=torch.float16)
         k = torch.randn((batch, heads, seq_len, head_dim), device="cuda", dtype=torch.float16)
         v = torch.randn((batch, heads, seq_len, head_dim), device="cuda", dtype=torch.float16)
 
-        # Reference: non-causal SDPA
-        ref = torch.nn.functional.scaled_dot_product_attention(q, k, v, is_causal=False)
-        out = flash_attn(q, k, v, config)
+        ref = torch.nn.functional.scaled_dot_product_attention(q, k, v, is_causal=is_causal)
+        out = flash_attn(q, k, v, config, is_causal=is_causal)
         max_err = (out - ref).abs().max().item()
         if max_err > 0.1:
             return {{"correct": False, "max_err": max_err, "ms": None, "tflops": None}}
 
-        ms = triton.testing.do_bench(lambda: flash_attn(q, k, v, config), warmup=10, rep=50)
-        # FLOPs: 2 * B * H * M * N * D (QK) + 2 * B * H * M * N * D (PV)
-        flops = 4.0 * batch * heads * seq_len * seq_len * head_dim
+        ms = triton.testing.do_bench(
+            lambda: flash_attn(q, k, v, config, is_causal=is_causal),
+            warmup=10, rep=50,
+        )
+        # Causal saves ~half the work; account for it.
+        causal_factor = 0.5 if is_causal else 1.0
+        flops = 4.0 * batch * heads * seq_len * seq_len * head_dim * causal_factor
         tflops = flops / (ms * 1e-3) / 1e12
         return {{
             "correct": True,
@@ -282,8 +306,8 @@ def benchmark_one(batch, heads, seq_len, head_dim, config):
 
 
 def main():
-    configs = {configs_json}
-    shapes = {shapes_json}
+    configs = json.loads(CONFIGS_JSON)
+    shapes = json.loads(SHAPES_JSON)
     gpu_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "none"
 
     all_results = []
@@ -298,9 +322,11 @@ def main():
             heads = shape["heads"]
             seq_len = shape["seq_len"]
             head_dim = shape["head_dim"]
-            result = benchmark_one(batch, heads, seq_len, head_dim, config)
+            is_causal = bool(shape.get("is_causal", False))
+            result = benchmark_one(batch, heads, seq_len, head_dim, config, is_causal=is_causal)
             result["shape"] = f"{{batch}}x{{heads}}x{{seq_len}}x{{head_dim}}"
             result["shape_name"] = shape.get("name", "")
+            result["is_causal"] = is_causal
             shape_results.append(result)
         all_results.append({{
             "config_id": cid,

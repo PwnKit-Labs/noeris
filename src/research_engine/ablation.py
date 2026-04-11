@@ -58,6 +58,129 @@ class AblationCondition:
 
 
 @dataclass(slots=True)
+class MultiTrialReport:
+    """Multi-trial ablation results with statistical summary."""
+
+    operator: str
+    hardware: str
+    iterations_per_condition: int
+    with_db_trials: list[list[float]] = field(default_factory=list)
+    without_db_trials: list[list[float]] = field(default_factory=list)
+
+    def summary(self) -> dict:
+        import statistics as stats
+
+        def _extract_finals(trials: list[list[float]]) -> list[float]:
+            return [max(t) if t else 0 for t in trials]
+
+        with_finals = _extract_finals(self.with_db_trials)
+        without_finals = _extract_finals(self.without_db_trials)
+
+        def _stats(values: list[float]) -> dict:
+            if not values:
+                return {"mean": 0, "stdev": 0, "min": 0, "max": 0, "n": 0}
+            return {
+                "mean": round(stats.mean(values), 2),
+                "stdev": round(stats.stdev(values) if len(values) > 1 else 0, 2),
+                "min": round(min(values), 2),
+                "max": round(max(values), 2),
+                "n": len(values),
+            }
+
+        with_stats = _stats(with_finals)
+        without_stats = _stats(without_finals)
+
+        relative_improvement = 0.0
+        if without_stats["mean"] > 0:
+            relative_improvement = (
+                (with_stats["mean"] - without_stats["mean"]) / without_stats["mean"]
+            )
+
+        return {
+            "operator": self.operator,
+            "hardware": self.hardware,
+            "trials": len(self.with_db_trials),
+            "iterations_per_condition": self.iterations_per_condition,
+            "with_database": {
+                **with_stats,
+                "trial_finals": with_finals,
+                "trial_trajectories": self.with_db_trials,
+            },
+            "without_database": {
+                **without_stats,
+                "trial_finals": without_finals,
+                "trial_trajectories": self.without_db_trials,
+            },
+            "relative_improvement": round(relative_improvement, 4),
+            "relative_improvement_pct": round(relative_improvement * 100, 2),
+        }
+
+    def summary_text(self) -> str:
+        s = self.summary()
+        w = s["with_database"]
+        wo = s["without_database"]
+        lines = [
+            "# Multi-Trial Cross-Run Learning Ablation",
+            "",
+            f"Operator: `{s['operator']}`",
+            f"Hardware: `{s['hardware']}`",
+            f"Trials: {s['trials']}",
+            f"Iterations per condition: {s['iterations_per_condition']}",
+            "",
+            "## Statistical Summary",
+            "",
+            "| Condition | Mean | StdDev | Min | Max | N |",
+            "|---|---|---|---|---|---|",
+            f"| **with_database**    | {w['mean']} | {w['stdev']} | {w['min']} | {w['max']} | {w['n']} |",
+            f"| **without_database** | {wo['mean']} | {wo['stdev']} | {wo['min']} | {wo['max']} | {wo['n']} |",
+            "",
+            f"## Relative improvement: **{s['relative_improvement_pct']:+.2f}%**",
+            "",
+            "## Trial-Level Detail",
+            "",
+            f"- with_database finals: {w['trial_finals']}",
+            f"- without_database finals: {wo['trial_finals']}",
+        ]
+        return "\n".join(lines) + "\n"
+
+
+def run_multi_trial_ablation(
+    *,
+    operator: str,
+    gpu: str = "A100",
+    trials: int = 3,
+    iterations: int = 5,
+    configs_per_run: int = 6,
+    use_llm: bool = True,
+    shapes_set: str = "standard",
+) -> MultiTrialReport:
+    """Run the ablation with multiple independent trials.
+
+    Each trial runs the full with/without comparison. Across trials we
+    report mean, stdev, and relative improvement.
+    """
+    report = MultiTrialReport(
+        operator=operator,
+        hardware=gpu,
+        iterations_per_condition=iterations,
+    )
+
+    for trial_idx in range(trials):
+        single = run_ablation(
+            operator=operator,
+            gpu=gpu,
+            iterations=iterations,
+            configs_per_run=configs_per_run,
+            use_llm=use_llm,
+            shapes_set=shapes_set,
+        )
+        report.with_db_trials.append(single.with_database.best_metric_so_far())
+        report.without_db_trials.append(single.without_database.best_metric_so_far())
+
+    return report
+
+
+@dataclass(slots=True)
 class AblationReport:
     operator: str
     hardware: str

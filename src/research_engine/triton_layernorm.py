@@ -134,25 +134,34 @@ def layernorm_kernel(
     n_cols, eps,
     BLOCK_SIZE: tl.constexpr,
 ):
-    """Single-pass LayerNorm: compute mean, variance, normalize, scale, bias."""
+    """Single-pass LayerNorm using E[X^2] - E[X]^2 for variance.
+
+    Key optimizations:
+    - Compute mean and E[X^2] in one pass, avoid re-loading x
+    - Derive variance as E[X^2] - mean^2
+    - Fuse normalize + scale + bias into single expression
+    - Minimize dtype conversions
+    """
     row_idx = tl.program_id(0)
     x_ptr += row_idx * x_row_stride
     y_ptr += row_idx * y_row_stride
     offs = tl.arange(0, BLOCK_SIZE)
     mask = offs < n_cols
 
+    # Load once, keep in registers
     x = tl.load(x_ptr + offs, mask=mask, other=0.0).to(tl.float32)
 
-    # Compute mean and variance
-    mean = tl.sum(x, axis=0) / n_cols
-    x_centered = tl.where(mask, x - mean, 0.0)
-    var = tl.sum(x_centered * x_centered, axis=0) / n_cols
-    rstd = 1.0 / tl.sqrt(var + eps)
+    # Single-pass: compute sum(x) and sum(x^2) simultaneously
+    inv_n = 1.0 / n_cols
+    mean = tl.sum(x, axis=0) * inv_n
+    mean_sq = tl.sum(x * x, axis=0) * inv_n
+    var = mean_sq - mean * mean
+    rstd = tl.rsqrt(var + eps)
 
-    # Normalize, scale, bias
+    # Pre-scale weight by rstd (avoids materializing x_centered)
     w = tl.load(w_ptr + offs, mask=mask, other=0.0).to(tl.float32)
     b = tl.load(b_ptr + offs, mask=mask, other=0.0).to(tl.float32)
-    y = x_centered * rstd * w + b
+    y = (x - mean) * rstd * w + b
     tl.store(y_ptr + offs, y.to(tl.float16), mask=mask)
 
 

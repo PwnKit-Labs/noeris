@@ -85,12 +85,15 @@ KERNELBENCH_SUBSET = {
         {"id": "kb_L2_ce_llama3_128k", "n_rows": 2048, "n_cols": 128256, "level": 2},
     ],
     "attention": [
-        {"id": "kb_L2_attn_short_64", "batch": 4, "heads": 16, "seq_len": 512, "head_dim": 64, "level": 2},
-        {"id": "kb_L2_attn_short_128", "batch": 4, "heads": 16, "seq_len": 512, "head_dim": 128, "level": 2},
-        {"id": "kb_L2_attn_med_128", "batch": 2, "heads": 16, "seq_len": 2048, "head_dim": 128, "level": 2},
-        {"id": "kb_L3_attn_long_64", "batch": 1, "heads": 16, "seq_len": 4096, "head_dim": 64, "level": 3},
-        {"id": "kb_L3_attn_long_128", "batch": 1, "heads": 16, "seq_len": 4096, "head_dim": 128, "level": 3},
-        {"id": "kb_L3_attn_llama7b", "batch": 1, "heads": 32, "seq_len": 4096, "head_dim": 128, "level": 3},
+        {"id": "kb_L2_attn_short_64", "batch": 4, "heads": 16, "seq_len": 512, "head_dim": 64, "is_causal": False, "level": 2},
+        {"id": "kb_L2_attn_short_128", "batch": 4, "heads": 16, "seq_len": 512, "head_dim": 128, "is_causal": False, "level": 2},
+        {"id": "kb_L2_attn_med_128", "batch": 2, "heads": 16, "seq_len": 2048, "head_dim": 128, "is_causal": False, "level": 2},
+        {"id": "kb_L3_attn_long_64", "batch": 1, "heads": 16, "seq_len": 4096, "head_dim": 64, "is_causal": False, "level": 3},
+        {"id": "kb_L3_attn_long_128", "batch": 1, "heads": 16, "seq_len": 4096, "head_dim": 128, "is_causal": False, "level": 3},
+        {"id": "kb_L3_attn_llama7b", "batch": 1, "heads": 32, "seq_len": 4096, "head_dim": 128, "is_causal": False, "level": 3},
+        # Causal variants (decoder-only LLM workload)
+        {"id": "kb_L3_attn_llama7b_causal", "batch": 1, "heads": 32, "seq_len": 4096, "head_dim": 128, "is_causal": True, "level": 3},
+        {"id": "kb_L3_attn_mistral_causal", "batch": 1, "heads": 32, "seq_len": 8192, "head_dim": 128, "is_causal": True, "level": 3},
     ],
 }
 
@@ -325,18 +328,21 @@ def _pytorch_baseline_snippet(operator: str) -> str:
 '''
     elif operator == "attention":
         return '''
-    # Measure PyTorch scaled_dot_product_attention baseline
+    # Measure PyTorch scaled_dot_product_attention baseline (supports causal)
     pytorch_baselines = []
     for shape in shapes:
         batch = shape["batch"]
         heads = shape["heads"]
         seq_len = shape["seq_len"]
         head_dim = shape["head_dim"]
+        is_causal = bool(shape.get("is_causal", False))
         q = torch.randn((batch, heads, seq_len, head_dim), device="cuda", dtype=torch.float16)
         k = torch.randn((batch, heads, seq_len, head_dim), device="cuda", dtype=torch.float16)
         v = torch.randn((batch, heads, seq_len, head_dim), device="cuda", dtype=torch.float16)
-        ms = triton.testing.do_bench(lambda: torch.nn.functional.scaled_dot_product_attention(q, k, v, is_causal=False), warmup=10, rep=50)
-        flops = 4.0 * batch * heads * seq_len * seq_len * head_dim
+        causal_flag = is_causal
+        ms = triton.testing.do_bench(lambda cf=causal_flag: torch.nn.functional.scaled_dot_product_attention(q, k, v, is_causal=cf), warmup=10, rep=50)
+        causal_factor = 0.5 if is_causal else 1.0
+        flops = 4.0 * batch * heads * seq_len * seq_len * head_dim * causal_factor
         tflops = flops / (ms * 1e-3) / 1e12
         pytorch_baselines.append({"shape_name": shape.get("name", ""), "ms": round(ms, 4), "tflops": round(tflops, 2)})
     output["pytorch_baselines"] = pytorch_baselines
