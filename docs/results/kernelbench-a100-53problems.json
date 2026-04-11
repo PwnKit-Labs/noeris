@@ -1,0 +1,814 @@
+{
+  "metadata": {
+    "hardware": "A100",
+    "operators": [
+      "matmul",
+      "rmsnorm",
+      "softmax",
+      "layernorm",
+      "cross_entropy",
+      "attention"
+    ]
+  },
+  "fast_p_scores": {
+    "1.0": {
+      "level_1": 0.583,
+      "level_2": 0.615,
+      "level_3": 0.0,
+      "overall": 0.566
+    },
+    "1.5": {
+      "level_1": 0.458,
+      "level_2": 0.423,
+      "level_3": 0.0,
+      "overall": 0.415
+    },
+    "2.0": {
+      "level_1": 0.375,
+      "level_2": 0.423,
+      "level_3": 0.0,
+      "overall": 0.377
+    },
+    "3.0": {
+      "level_1": 0.333,
+      "level_2": 0.346,
+      "level_3": 0.0,
+      "overall": 0.321
+    }
+  },
+  "results": [
+    {
+      "problem_id": "kb_L1_matmul_128",
+      "operator": "matmul",
+      "level": 1,
+      "shape": {
+        "M": 128,
+        "N": 128,
+        "K": 128
+      },
+      "our_metric": 0.4,
+      "our_config_id": "bm128_bn64_bk32_gm8_w4_s4",
+      "pytorch_baseline": 0.41,
+      "speedup": 0.9756097560975611,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L1_matmul_256",
+      "operator": "matmul",
+      "level": 1,
+      "shape": {
+        "M": 256,
+        "N": 256,
+        "K": 256
+      },
+      "our_metric": 2.95,
+      "our_config_id": "bm128_bn64_bk32_gm8_w4_s4",
+      "pytorch_baseline": 3.42,
+      "speedup": 0.8625730994152048,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L1_matmul_512",
+      "operator": "matmul",
+      "level": 1,
+      "shape": {
+        "M": 512,
+        "N": 512,
+        "K": 512
+      },
+      "our_metric": 18.41,
+      "our_config_id": "bm128_bn64_bk32_gm8_w4_s4",
+      "pytorch_baseline": 21.5,
+      "speedup": 0.8562790697674418,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L1_matmul_1024",
+      "operator": "matmul",
+      "level": 1,
+      "shape": {
+        "M": 1024,
+        "N": 1024,
+        "K": 1024
+      },
+      "our_metric": 77.14,
+      "our_config_id": "bm128_bn128_bk32_gm8_w4_s4",
+      "pytorch_baseline": 95.25,
+      "speedup": 0.8098687664041995,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L1_matmul_2048",
+      "operator": "matmul",
+      "level": 1,
+      "shape": {
+        "M": 2048,
+        "N": 2048,
+        "K": 2048
+      },
+      "our_metric": 169.64,
+      "our_config_id": "bm128_bn64_bk32_gm8_w4_s4",
+      "pytorch_baseline": 227.4,
+      "speedup": 0.7459982409850483,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L1_matmul_4096",
+      "operator": "matmul",
+      "level": 1,
+      "shape": {
+        "M": 4096,
+        "N": 4096,
+        "K": 4096
+      },
+      "our_metric": 227.66,
+      "our_config_id": "bm64_bn256_bk32_gm8_w4_s4",
+      "pytorch_baseline": 257.7,
+      "speedup": 0.883430345362825,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L1_matmul_tall_4k",
+      "operator": "matmul",
+      "level": 1,
+      "shape": {
+        "M": 4096,
+        "N": 1024,
+        "K": 1024
+      },
+      "our_metric": 0.0,
+      "our_config_id": "",
+      "pytorch_baseline": 144.46,
+      "speedup": 0.0,
+      "correct": false
+    },
+    {
+      "problem_id": "kb_L1_matmul_tall_8k",
+      "operator": "matmul",
+      "level": 1,
+      "shape": {
+        "M": 8192,
+        "N": 1024,
+        "K": 1024
+      },
+      "our_metric": 187.12,
+      "our_config_id": "bm128_bn128_bk32_gm8_w4_s4",
+      "pytorch_baseline": 215.79,
+      "speedup": 0.8671393484406136,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L1_matmul_wide",
+      "operator": "matmul",
+      "level": 1,
+      "shape": {
+        "M": 1024,
+        "N": 8192,
+        "K": 1024
+      },
+      "our_metric": 187.86,
+      "our_config_id": "bm128_bn128_bk32_gm8_w4_s4",
+      "pytorch_baseline": 213.19,
+      "speedup": 0.8811857967071627,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L1_matmul_deep",
+      "operator": "matmul",
+      "level": 1,
+      "shape": {
+        "M": 1024,
+        "N": 1024,
+        "K": 8192
+      },
+      "our_metric": 113.13,
+      "our_config_id": "bm128_bn128_bk32_gm8_w4_s4",
+      "pytorch_baseline": 171.82,
+      "speedup": 0.6584216040041905,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L2_gpt2_qkv",
+      "operator": "matmul",
+      "level": 2,
+      "shape": {
+        "M": 1024,
+        "N": 2304,
+        "K": 768
+      },
+      "our_metric": 112.05,
+      "our_config_id": "bm128_bn64_bk32_gm8_w4_s4",
+      "pytorch_baseline": 119.19,
+      "speedup": 0.940095645607853,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L2_gpt2_out",
+      "operator": "matmul",
+      "level": 2,
+      "shape": {
+        "M": 1024,
+        "N": 768,
+        "K": 768
+      },
+      "our_metric": 61.39,
+      "our_config_id": "bm128_bn64_bk32_gm8_w4_s4",
+      "pytorch_baseline": 68.54,
+      "speedup": 0.8956813539538955,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L2_gpt2_mlp_up",
+      "operator": "matmul",
+      "level": 2,
+      "shape": {
+        "M": 1024,
+        "N": 3072,
+        "K": 768
+      },
+      "our_metric": 144.75,
+      "our_config_id": "bm64_bn256_bk32_gm8_w4_s4",
+      "pytorch_baseline": 153.19,
+      "speedup": 0.9449050199099158,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L2_gpt2_mlp_down",
+      "operator": "matmul",
+      "level": 2,
+      "shape": {
+        "M": 1024,
+        "N": 768,
+        "K": 3072
+      },
+      "our_metric": 102.4,
+      "our_config_id": "bm128_bn64_bk32_gm8_w4_s4",
+      "pytorch_baseline": 108.47,
+      "speedup": 0.9440398266801882,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L2_llama7b_qkv",
+      "operator": "matmul",
+      "level": 2,
+      "shape": {
+        "M": 4096,
+        "N": 12288,
+        "K": 4096
+      },
+      "our_metric": 229.72,
+      "our_config_id": "bm128_bn128_bk32_gm8_w4_s4",
+      "pytorch_baseline": 253.57,
+      "speedup": 0.9059431320739836,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L2_llama7b_mlp_up",
+      "operator": "matmul",
+      "level": 2,
+      "shape": {
+        "M": 4096,
+        "N": 11008,
+        "K": 4096
+      },
+      "our_metric": 227.57,
+      "our_config_id": "bm128_bn128_bk32_gm8_w4_s4",
+      "pytorch_baseline": 258.36,
+      "speedup": 0.8808252051401145,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L2_llama7b_mlp_down",
+      "operator": "matmul",
+      "level": 2,
+      "shape": {
+        "M": 4096,
+        "N": 4096,
+        "K": 11008
+      },
+      "our_metric": 0.0,
+      "our_config_id": "",
+      "pytorch_baseline": 239.18,
+      "speedup": 0.0,
+      "correct": false
+    },
+    {
+      "problem_id": "kb_L2_bert_qkv",
+      "operator": "matmul",
+      "level": 2,
+      "shape": {
+        "M": 512,
+        "N": 3072,
+        "K": 1024
+      },
+      "our_metric": 111.52,
+      "our_config_id": "bm128_bn128_bk32_gm8_w4_s4",
+      "pytorch_baseline": 98.94,
+      "speedup": 1.127147766323024,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L2_mistral_mlp",
+      "operator": "matmul",
+      "level": 2,
+      "shape": {
+        "M": 4096,
+        "N": 14336,
+        "K": 4096
+      },
+      "our_metric": 227.1,
+      "our_config_id": "bm128_bn256_bk64_gm8_w8_s3",
+      "pytorch_baseline": 241.39,
+      "speedup": 0.9408011930900203,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L1_rmsnorm_gpt2",
+      "operator": "rmsnorm",
+      "level": 1,
+      "shape": {
+        "n_rows": 1024,
+        "hidden_dim": 768
+      },
+      "our_metric": 290.39,
+      "our_config_id": "bs512_w2_s2",
+      "pytorch_baseline": 63.06,
+      "speedup": 4.604979384712971,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L1_rmsnorm_bert",
+      "operator": "rmsnorm",
+      "level": 1,
+      "shape": {
+        "n_rows": 4096,
+        "hidden_dim": 1024
+      },
+      "our_metric": 852.18,
+      "our_config_id": "bs512_w2_s2",
+      "pytorch_baseline": 122.81,
+      "speedup": 6.939011481149743,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L1_rmsnorm_gpt_xl",
+      "operator": "rmsnorm",
+      "level": 1,
+      "shape": {
+        "n_rows": 4096,
+        "hidden_dim": 1600
+      },
+      "our_metric": 958.7,
+      "our_config_id": "bs1024_w4_s1",
+      "pytorch_baseline": 113.75,
+      "speedup": 8.428131868131869,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L2_rmsnorm_llama7b",
+      "operator": "rmsnorm",
+      "level": 2,
+      "shape": {
+        "n_rows": 4096,
+        "hidden_dim": 4096
+      },
+      "our_metric": 1168.08,
+      "our_config_id": "bs2048_w8_s1",
+      "pytorch_baseline": 115.58,
+      "speedup": 10.10624675549403,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L2_rmsnorm_llama13b",
+      "operator": "rmsnorm",
+      "level": 2,
+      "shape": {
+        "n_rows": 4096,
+        "hidden_dim": 5120
+      },
+      "our_metric": 1182.18,
+      "our_config_id": "bs4096_w16_s1",
+      "pytorch_baseline": 117.81,
+      "speedup": 10.034632034632034,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L2_rmsnorm_llama70b",
+      "operator": "rmsnorm",
+      "level": 2,
+      "shape": {
+        "n_rows": 2048,
+        "hidden_dim": 8192
+      },
+      "our_metric": 1148.62,
+      "our_config_id": "bs2048_w8_s1",
+      "pytorch_baseline": 115.16,
+      "speedup": 9.974122959360889,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L2_rmsnorm_mixtral",
+      "operator": "rmsnorm",
+      "level": 2,
+      "shape": {
+        "n_rows": 8192,
+        "hidden_dim": 4096
+      },
+      "our_metric": 1253.81,
+      "our_config_id": "bs2048_w8_s1",
+      "pytorch_baseline": 120.18,
+      "speedup": 10.432767515393575,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L1_softmax_tiny",
+      "operator": "softmax",
+      "level": 1,
+      "shape": {
+        "n_rows": 1024,
+        "n_cols": 256
+      },
+      "our_metric": 103.63,
+      "our_config_id": "bs2048_w8_s1",
+      "pytorch_baseline": 58.81,
+      "speedup": 1.7621152865158984,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L1_softmax_small",
+      "operator": "softmax",
+      "level": 1,
+      "shape": {
+        "n_rows": 1024,
+        "n_cols": 512
+      },
+      "our_metric": 188.38,
+      "our_config_id": "bs2048_w8_s1",
+      "pytorch_baseline": 105.18,
+      "speedup": 1.791024909678646,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L1_softmax_medium",
+      "operator": "softmax",
+      "level": 1,
+      "shape": {
+        "n_rows": 2048,
+        "n_cols": 1024
+      },
+      "our_metric": 556.61,
+      "our_config_id": "bs2048_w8_s1",
+      "pytorch_baseline": 231.36,
+      "speedup": 2.405817773167358,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L1_softmax_large",
+      "operator": "softmax",
+      "level": 1,
+      "shape": {
+        "n_rows": 4096,
+        "n_cols": 4096
+      },
+      "our_metric": 1183.94,
+      "our_config_id": "bs1024_w4_s1",
+      "pytorch_baseline": 237.52,
+      "speedup": 4.984590771303469,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L2_softmax_attn_short",
+      "operator": "softmax",
+      "level": 2,
+      "shape": {
+        "n_rows": 8192,
+        "n_cols": 512
+      },
+      "our_metric": 788.1,
+      "our_config_id": "bs1024_w4_s1",
+      "pytorch_baseline": 302.45,
+      "speedup": 2.6057199537113576,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L2_softmax_attn_long",
+      "operator": "softmax",
+      "level": 2,
+      "shape": {
+        "n_rows": 2048,
+        "n_cols": 4096
+      },
+      "our_metric": 1100.51,
+      "our_config_id": "bs2048_w8_s1",
+      "pytorch_baseline": 226.23,
+      "speedup": 4.8645626132696815,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L2_softmax_vocab_gpt2",
+      "operator": "softmax",
+      "level": 2,
+      "shape": {
+        "n_rows": 1024,
+        "n_cols": 50257
+      },
+      "our_metric": 689.17,
+      "our_config_id": "bs4096_w16_s1",
+      "pytorch_baseline": 185.42,
+      "speedup": 3.716805091144429,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L2_softmax_vocab_llama",
+      "operator": "softmax",
+      "level": 2,
+      "shape": {
+        "n_rows": 2048,
+        "n_cols": 32000
+      },
+      "our_metric": 1294.89,
+      "our_config_id": "bs4096_w16_s1",
+      "pytorch_baseline": 192.3,
+      "speedup": 6.733697347893916,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L1_layernorm_gpt2",
+      "operator": "layernorm",
+      "level": 1,
+      "shape": {
+        "n_rows": 1024,
+        "hidden_dim": 768
+      },
+      "our_metric": 298.31,
+      "our_config_id": "bs512_w2_s2",
+      "pytorch_baseline": 228.82,
+      "speedup": 1.3036884887684643,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L1_layernorm_bert_base",
+      "operator": "layernorm",
+      "level": 1,
+      "shape": {
+        "n_rows": 4096,
+        "hidden_dim": 768
+      },
+      "our_metric": 671.53,
+      "our_config_id": "bs512_w2_s2",
+      "pytorch_baseline": 510.02,
+      "speedup": 1.3166738559272186,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L1_layernorm_bert_large",
+      "operator": "layernorm",
+      "level": 1,
+      "shape": {
+        "n_rows": 4096,
+        "hidden_dim": 1024
+      },
+      "our_metric": 761.23,
+      "our_config_id": "bs2048_w8_s1",
+      "pytorch_baseline": 606.87,
+      "speedup": 1.2543543098192365,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L2_layernorm_gpt_xl",
+      "operator": "layernorm",
+      "level": 2,
+      "shape": {
+        "n_rows": 4096,
+        "hidden_dim": 1600
+      },
+      "our_metric": 917.19,
+      "our_config_id": "bs512_w2_s2",
+      "pytorch_baseline": 693.64,
+      "speedup": 1.3222853353324493,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L2_layernorm_neox",
+      "operator": "layernorm",
+      "level": 2,
+      "shape": {
+        "n_rows": 4096,
+        "hidden_dim": 4096
+      },
+      "our_metric": 1149.18,
+      "our_config_id": "bs2048_w8_s1",
+      "pytorch_baseline": 942.64,
+      "speedup": 1.2191080370024612,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L2_layernorm_long_seq",
+      "operator": "layernorm",
+      "level": 2,
+      "shape": {
+        "n_rows": 8192,
+        "hidden_dim": 768
+      },
+      "our_metric": 895.95,
+      "our_config_id": "bs1024_w4_s1",
+      "pytorch_baseline": 666.36,
+      "speedup": 1.3445434900054025,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L1_ce_bert",
+      "operator": "cross_entropy",
+      "level": 1,
+      "shape": {
+        "n_rows": 4096,
+        "n_cols": 30522
+      },
+      "our_metric": 837.55,
+      "our_config_id": "bs16384_w16_s1",
+      "pytorch_baseline": 131.88,
+      "speedup": 6.350849256900212,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L1_ce_gpt2",
+      "operator": "cross_entropy",
+      "level": 1,
+      "shape": {
+        "n_rows": 1024,
+        "n_cols": 50257
+      },
+      "our_metric": 674.23,
+      "our_config_id": "bs32768_w16_s1",
+      "pytorch_baseline": 117.33,
+      "speedup": 5.7464416602744395,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L1_ce_gpt2_long",
+      "operator": "cross_entropy",
+      "level": 1,
+      "shape": {
+        "n_rows": 2048,
+        "n_cols": 50257
+      },
+      "our_metric": 764.04,
+      "our_config_id": "bs16384_w16_s1",
+      "pytorch_baseline": 118.63,
+      "speedup": 6.440529377054708,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L1_ce_llama",
+      "operator": "cross_entropy",
+      "level": 1,
+      "shape": {
+        "n_rows": 2048,
+        "n_cols": 32000
+      },
+      "our_metric": 1086.1,
+      "our_config_id": "bs32768_w16_s1",
+      "pytorch_baseline": 122.97,
+      "speedup": 8.832235504594616,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L2_ce_mistral",
+      "operator": "cross_entropy",
+      "level": 2,
+      "shape": {
+        "n_rows": 4096,
+        "n_cols": 32000
+      },
+      "our_metric": 1244.59,
+      "our_config_id": "bs16384_w16_s1",
+      "pytorch_baseline": 122.32,
+      "speedup": 10.174869195552649,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L2_ce_long_llama",
+      "operator": "cross_entropy",
+      "level": 2,
+      "shape": {
+        "n_rows": 8192,
+        "n_cols": 32000
+      },
+      "our_metric": 1336.62,
+      "our_config_id": "bs8192_w16_s1",
+      "pytorch_baseline": 122.07,
+      "speedup": 10.949619071024822,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L2_ce_llama3_128k",
+      "operator": "cross_entropy",
+      "level": 2,
+      "shape": {
+        "n_rows": 2048,
+        "n_cols": 128256
+      },
+      "our_metric": 269.26,
+      "our_config_id": "bs4096_w8_s1",
+      "pytorch_baseline": 118.33,
+      "speedup": 2.2755007183300937,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L2_attn_short_64",
+      "operator": "attention",
+      "level": 2,
+      "shape": {
+        "batch": 4,
+        "heads": 16,
+        "seq_len": 512,
+        "head_dim": 64
+      },
+      "our_metric": 94.02,
+      "our_config_id": "m64_n128_w4_s3",
+      "pytorch_baseline": 89.22,
+      "speedup": 1.0537995965030262,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L2_attn_short_128",
+      "operator": "attention",
+      "level": 2,
+      "shape": {
+        "batch": 4,
+        "heads": 16,
+        "seq_len": 512,
+        "head_dim": 128
+      },
+      "our_metric": 95.53,
+      "our_config_id": "m128_n64_w8_s3",
+      "pytorch_baseline": 116.39,
+      "speedup": 0.8207749806684423,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L2_attn_med_128",
+      "operator": "attention",
+      "level": 2,
+      "shape": {
+        "batch": 2,
+        "heads": 16,
+        "seq_len": 2048,
+        "head_dim": 128
+      },
+      "our_metric": 152.72,
+      "our_config_id": "m128_n64_w8_s3",
+      "pytorch_baseline": 191.01,
+      "speedup": 0.7995392911365897,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L3_attn_long_64",
+      "operator": "attention",
+      "level": 3,
+      "shape": {
+        "batch": 1,
+        "heads": 16,
+        "seq_len": 4096,
+        "head_dim": 64
+      },
+      "our_metric": 148.61,
+      "our_config_id": "m64_n128_w4_s3",
+      "pytorch_baseline": 169.65,
+      "speedup": 0.8759799587385795,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L3_attn_long_128",
+      "operator": "attention",
+      "level": 3,
+      "shape": {
+        "batch": 1,
+        "heads": 16,
+        "seq_len": 4096,
+        "head_dim": 128
+      },
+      "our_metric": 159.86,
+      "our_config_id": "m128_n64_w8_s3",
+      "pytorch_baseline": 196.67,
+      "speedup": 0.8128336807850716,
+      "correct": true
+    },
+    {
+      "problem_id": "kb_L3_attn_llama7b",
+      "operator": "attention",
+      "level": 3,
+      "shape": {
+        "batch": 1,
+        "heads": 32,
+        "seq_len": 4096,
+        "head_dim": 128
+      },
+      "our_metric": 161.73,
+      "our_config_id": "m128_n64_w8_s3",
+      "pytorch_baseline": 199.0,
+      "speedup": 0.8127135678391959,
+      "correct": true
+    }
+  ]
+}
