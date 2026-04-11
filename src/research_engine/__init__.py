@@ -35,6 +35,7 @@ from . import triton_attention  # noqa: F401  (registers attention)
 from . import triton_rotary  # noqa: F401  (registers rotary)
 from . import triton_geglu  # noqa: F401  (registers geglu)
 from . import triton_qk_norm_rope  # noqa: F401  (registers qk_norm_rope)
+from . import triton_moe_router  # noqa: F401  (registers moe_router)
 from .triton_operators import REGISTRY as TRITON_OPERATORS  # noqa: F401
 
 __all__ = [
