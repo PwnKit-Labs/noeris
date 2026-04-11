@@ -2,7 +2,7 @@
 
 Research OS for autonomous empirical discovery, currently led by a flagship GPU kernel optimization track.
 
-**TL;DR:** Noeris is a Research OS with shared ingestion, memory, execution, and verification substrates. Its most mature track today is GPU kernel optimization: parameterized Triton kernels (6 operators), LLM-guided config search, persistent cross-run database, and A100/H100 execution via Modal for ~$0.01/iteration. It already beats AutoKernel's published H100 results on RMSNorm (11.66x vs 5.29x), softmax (6.38x vs 3.44x), and cross-entropy (9.65x vs 2.94x) using curated starter configs.
+**TL;DR:** Noeris is a Research OS with shared ingestion, memory, execution, and verification substrates. Its most mature track today is GPU kernel optimization: **7 parameterized Triton operators** (matmul, rmsnorm, softmax, layernorm, cross_entropy, FlashAttention with causal masking, RoPE), LLM-guided config search, shape-indexed cross-run database, **learned cost model filter** (sklearn GradientBoost, R²=0.535 on 144 points), and A100/H100 execution via Modal for ~$0.01/iteration. Beats AutoKernel's published H100 results on RMSNorm (11.66x vs 5.29x), softmax (6.38x vs 3.44x), and cross-entropy (9.65x vs 2.94x) using curated starter configs. Paper draft at [`docs/paper/noeris.md`](docs/paper/noeris.md).
 
 Noeris is broader than the Triton work, but the Triton/kernel track is the strongest proving ground in the repository today. The core system is meant to generalize across tracks: long-context reasoning, tool-use reliability, evaluation design, and systems optimization all share the same research substrate.
 

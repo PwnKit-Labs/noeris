@@ -25,6 +25,10 @@ def export_run_bundle(record: ResearchRunRecord, output_dir: str | Path) -> Path
         encoding="utf-8",
     )
     (base_dir / "summary.md").write_text(_render_summary(record), encoding="utf-8")
+    (base_dir / "research-brief.md").write_text(
+        _render_research_brief(record),
+        encoding="utf-8",
+    )
     (base_dir / "claim-lineage.json").write_text(
         json.dumps(_build_claim_lineage(record), indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -116,6 +120,74 @@ def _write_result_artifacts(record: ResearchRunRecord, base_dir: Path) -> None:
                     json.dumps(payload, indent=2, sort_keys=True) + "\n",
                     encoding="utf-8",
                 )
+
+
+def _render_research_brief(record: ResearchRunRecord) -> str:
+    lines = [
+        f"# Research Brief: {record.memo.topic}",
+        "",
+        f"- Run ID: `{record.run_id}`",
+        f"- Benchmark: `{record.benchmark_id or 'none'}`",
+        f"- Verification passed: `{record.verification.passed}`",
+        "",
+        "## Summary",
+        "",
+        record.memo.summary,
+        "",
+    ]
+    if record.memo.source_assessments:
+        lines.extend(["## Source Assessments", ""])
+        for assessment in record.memo.source_assessments:
+            lines.append(
+                f"- `{assessment.source_id}` | `{assessment.confidence}` | {assessment.rationale}"
+            )
+        lines.append("")
+    if record.memo.claims:
+        lines.extend(["## Claims", ""])
+        for claim in record.memo.claims:
+            refs = ", ".join(f"`{ref}`" for ref in claim.evidence_refs) or "none"
+            lines.append(f"- **{claim.title}**")
+            lines.append(f"  Source: `{claim.source}`")
+            lines.append(f"  Evidence kind: `{claim.evidence_kind}`")
+            lines.append(f"  Evidence refs: {refs}")
+            lines.append(f"  Summary: {claim.summary}")
+        lines.append("")
+    if record.memo.contradictions:
+        lines.extend(["## Contradictions", ""])
+        for contradiction in record.memo.contradictions:
+            affected = ", ".join(f"`{title}`" for title in contradiction.claim_titles) or "none"
+            lines.append(
+                f"- **{contradiction.title}** (`{contradiction.severity}`): {contradiction.summary}"
+            )
+            lines.append(f"  Affects: {affected}")
+        lines.append("")
+    if record.memo.hypotheses:
+        lines.extend(["## Hypotheses", ""])
+        for hypothesis in record.memo.hypotheses:
+            supports = ", ".join(f"`{claim}`" for claim in hypothesis.supporting_claims) or "none"
+            lines.append(f"- **{hypothesis.title}**")
+            lines.append(f"  Expected signal: {hypothesis.expected_signal}")
+            lines.append(f"  Support: {supports}")
+            lines.append(f"  Ranking: `{hypothesis.priority_score:.3f}` — {hypothesis.ranking_rationale}")
+        lines.append("")
+    if record.memo.experiments:
+        lines.extend(["## Experiments", ""])
+        for experiment in record.memo.experiments:
+            artifacts = ", ".join(f"`{item}`" for item in experiment.required_artifacts) or "none"
+            lines.append(f"- **{experiment.name}**")
+            lines.append(f"  Success metric: {experiment.success_metric}")
+            lines.append(f"  Baseline: {experiment.baseline}")
+            lines.append(f"  Required artifacts: {artifacts}")
+        lines.append("")
+    if record.memo.next_actions:
+        lines.extend(["## Next Actions", ""])
+        lines.extend(f"- {item}" for item in record.memo.next_actions)
+        lines.append("")
+    if record.memo.risks:
+        lines.extend(["## Risks", ""])
+        lines.extend(f"- {risk}" for risk in record.memo.risks)
+        lines.append("")
+    return "\n".join(lines)
 
 
 def _build_claim_lineage(record: ResearchRunRecord) -> dict[str, object]:

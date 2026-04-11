@@ -28,8 +28,18 @@ but not:
 Every exported run bundle should include:
 
 - `claim-lineage.json`
+- `research-brief.md`
 
 That file should make source-to-claim-to-hypothesis linkage visible without requiring a reader to dig through nested run JSON manually.
+
+The brief should make the run readable without external post-processing:
+
+- sources
+- claims
+- contradictions
+- hypotheses
+- experiment requirements
+- next actions
 
 ## Current State
 
@@ -48,4 +58,3 @@ The next real upgrade is richer live claim extraction:
 - better claim synthesis from paper abstracts and repo descriptions
 - contradiction detection across multiple sources
 - persistent cross-run memory updates
-

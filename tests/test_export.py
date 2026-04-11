@@ -29,12 +29,15 @@ class ExportBundleTests(unittest.TestCase):
 
         self.assertEqual(
             files,
-            ["claim-lineage.json", "memo.json", "run.json", "summary.md", "verification.json"],
+            ["claim-lineage.json", "memo.json", "research-brief.md", "run.json", "summary.md", "verification.json"],
         )
         self.assertIn("Source Confidence", summary)
         self.assertIn("claims", lineage)
         self.assertIn("linked_sources", lineage)
         self.assertIn("assessment", lineage)
+        brief = (bundle_dir / "research-brief.md").read_text(encoding="utf-8")
+        self.assertIn("## Claims", brief)
+        self.assertIn("## Hypotheses", brief)
 
     def test_long_context_export_writes_required_artifacts(self) -> None:
         record = ResearchPipeline().run_record_for(
