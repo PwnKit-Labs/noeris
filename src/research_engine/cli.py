@@ -4,6 +4,7 @@ import argparse
 from dataclasses import asdict
 import json
 import sys
+from pathlib import Path as _Path
 
 from .agenda import DEFAULT_RESEARCH_AGENDA
 from .benchmarks import DEFAULT_BENCHMARKS, get_benchmark
@@ -227,6 +228,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="run Triton kernel search: generate configs, benchmark on GPU, record to config database",
     )
     triton_parser.add_argument(
+        "--operator",
+        default="matmul",
+        choices=["matmul", "rmsnorm", "softmax"],
+        help="which Triton operator to search",
+    )
+    triton_parser.add_argument(
         "--configs-per-run",
         type=int,
         default=8,
@@ -257,6 +264,33 @@ def build_parser() -> argparse.ArgumentParser:
         "--db-path",
         default=".noeris/triton-configs.json",
         help="path to the shape-indexed config database",
+    )
+
+    kb_parser = subparsers.add_parser(
+        "kernelbench-eval",
+        help="run KernelBench-style evaluation and compute fast_p scores",
+    )
+    kb_parser.add_argument(
+        "--operator",
+        default="",
+        choices=["", "matmul", "rmsnorm", "softmax"],
+        help="restrict to one operator, or leave empty for all",
+    )
+    kb_parser.add_argument(
+        "--gpu",
+        default="A100",
+        help="GPU type for Modal execution",
+    )
+    kb_parser.add_argument(
+        "--configs-per-problem",
+        type=int,
+        default=8,
+        help="max configs to test per problem",
+    )
+    kb_parser.add_argument(
+        "--output",
+        default=".noeris/kernelbench-report.json",
+        help="path to write the JSON report",
     )
 
     return parser
@@ -509,6 +543,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "triton-iterate":
         return _run_triton_iterate(args)
 
+    if args.command == "kernelbench-eval":
+        return _run_kernelbench_eval(args)
+
     try:
         pipeline = build_pipeline(
             use_llm=args.llm,
@@ -528,27 +565,320 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def _run_triton_iterate(args) -> int:
-    """Run the Triton kernel search loop.
+def _run_kernelbench_eval(args) -> int:
+    """Run KernelBench-style evaluation and compute fast_p scores."""
+    from .kernelbench import evaluate_kernelbench
 
-    Sends ALL selected configs to GPU in a single batch call (one cold start),
-    then records results to the ConfigDatabase.
-    """
-    from .modal_runner import (
-        BatchBenchmarkResult,
-        run_benchmark_batch_modal,
+    operator = args.operator or None
+    report = evaluate_kernelbench(
+        operator=operator,
+        gpu=args.gpu,
+        max_configs_per_problem=args.configs_per_problem,
     )
+
+    output_path = _Path(args.output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(report.to_dict(), indent=2) + "\n")
+
+    summary_path = output_path.with_suffix(".md")
+    summary_path.write_text(report.summary_text())
+
+    print(report.summary_text())
+    print(f"\nFull report written to {output_path}")
+    print(f"Summary written to {summary_path}")
+    return 0
+
+
+def _run_generic_operator_iterate(*, spec, args, db, shapes) -> int:
+    """Run kernel search for any operator via its TritonOperatorSpec."""
+    from .modal_runner import run_benchmark_batch_modal_generic
+
+    operator_name = spec.name
+    hardware = args.gpu
+
+    # Select configs: curated + grid exploration, no incumbent lookup yet
+    # (TODO: generalize select_configs_for_run to operators)
+    configs: list[dict] = []
+    seen_ids: set[str] = set()
+    for config in spec.curated_configs:
+        cid = spec.config_id_fn(config)
+        if cid not in seen_ids:
+            seen_ids.add(cid)
+            configs.append(config)
+            if len(configs) >= args.configs_per_run:
+                break
+
+    # Add grid exploration if we have budget
+    if len(configs) < args.configs_per_run:
+        grid = spec.grid_generator_fn(include_curated=False, max_configs=50)
+        for config in grid:
+            cid = spec.config_id_fn(config)
+            if cid not in seen_ids:
+                seen_ids.add(cid)
+                configs.append(config)
+                if len(configs) >= args.configs_per_run:
+                    break
+
+    # LLM proposer (if enabled)
+    proposal_result: dict = {"source": "none"}
+    if args.llm:
+        try:
+            client = ResponsesApiClient.from_environment()
+            proposal_result = _propose_operator_configs(
+                spec=spec,
+                proposer=client,
+                database=db,
+                hardware=hardware,
+                target_shapes=shapes,
+            )
+            for config in proposal_result.get("configs", [])[:3]:
+                cid = spec.config_id_fn(config)
+                if cid not in seen_ids:
+                    seen_ids.add(cid)
+                    configs.append(config)
+                    if len(configs) >= args.configs_per_run + 3:
+                        break
+        except LlmConfigurationError as exc:
+            proposal_result = {"source": "llm_config_error", "error": str(exc)}
+
+    # Generate benchmark script
+    benchmark_script = spec.benchmark_script_fn(configs, shapes)
+
+    # Run on Modal (single batched call)
+    if args.local:
+        import subprocess, sys, tempfile
+        from pathlib import Path
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+            f.write(benchmark_script)
+            script_path = f.name
+        try:
+            result = subprocess.run(
+                [sys.executable, script_path],
+                capture_output=True, text=True, timeout=300,
+            )
+            batch_stdout = result.stdout if result.returncode == 0 else ""
+            batch_hardware = {}
+        finally:
+            Path(script_path).unlink(missing_ok=True)
+        batch = run_benchmark_batch_modal_generic.__class__  # dummy
+        # Parse output
+        from .modal_runner import _extract_json_object
+        data = _extract_json_object(batch_stdout, "config_results")
+        if data is None:
+            print(json.dumps({"error": "No JSON in local output", "stdout": batch_stdout[:500]}, indent=2))
+            return 1
+        config_results = data.get("config_results", [])
+        batch_hardware = data.get("hardware", {})
+        batch_success = True
+    else:
+        batch = run_benchmark_batch_modal_generic(
+            benchmark_script=benchmark_script,
+            gpu=args.gpu,
+        )
+        if not batch.success:
+            print(json.dumps({
+                "operator": operator_name,
+                "error": batch.error,
+                "success": False,
+            }, indent=2))
+            return 1
+        config_results = batch.config_results
+        batch_hardware = batch.hardware
+
+    # Record results
+    best_metric = 0.0
+    best_config_id = ""
+    output_results = []
+    hw_name = batch_hardware.get("gpu", hardware)
+
+    for config_result in config_results:
+        cid = config_result.get("config_id", "")
+        config = config_result.get("config", {})
+        shape_results = config_result.get("results", [])
+
+        recorded = []
+        for shape_result in shape_results:
+            if shape_result.get("correct") and shape_result.get("tflops"):
+                shape_info = _parse_operator_shape(operator_name, shape_result["shape"])
+                bucket = spec.shape_bucket_fn(shape_info)
+                metric_value = shape_result["tflops"]  # tflops field = gb_per_s for memory-bound
+                is_new_best = db.record_result(
+                    shape=shape_info,
+                    hardware=hw_name,
+                    config=config,
+                    tflops=metric_value,
+                    ms=shape_result.get("ms", 0),
+                    correct=True,
+                    run_id=cid,
+                    operator=operator_name,
+                    bucket=bucket,
+                    config_id_str=cid,
+                )
+                recorded.append({**shape_result, "new_best": is_new_best})
+
+        correct_results = [
+            r for r in shape_results if r.get("correct") and r.get("tflops")
+        ]
+        avg_metric = (
+            sum(r["tflops"] for r in correct_results) / len(correct_results)
+            if correct_results else 0.0
+        )
+        if avg_metric > best_metric:
+            best_metric = avg_metric
+            best_config_id = cid
+
+        output_results.append({
+            "config_id": cid,
+            "config": config,
+            "avg_metric": round(avg_metric, 2),
+            "metric_unit": spec.metric_name,
+            "shape_results": recorded,
+        })
+
+    db.save()
+
+    output = {
+        "operator": operator_name,
+        "metric_unit": spec.metric_name,
+        "hardware": hw_name,
+        "configs_tested": len(configs),
+        "best_config_id": best_config_id,
+        f"best_avg_{spec.metric_name}": round(best_metric, 2),
+        "proposal": proposal_result,
+        "results": output_results,
+        "database_insights": db.get_insights(hardware=hw_name, operator=operator_name),
+    }
+    print(json.dumps(output, indent=2))
+    return 0
+
+
+def _parse_operator_shape(operator_name: str, shape_str: str) -> dict:
+    """Parse shape string like '2048x2048x2048' or '4096x768' into a dict."""
+    parts = shape_str.split("x")
+    if operator_name == "matmul":
+        return {"M": int(parts[0]), "N": int(parts[1]), "K": int(parts[2])}
+    elif operator_name in ("rmsnorm",):
+        return {"n_rows": int(parts[0]), "hidden_dim": int(parts[1])}
+    elif operator_name in ("softmax",):
+        return {"n_rows": int(parts[0]), "n_cols": int(parts[1])}
+    return {"raw": shape_str}
+
+
+def _propose_operator_configs(
+    *, spec, proposer, database, hardware: str, target_shapes: list,
+) -> dict:
+    """Generic LLM proposer that works for any operator spec."""
+    insights = database.get_insights(hardware=hardware, operator=spec.name)
+
+    prompt_data = {
+        "operator": spec.name,
+        "description": spec.description,
+        "metric": spec.metric_name,
+        "param_space": spec.param_space,
+        "target_shapes": target_shapes[:6],
+        "curated_configs_already_tested": [
+            spec.config_id_fn(c) for c in spec.curated_configs
+        ],
+    }
+    if insights:
+        prompt_data["cross_run_insights"] = insights
+
+    # Build schema dynamically from param space
+    param_props = {
+        pname: {"type": "integer"} for pname in spec.param_space.keys()
+    }
+    param_props["rationale"] = {"type": "string"}
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "configs": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": param_props,
+                    "required": list(param_props.keys()),
+                },
+            },
+            "global_rationale": {"type": "string"},
+        },
+        "required": ["configs", "global_rationale"],
+    }
+
+    try:
+        payload = proposer.generate_json(
+            schema_name=f"{spec.name}_config_proposals",
+            schema=schema,
+            instructions=(
+                f"You are proposing Triton {spec.name} kernel configurations. "
+                f"The operator is {spec.description} Different shapes often have different "
+                "optimal configs. Use cross_run_insights to see what has worked and propose "
+                "configs that explore promising unexplored regions. "
+                "Return at most 4 configs with one-sentence rationale each."
+            ),
+            prompt=json.dumps(prompt_data, indent=2),
+            max_output_tokens=1200,
+            reasoning_effort="low",
+            text_verbosity="low",
+        )
+    except Exception as exc:
+        return {
+            "source": "responses_api_error",
+            "configs": [],
+            "error": type(exc).__name__,
+            "detail": str(exc)[:240],
+        }
+
+    configs = []
+    for item in payload.get("configs", []):
+        if not isinstance(item, dict):
+            continue
+        config = {}
+        valid = True
+        for pname in spec.param_space.keys():
+            val = item.get(pname)
+            if not isinstance(val, int) or val not in spec.param_space[pname]:
+                valid = False
+                break
+            config[pname] = val
+        if valid and spec.shared_memory_check_fn(config):
+            configs.append(config)
+
+    return {
+        "source": "responses_api",
+        "configs": configs[:4],
+        "global_rationale": " ".join(str(payload.get("global_rationale", "")).split()),
+    }
+
+
+def _run_triton_iterate(args) -> int:
+    """Run the Triton kernel search loop for any registered operator."""
+    from .modal_runner import run_benchmark_batch_modal_generic
+    from .triton_operators import REGISTRY
+
+    operator_name = getattr(args, "operator", "matmul")
+    spec = REGISTRY.get(operator_name)
 
     db = ConfigDatabase(path=args.db_path)
     hardware = args.gpu
 
-    # Select shape set
+    # Select shape set based on operator's shape_buckets
     if args.shapes == "tiny":
-        shapes = MATMUL_SHAPE_BUCKETS[:2]
+        shapes = spec.shape_buckets[:2]
     elif args.shapes == "full":
-        shapes = MATMUL_SHAPE_BUCKETS
+        shapes = spec.shape_buckets
     else:
-        shapes = MATMUL_SHAPE_BUCKETS[:6]
+        shapes = spec.shape_buckets[:6]
+
+    # Dispatch to operator-specific flow for non-matmul operators
+    if operator_name != "matmul":
+        return _run_generic_operator_iterate(
+            spec=spec,
+            args=args,
+            db=db,
+            shapes=shapes,
+        )
 
     # Get LLM-proposed configs if enabled
     proposed_configs: list[dict[str, int]] = []

@@ -358,10 +358,13 @@ class ShapeRecord:
 
 @dataclass
 class ConfigDatabase:
-    """Persistent shape-indexed config database.
+    """Persistent operator-aware shape-indexed config database.
 
-    Stores (op, shape_bucket, hardware) -> ranked configs across runs.
+    Stores (operator, shape_bucket, hardware) -> ranked configs across runs.
     This is the key differentiator: no published system maintains this.
+
+    The database is forward-compatible with multi-operator use. Records
+    without an explicit operator default to 'matmul' for backward compatibility.
     """
 
     path: Path
@@ -399,6 +402,9 @@ class ConfigDatabase:
         }
         self.path.write_text(json.dumps(data, indent=2) + "\n")
 
+    def _make_key(self, operator: str, bucket: str, hardware: str) -> str:
+        return f"{operator}:{bucket}:{hardware}"
+
     def record_result(
         self,
         *,
@@ -409,17 +415,32 @@ class ConfigDatabase:
         ms: float,
         correct: bool,
         run_id: str = "",
+        operator: str = "matmul",
+        bucket: str | None = None,
+        config_id_str: str | None = None,
     ) -> bool:
-        """Record a benchmark result. Returns True if this is a new best."""
-        m, n, k = shape["M"], shape["N"], shape["K"]
-        bucket = shape_bucket_key(m, n, k)
-        key = f"{bucket}:{hardware}"
-        cid = config_id(config)
+        """Record a benchmark result. Returns True if this is a new best.
+
+        For backward compatibility, defaults to matmul with (M, N, K) shape
+        format. For other operators, pass explicit bucket and config_id_str.
+        """
+        if bucket is None:
+            # Matmul fallback
+            m = shape["M"]
+            n = shape["N"]
+            k = shape["K"]
+            bucket = shape_bucket_key(m, n, k)
+            shape_data = {"M": m, "N": n, "K": k, "bucket": bucket}
+        else:
+            shape_data = {**shape, "bucket": bucket}
+
+        cid = config_id_str if config_id_str is not None else config_id(config)
+        key = self._make_key(operator, bucket, hardware)
 
         if key not in self.records:
             self.records[key] = ShapeRecord(
                 shape_key=key,
-                shape={"M": m, "N": n, "K": k, "bucket": bucket},
+                shape=shape_data,
             )
 
         record = self.records[key]
@@ -431,6 +452,7 @@ class ConfigDatabase:
             "correct": correct,
             "run_id": run_id,
             "hardware": hardware,
+            "operator": operator,
         })
 
         if correct and tflops > record.best_tflops:
@@ -444,36 +466,55 @@ class ConfigDatabase:
         *,
         shape: dict[str, int],
         hardware: str,
+        operator: str = "matmul",
+        bucket: str | None = None,
     ) -> dict[str, int] | None:
         """Look up the best known config for a shape+hardware combo."""
-        m, n, k = shape["M"], shape["N"], shape["K"]
-        bucket = shape_bucket_key(m, n, k)
-        key = f"{bucket}:{hardware}"
+        if bucket is None:
+            m = shape["M"]
+            n = shape["N"]
+            k = shape["K"]
+            bucket = shape_bucket_key(m, n, k)
+        key = self._make_key(operator, bucket, hardware)
         record = self.records.get(key)
         if record is None or not record.best_config_id:
-            return None
-        # Find the actual config dict
+            # Try legacy key format for backward compat
+            legacy_key = f"{bucket}:{hardware}"
+            record = self.records.get(legacy_key)
+            if record is None or not record.best_config_id:
+                return None
         for result in reversed(record.results):
             if result["config_id"] == record.best_config_id:
                 return result["config"]
         return None
 
-    def get_insights(self, *, hardware: str = "") -> list[dict[str, Any]]:
+    def get_insights(
+        self,
+        *,
+        hardware: str = "",
+        operator: str = "",
+    ) -> list[dict[str, Any]]:
         """Extract cross-run insights for the LLM proposer."""
         insights: list[dict[str, Any]] = []
         for key, record in self.records.items():
+            if operator and not (
+                key.startswith(f"{operator}:") or not any(
+                    key.startswith(op + ":") for op in ["matmul", "softmax", "rmsnorm", "layernorm"]
+                )
+            ):
+                continue
             if hardware and not key.endswith(f":{hardware}"):
                 continue
             if not record.best_config_id:
                 continue
-            # Find all configs tested on this shape and their performance
             config_perf: dict[str, list[float]] = {}
             for result in record.results:
                 if result["correct"]:
-                    config_perf.setdefault(result["config_id"], []).append(result["tflops"])
+                    metric = result.get("tflops", 0) or 0
+                    config_perf.setdefault(result["config_id"], []).append(metric)
             top_configs = sorted(
                 config_perf.items(),
-                key=lambda item: -max(item[1]),
+                key=lambda item: -max(item[1]) if item[1] else 0,
             )[:3]
             insights.append({
                 "shape_bucket": record.shape_key,
@@ -481,7 +522,7 @@ class ConfigDatabase:
                 "best_config_id": record.best_config_id,
                 "best_tflops": record.best_tflops,
                 "top_configs": [
-                    {"config_id": cid, "best_tflops": round(max(perfs), 2)}
+                    {"config_id": cid, "best_tflops": round(max(perfs), 2) if perfs else 0}
                     for cid, perfs in top_configs
                 ],
                 "total_experiments": len(record.results),
@@ -641,6 +682,42 @@ def _clamp_pow2(value: int, low: int, high: int) -> int:
     if abs(p - value) > abs(p * 2 - value) and p * 2 <= high:
         p *= 2
     return max(low, min(p, high))
+
+
+def generate_matmul_benchmark_script(
+    configs: list[dict[str, int]],
+    shapes: list[dict[str, Any]],
+) -> str:
+    """Alias for matmul benchmark generation (operator registry interface)."""
+    from .modal_runner import generate_batched_benchmark_script
+    return generate_batched_benchmark_script(configs, shapes)
+
+
+def _matmul_shape_bucket_fn(shape: dict[str, int]) -> str:
+    return shape_bucket_key(shape["M"], shape["N"], shape["K"])
+
+
+def _register_matmul_operator() -> None:
+    """Register matmul in the operator registry."""
+    from .triton_operators import TritonOperatorSpec, register_operator
+    try:
+        register_operator(TritonOperatorSpec(
+            name="matmul",
+            param_space=TRITON_MATMUL_PARAM_SPACE,
+            curated_configs=TRITON_MATMUL_CURATED_CONFIGS,
+            shape_buckets=MATMUL_SHAPE_BUCKETS,
+            metric_name="tflops",
+            config_id_fn=config_id,
+            shape_bucket_fn=_matmul_shape_bucket_fn,
+            benchmark_script_fn=generate_matmul_benchmark_script,
+            grid_generator_fn=generate_config_grid,
+            description="Compute-bound matmul with tile blocking and L2 grouping.",
+        ))
+    except Exception:
+        pass
+
+
+_register_matmul_operator()
 
 
 def select_configs_for_run(

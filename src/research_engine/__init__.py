@@ -25,6 +25,12 @@ from .models import (
 )
 from .pipeline import ResearchPipeline
 
+# Import operator modules for side-effect registration.
+from . import triton_kernels  # noqa: F401  (registers matmul)
+from . import triton_rmsnorm  # noqa: F401  (registers rmsnorm)
+from . import triton_softmax  # noqa: F401  (registers softmax)
+from .triton_operators import REGISTRY as TRITON_OPERATORS  # noqa: F401
+
 __all__ = [
     "ArxivAtomSourceProvider",
     "BenchmarkGoal",

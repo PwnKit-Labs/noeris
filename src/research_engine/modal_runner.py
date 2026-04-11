@@ -361,6 +361,80 @@ class BatchBenchmarkResult:
     raw_output: str
     success: bool
     error: str = ""
+    # Additional fields from the parsed JSON (e.g. pytorch_baselines)
+    extra: dict = None
+
+
+def run_benchmark_batch_modal_generic(
+    *,
+    benchmark_script: str,
+    gpu: str = DEFAULT_GPU,
+) -> BatchBenchmarkResult:
+    """Generic batched Modal runner — takes an already-generated benchmark script.
+
+    Used for operators other than matmul (rmsnorm, softmax, ...) that have
+    their own benchmark script generators.
+    """
+    modal_script = build_modal_app_script(benchmark_script, gpu=gpu)
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".py", delete=False,
+    ) as f:
+        f.write(modal_script)
+        modal_path = f.name
+
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "modal", "run", modal_path],
+            capture_output=True,
+            text=True,
+            timeout=900,
+            env={**os.environ},
+        )
+        if result.returncode != 0:
+            return BatchBenchmarkResult(
+                hardware={"gpu": gpu},
+                config_results=[],
+                raw_output=result.stderr,
+                success=False,
+                error=result.stderr[:500],
+            )
+        stdout = result.stdout
+        data = _extract_json_object(stdout, "config_results")
+        if data is None:
+            return BatchBenchmarkResult(
+                hardware={"gpu": gpu},
+                config_results=[],
+                raw_output=stdout[:2000],
+                success=False,
+                error=f"No valid JSON found. Output preview: {stdout[:500]}",
+            )
+        extra = {k: v for k, v in data.items() if k not in ("hardware", "config_results")}
+        return BatchBenchmarkResult(
+            hardware=data.get("hardware", {"gpu": gpu}),
+            config_results=data.get("config_results", []),
+            raw_output=stdout[-2000:],
+            success=True,
+            extra=extra,
+        )
+    except FileNotFoundError:
+        return BatchBenchmarkResult(
+            hardware={"gpu": gpu},
+            config_results=[],
+            raw_output="",
+            success=False,
+            error="modal not found. Install with: pip install modal && modal setup",
+        )
+    except subprocess.TimeoutExpired:
+        return BatchBenchmarkResult(
+            hardware={"gpu": gpu},
+            config_results=[],
+            raw_output="",
+            success=False,
+            error="Modal execution timed out",
+        )
+    finally:
+        Path(modal_path).unlink(missing_ok=True)
 
 
 def run_benchmark_batch_modal(
@@ -409,11 +483,13 @@ def run_benchmark_batch_modal(
                 success=False,
                 error=f"No valid JSON found. Output preview: {stdout[:500]}",
             )
+        extra = {k: v for k, v in data.items() if k not in ("hardware", "config_results")}
         return BatchBenchmarkResult(
             hardware=data.get("hardware", {"gpu": gpu}),
             config_results=data.get("config_results", []),
             raw_output=stdout[-2000:],
             success=True,
+            extra=extra,
         )
     except FileNotFoundError:
         return BatchBenchmarkResult(
