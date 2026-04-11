@@ -44,6 +44,9 @@ CROSS_ENTROPY_SHAPE_BUCKETS = [
     {"name": "llama3_128k", "n_rows": 2048, "n_cols": 128256},
     {"name": "mistral", "n_rows": 4096, "n_cols": 32000},
     {"name": "bert_vocab", "n_rows": 4096, "n_cols": 30522},
+    # Gemma 4 family: 256k vocab is the largest published vocabulary for a dense LLM
+    {"name": "gemma4_vocab_256k_short", "n_rows": 2048, "n_cols": 256000},
+    {"name": "gemma4_vocab_256k_long", "n_rows": 4096, "n_cols": 256000},
 ]
 
 
@@ -54,6 +57,9 @@ def cross_entropy_config_id(config: dict[str, int]) -> str:
 def cross_entropy_shape_bucket_key(shape: dict[str, int]) -> str:
     cols = shape.get("n_cols", 0)
     rows = shape.get("n_rows", 0)
+    # Gemma 4's 256k vocab is larger than any other published LLM vocabulary.
+    if cols >= 200000:
+        return "gemma4_vocab_256k_short" if rows <= 2048 else "gemma4_vocab_256k_long"
     if cols >= 100000:
         return "llama3_128k"
     if cols >= 50000:

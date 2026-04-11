@@ -48,6 +48,10 @@ ROTARY_SHAPE_BUCKETS = [
     {"name": "mistral_long", "batch": 1, "seq": 8192, "heads": 32, "head_dim": 128},
     {"name": "gpt_neox", "batch": 2, "seq": 2048, "heads": 16, "head_dim": 64},
     {"name": "gqa_small", "batch": 2, "seq": 1024, "heads": 8, "head_dim": 128},
+    # Gemma 4 family: head_dim=256 (vs LLaMA's 128); BLOCK_SIZE must cover 128 pairs.
+    # E2B/E4B use 8 heads; 26B MoE uses 16 heads.
+    {"name": "gemma4_2b_rope", "batch": 1, "seq": 4096, "heads": 8, "head_dim": 256},
+    {"name": "gemma4_26b_rope", "batch": 1, "seq": 4096, "heads": 16, "head_dim": 256},
 ]
 
 
@@ -56,9 +60,18 @@ def rotary_config_id(config: dict[str, int]) -> str:
 
 
 def rotary_shape_bucket_key(shape: dict[str, int]) -> str:
+    """Classify a RoPE shape into a bucket.
+
+    Gemma 4 uses head_dim=256 (LLaMA uses 128), which is the discriminating
+    feature for the gemma4_*_rope buckets.  Within Gemma, heads=8 maps to the
+    E2B/E4B variants and heads=16 maps to the 26B MoE.
+    """
     seq = shape.get("seq", 0)
     hd = shape.get("head_dim", 0)
     heads = shape.get("heads", 0)
+    # Gemma 4: head_dim=256 distinguishes it from all other tracked models.
+    if hd >= 256:
+        return "gemma4_26b_rope" if heads >= 16 else "gemma4_2b_rope"
     if seq >= 8192:
         return "mistral_long"
     if seq >= 4096:

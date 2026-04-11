@@ -49,6 +49,11 @@ RMSNORM_SHAPE_BUCKETS = [
     {"name": "llama_13b", "n_rows": 4096, "hidden_dim": 5120},
     {"name": "llama_70b", "n_rows": 2048, "hidden_dim": 8192},
     {"name": "mixtral", "n_rows": 8192, "hidden_dim": 4096},
+    # Gemma 4 family (released April 2026) — hidden_dim values unique to Gemma
+    {"name": "gemma4_e2b", "n_rows": 2048, "hidden_dim": 2048},
+    {"name": "gemma4_e4b", "n_rows": 2048, "hidden_dim": 2560},
+    {"name": "gemma4_26b", "n_rows": 4096, "hidden_dim": 4096},
+    {"name": "gemma4_31b", "n_rows": 4096, "hidden_dim": 5376},
 ]
 
 
@@ -57,7 +62,14 @@ def rmsnorm_config_id(config: dict[str, int]) -> str:
 
 
 def rmsnorm_shape_bucket_key(shape: dict[str, int]) -> str:
-    """Classify an RMSNorm shape into a bucket."""
+    """Classify an RMSNorm shape into a bucket.
+
+    Gemma 4 family shapes are detected by their exact hidden_dim values:
+    - 2048 → gemma4_e2b
+    - 2560 → gemma4_e4b  (unique to Gemma; LLaMA does not use this width)
+    - 4096 with n_rows >= 4096 → gemma4_26b  (disambiguated from llama_7b by row count)
+    - 5376 → gemma4_31b  (unique to Gemma; sits between llama_13b and llama_70b)
+    """
     h = shape.get("hidden_dim", 0)
     n = shape.get("n_rows", 0)
     if h <= 768:
@@ -66,10 +78,20 @@ def rmsnorm_shape_bucket_key(shape: dict[str, int]) -> str:
         return "gpt2_base"
     if h <= 1024:
         return "llama_160m"
+    if h == 2048:
+        return "gemma4_e2b"
+    if h == 2560:
+        return "gemma4_e4b"
     if h <= 4096:
-        return "llama_7b" if n <= 4096 else "mixtral"
+        if n > 4096:
+            return "mixtral"
+        if n >= 4096:
+            return "gemma4_26b"
+        return "llama_7b"
     if h <= 5120:
         return "llama_13b"
+    if h == 5376:
+        return "gemma4_31b"
     return "llama_70b"
 
 

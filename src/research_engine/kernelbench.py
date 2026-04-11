@@ -56,6 +56,8 @@ KERNELBENCH_SUBSET = {
         {"id": "kb_L2_rmsnorm_llama13b", "n_rows": 4096, "hidden_dim": 5120, "level": 2},
         {"id": "kb_L2_rmsnorm_llama70b", "n_rows": 2048, "hidden_dim": 8192, "level": 2},
         {"id": "kb_L2_rmsnorm_mixtral", "n_rows": 8192, "hidden_dim": 4096, "level": 2},
+        # Gemma 4 family (April 2026)
+        {"id": "kb_L2_rmsnorm_gemma_26b", "n_rows": 4096, "hidden_dim": 4096, "level": 2},
     ],
     "softmax": [
         {"id": "kb_L1_softmax_tiny", "n_rows": 1024, "n_cols": 256, "level": 1},
@@ -83,6 +85,8 @@ KERNELBENCH_SUBSET = {
         {"id": "kb_L2_ce_mistral", "n_rows": 4096, "n_cols": 32000, "level": 2},
         {"id": "kb_L2_ce_long_llama", "n_rows": 8192, "n_cols": 32000, "level": 2},
         {"id": "kb_L2_ce_llama3_128k", "n_rows": 2048, "n_cols": 128256, "level": 2},
+        # Gemma 4 family: 256k vocab (largest published dense-LLM vocabulary)
+        {"id": "kb_L2_ce_gemma_256k", "n_rows": 2048, "n_cols": 256000, "level": 2},
     ],
     "attention": [
         {"id": "kb_L2_attn_short_64", "batch": 4, "heads": 16, "seq_len": 512, "head_dim": 64, "is_causal": False, "level": 2},
@@ -94,6 +98,9 @@ KERNELBENCH_SUBSET = {
         # Causal variants (decoder-only LLM workload)
         {"id": "kb_L3_attn_llama7b_causal", "batch": 1, "heads": 32, "seq_len": 4096, "head_dim": 128, "is_causal": True, "level": 3},
         {"id": "kb_L3_attn_mistral_causal", "batch": 1, "heads": 32, "seq_len": 8192, "head_dim": 128, "is_causal": True, "level": 3},
+        # Sliding-window local attention (Gemma 3 / 4 style — 5 of 6 layers)
+        {"id": "kb_L3_attn_gemma_local", "batch": 1, "heads": 16, "seq_len": 4096, "head_dim": 256, "is_causal": True, "window_size": 1024, "level": 3},
+        {"id": "kb_L3_attn_gemma_slide_causal", "batch": 2, "heads": 16, "seq_len": 2048, "head_dim": 128, "is_causal": True, "window_size": 1024, "level": 3},
     ],
     "geglu": [
         # Level 2: Gemma 4 FFN shapes (n_rows = batch*seq tokens, ffn_dim = intermediate size)
@@ -101,6 +108,11 @@ KERNELBENCH_SUBSET = {
         {"id": "kb_L2_geglu_gemma4b",  "n_rows": 2048, "ffn_dim": 14336, "level": 2},
         {"id": "kb_L2_geglu_gemma26b", "n_rows": 2048, "ffn_dim": 16384, "level": 2},
         {"id": "kb_L2_geglu_gemma31b", "n_rows": 2048, "ffn_dim": 24576, "level": 2},
+    ],
+    "rotary": [
+        {"id": "kb_L2_rotary_llama7b", "batch": 1, "seq": 4096, "heads": 32, "head_dim": 128, "level": 2},
+        # Gemma 4: head_dim=256 (2x LLaMA) exercises the wider pair-rotation path
+        {"id": "kb_L2_rotary_gemma_26b", "batch": 1, "seq": 4096, "heads": 16, "head_dim": 256, "level": 2},
     ],
 }
 
@@ -441,13 +453,29 @@ def _pytorch_baseline_snippet(operator: str) -> str:
 '''
     elif operator == "attention":
         return '''
-    # Measure PyTorch eager and torch.compile SDPA baselines (supports causal)
+    # Measure PyTorch eager and torch.compile SDPA baselines (supports causal + sliding window)
     pytorch_baselines = []
     compile_baselines = []
 
-    def _attn(q, k, v, cf):
+    def _build_window_mask(seq_len, window_size, is_causal, device):
+        """Sliding-window boolean mask: True = attend."""
+        rows = torch.arange(seq_len, device=device).unsqueeze(1)
+        cols = torch.arange(seq_len, device=device).unsqueeze(0)
+        left_bound = cols >= (rows - window_size + 1)
+        if is_causal:
+            return left_bound & (cols <= rows)
+        return left_bound & ((cols - rows) < window_size)
+
+    def _attn_plain(q, k, v, cf):
         return torch.nn.functional.scaled_dot_product_attention(q, k, v, is_causal=cf)
-    compiled_attn = torch.compile(_attn, mode="max-autotune", dynamic=False)
+
+    def _attn_windowed(q, k, v, mask):
+        return torch.nn.functional.scaled_dot_product_attention(
+            q, k, v, attn_mask=mask, is_causal=False
+        )
+
+    compiled_attn_plain = torch.compile(_attn_plain, mode="max-autotune", dynamic=False)
+    compiled_attn_windowed = torch.compile(_attn_windowed, mode="max-autotune", dynamic=False)
 
     for shape in shapes:
         batch = shape["batch"]
@@ -455,21 +483,36 @@ def _pytorch_baseline_snippet(operator: str) -> str:
         seq_len = shape["seq_len"]
         head_dim = shape["head_dim"]
         is_causal = bool(shape.get("is_causal", False))
+        window_size = int(shape.get("window_size", -1))
         q = torch.randn((batch, heads, seq_len, head_dim), device="cuda", dtype=torch.float16)
         k = torch.randn((batch, heads, seq_len, head_dim), device="cuda", dtype=torch.float16)
         v = torch.randn((batch, heads, seq_len, head_dim), device="cuda", dtype=torch.float16)
-        causal_factor = 0.5 if is_causal else 1.0
-        flops = 4.0 * batch * heads * seq_len * seq_len * head_dim * causal_factor
-        cf = is_causal
-        ms = triton.testing.do_bench(lambda: _attn(q, k, v, cf), warmup=10, rep=50)
+        if window_size > 0:
+            ws_mask = _build_window_mask(seq_len, window_size, is_causal, q.device)
+            window_factor = min(window_size, seq_len) / seq_len * (0.5 if is_causal else 1.0)
+        else:
+            ws_mask = None
+            window_factor = 0.5 if is_causal else 1.0
+        flops = 4.0 * batch * heads * seq_len * seq_len * head_dim * window_factor
+        if window_size > 0:
+            ms = triton.testing.do_bench(lambda: _attn_windowed(q, k, v, ws_mask), warmup=10, rep=50)
+        else:
+            cf = is_causal
+            ms = triton.testing.do_bench(lambda: _attn_plain(q, k, v, cf), warmup=10, rep=50)
         tflops = flops / (ms * 1e-3) / 1e12
-        pytorch_baselines.append({"shape_name": shape.get("name", ""), "ms": round(ms, 4), "tflops": round(tflops, 2)})
+        pytorch_baselines.append({"shape_name": shape.get("name", ""), "ms": round(ms, 4), "tflops": round(tflops, 2), "window_size": window_size})
         try:
-            for _ in range(3):
-                compiled_attn(q, k, v, cf)
-            ms_c = triton.testing.do_bench(lambda: compiled_attn(q, k, v, cf), warmup=10, rep=50)
+            if window_size > 0:
+                for _ in range(3):
+                    compiled_attn_windowed(q, k, v, ws_mask)
+                ms_c = triton.testing.do_bench(lambda: compiled_attn_windowed(q, k, v, ws_mask), warmup=10, rep=50)
+            else:
+                cf = is_causal
+                for _ in range(3):
+                    compiled_attn_plain(q, k, v, cf)
+                ms_c = triton.testing.do_bench(lambda: compiled_attn_plain(q, k, v, cf), warmup=10, rep=50)
             tflops_c = flops / (ms_c * 1e-3) / 1e12
-            compile_baselines.append({"shape_name": shape.get("name", ""), "ms": round(ms_c, 4), "tflops": round(tflops_c, 2)})
+            compile_baselines.append({"shape_name": shape.get("name", ""), "ms": round(ms_c, 4), "tflops": round(tflops_c, 2), "window_size": window_size})
         except Exception as exc:
             compile_baselines.append({"shape_name": shape.get("name", ""), "error": str(exc)[:200]})
     output["pytorch_baselines"] = pytorch_baselines
