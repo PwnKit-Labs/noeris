@@ -1,0 +1,65 @@
+{
+  "operator": "matmul",
+  "gpu": "A100",
+  "iterations": 5,
+  "configs_per_run": 6,
+  "include_curated": false,
+  "shapes": [
+    "tiny",
+    "small",
+    "medium",
+    "large",
+    "xlarge",
+    "tall_skinny"
+  ],
+  "cost_model": {
+    "path": ".noeris/cost-model.pkl",
+    "training_size": 516
+  },
+  "conditions": {
+    "baseline": {
+      "trajectory": [
+        58.625,
+        58.625,
+        58.625,
+        58.625,
+        58.625
+      ],
+      "final_best": 58.625,
+      "delta_vs_baseline_pct": 0.0
+    },
+    "cost_model": {
+      "trajectory": [
+        85.10333333333332,
+        85.23666666666668,
+        85.23666666666668,
+        85.23666666666668,
+        85.23666666666668
+      ],
+      "final_best": 85.23666666666668,
+      "delta_vs_baseline_pct": 45.39
+    },
+    "bandit": {
+      "trajectory": [
+        136.36666666666665,
+        137.51,
+        137.51,
+        137.51,
+        137.51
+      ],
+      "final_best": 137.51,
+      "delta_vs_baseline_pct": 134.56
+    },
+    "ensemble": {
+      "trajectory": [
+        82.955,
+        85.06166666666667,
+        85.12166666666667,
+        85.12166666666667,
+        85.13000000000001
+      ],
+      "final_best": 85.13000000000001,
+      "delta_vs_baseline_pct": 45.21
+    }
+  }
+}
