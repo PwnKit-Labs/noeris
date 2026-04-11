@@ -529,8 +529,15 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _run_triton_iterate(args) -> int:
-    """Run the Triton kernel search loop."""
-    from .modal_runner import run_benchmark_local, run_benchmark_modal
+    """Run the Triton kernel search loop.
+
+    Sends ALL selected configs to GPU in a single batch call (one cold start),
+    then records results to the ConfigDatabase.
+    """
+    from .modal_runner import (
+        BatchBenchmarkResult,
+        run_benchmark_batch_modal,
+    )
 
     db = ConfigDatabase(path=args.db_path)
     hardware = args.gpu
@@ -568,71 +575,89 @@ def _run_triton_iterate(args) -> int:
         proposed_configs=proposed_configs,
     )
 
-    # Run benchmarks
-    run_fn = run_benchmark_local if args.local else run_benchmark_modal
-    results = []
+    # Run ALL configs in a single GPU call (one cold start)
+    if args.local:
+        # Local mode: import and run locally
+        from .modal_runner import run_benchmark_local
+        results = []
+        for config in configs:
+            result = run_benchmark_local(config, shapes=shapes)
+            results.append({
+                "config_id": result.config_id,
+                "config": result.config,
+                "results": result.results if result.success else [],
+                "success": result.success,
+                "error": result.error,
+            })
+        batch_hardware = {}
+        batch_success = any(r["success"] for r in results)
+    else:
+        batch = run_benchmark_batch_modal(configs, shapes=shapes, gpu=args.gpu)
+        results = batch.config_results if batch.success else []
+        batch_hardware = batch.hardware
+        batch_success = batch.success
+        if not batch_success:
+            print(json.dumps({
+                "benchmark": "triton-matmul",
+                "error": batch.error,
+                "success": False,
+            }, indent=2))
+            return 1
+
+    # Record results to database
     best_tflops = 0.0
-    best_config_id = ""
+    best_config_id_found = ""
+    output_results = []
 
-    for config in configs:
-        cid = config_id(config)
-        if args.local:
-            result = run_fn(config, shapes=shapes)
-        else:
-            result = run_fn(config, shapes=shapes, gpu=args.gpu)
+    for config_result in results:
+        cid = config_result.get("config_id", "")
+        config = config_result.get("config", {})
+        shape_results = config_result.get("results", [])
 
-        config_results = []
-        if result.success:
-            for shape_result in result.results:
-                if shape_result.get("correct"):
-                    shape_info = {
-                        "M": int(shape_result["shape"].split("x")[0]),
-                        "N": int(shape_result["shape"].split("x")[1]),
-                        "K": int(shape_result["shape"].split("x")[2]),
-                    }
-                    is_new_best = db.record_result(
-                        shape=shape_info,
-                        hardware=result.hardware.get("gpu", hardware),
-                        config=config,
-                        tflops=shape_result.get("tflops", 0),
-                        ms=shape_result.get("ms", 0),
-                        correct=True,
-                        run_id=cid,
-                    )
-                    config_results.append({
-                        **shape_result,
-                        "new_best": is_new_best,
-                    })
+        recorded = []
+        for shape_result in shape_results:
+            if shape_result.get("correct") and shape_result.get("tflops"):
+                parts = shape_result["shape"].split("x")
+                shape_info = {"M": int(parts[0]), "N": int(parts[1]), "K": int(parts[2])}
+                hw = batch_hardware.get("gpu", hardware)
+                is_new_best = db.record_result(
+                    shape=shape_info,
+                    hardware=hw,
+                    config=config,
+                    tflops=shape_result["tflops"],
+                    ms=shape_result.get("ms", 0),
+                    correct=True,
+                    run_id=cid,
+                )
+                recorded.append({**shape_result, "new_best": is_new_best})
 
-            avg_tflops = 0.0
-            correct_results = [r for r in result.results if r.get("correct") and r.get("tflops")]
-            if correct_results:
-                avg_tflops = sum(r["tflops"] for r in correct_results) / len(correct_results)
+        correct_results = [r for r in shape_results if r.get("correct") and r.get("tflops")]
+        avg_tflops = (
+            sum(r["tflops"] for r in correct_results) / len(correct_results)
+            if correct_results else 0.0
+        )
+        if avg_tflops > best_tflops:
+            best_tflops = avg_tflops
+            best_config_id_found = cid
 
-            if avg_tflops > best_tflops:
-                best_tflops = avg_tflops
-                best_config_id = cid
-
-        results.append({
+        output_results.append({
             "config_id": cid,
             "config": config,
-            "success": result.success,
-            "error": result.error,
-            "shape_results": config_results,
+            "avg_tflops": round(avg_tflops, 2),
+            "shape_results": recorded,
         })
 
     db.save()
 
-    # Build output
     output = {
         "benchmark": "triton-matmul",
-        "hardware": hardware,
+        "hardware": batch_hardware.get("gpu", hardware),
         "configs_tested": len(configs),
-        "best_config_id": best_config_id,
+        "best_config_id": best_config_id_found,
         "best_avg_tflops": round(best_tflops, 2),
         "proposal": proposal_result,
-        "results": results,
-        "database_insights": db.get_insights(hardware=hardware),
+        "results": output_results,
+        "database_insights": db.get_insights(hardware=batch_hardware.get("gpu", hardware)),
     }
     print(json.dumps(output, indent=2))
     return 0
