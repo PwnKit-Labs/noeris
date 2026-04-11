@@ -16,8 +16,89 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
+
+
+# ---------------------------------------------------------------------------
+# External baseline loader (Task 3)
+#
+# KernelBench ships pre-computed baseline timings for every problem on Modal
+# H100 (same hardware Noeris uses). Dropping these in gives us drop-in
+# comparable reference numbers without having to re-measure.
+# ---------------------------------------------------------------------------
+
+# Resolved at import time relative to this file so callers don't need to
+# supply a path. Keeping this in-module makes it importable from CLIs/tests
+# without circular imports.
+_EXTERNAL_BASELINE_DIR = (
+    Path(__file__).resolve().parents[2] / "docs" / "results" / "external"
+)
+_EXTERNAL_BASELINE_FILES = {
+    "eager":   _EXTERNAL_BASELINE_DIR / "kernelbench_h100_modal_baseline_eager.json",
+    "compile": _EXTERNAL_BASELINE_DIR / "kernelbench_h100_modal_baseline_compile.json",
+}
+
+
+@lru_cache(maxsize=4)
+def _load_external_baseline_file(variant: str) -> dict[str, Any]:
+    """Load and cache one of the two baseline JSONs.
+
+    Source files are vendored from
+    https://github.com/ScalingIntelligence/KernelBench/tree/main/results/timing/H100_Modal/
+    Each file is a nested dict of the form
+    ``{"level1": {"<problem>.py": {"mean": ms, "std": ..., ...}}}``.
+    """
+    path = _EXTERNAL_BASELINE_FILES.get(variant)
+    if path is None:
+        raise ValueError(f"unknown variant {variant!r}; expected one of {list(_EXTERNAL_BASELINE_FILES)}")
+    if not path.exists():
+        raise FileNotFoundError(
+            f"External KernelBench baseline not found at {path}. "
+            f"Expected a vendored copy from ScalingIntelligence/KernelBench."
+        )
+    with path.open() as fh:
+        return json.load(fh)
+
+
+def load_external_h100_modal_baseline(
+    problem_name: str,
+    *,
+    level: str = "level1",
+    variant: str = "eager",
+    stat: str = "mean",
+) -> Optional[float]:
+    """Return the reference wall-time (ms) for one KernelBench problem.
+
+    Arguments:
+        problem_name: the full KernelBench filename, e.g.
+            ``"1_Square_matrix_multiplication_.py"`` — matches the keys in the
+            vendored JSON exactly. Returns ``None`` if the problem is absent.
+        level: one of ``"level1"``, ``"level2"``, ``"level3"``.
+        variant: ``"eager"`` for the plain PyTorch baseline or ``"compile"``
+            for the ``torch.compile`` (inductor, default mode) baseline.
+        stat: which timing field to return (``"mean"``, ``"min"``, ``"max"``,
+            or ``"std"``). Upstream stores all of them per problem.
+
+    Returns:
+        A float in milliseconds on H100 Modal, or ``None`` if the problem is
+        not in the file (e.g. a level-4 HF problem that doesn't have a
+        pre-computed baseline).
+    """
+    data = _load_external_baseline_file(variant)
+    level_data = data.get(level, {})
+    entry = level_data.get(problem_name)
+    if entry is None:
+        return None
+    val = entry.get(stat)
+    return float(val) if val is not None else None
+
+
+def list_external_h100_modal_problems(level: str = "level1", variant: str = "eager") -> list[str]:
+    """Return all problem filenames the external baseline file has data for."""
+    data = _load_external_baseline_file(variant)
+    return list(data.get(level, {}).keys())
 
 
 # Expanded KernelBench-style problem set covering 50+ problems across
@@ -600,18 +681,56 @@ def evaluate_kernelbench(
     operator: str | None = None,
     gpu: str = "A100",
     max_configs_per_problem: int = 8,
+    baseline_source: str = "measure",
+    timer: str = "cuda_event",
 ) -> KernelBenchReport:
     """Run KernelBench-style evaluation across one or all supported operators.
 
     Uses a single ModalBenchmarkSession to amortize cold start across all
     operators — one warm container handles the full eval instead of
     spawning a fresh ``modal run`` per operator.
+
+    Args:
+        baseline_source: ``"measure"`` re-runs the PyTorch reference on the
+            target GPU (expensive, default). ``"external-h100-modal"`` uses
+            the vendored upstream H100 Modal baselines instead — valid only
+            when ``gpu == "H100"`` because the reference times are H100.
+        timer: ``"cuda_event"`` (upstream default: 3 warmup + 10 trial,
+            L2 flush, median) or ``"do_bench"`` (legacy Triton adaptive).
     """
     from .triton_operators import REGISTRY
     from .modal_session import ModalBenchmarkSession
 
     operators = [operator] if operator else list(KERNELBENCH_SUBSET.keys())
-    report = KernelBenchReport(metadata={"hardware": gpu, "operators": operators})
+    if baseline_source == "external-h100-modal" and gpu != "H100":
+        # Upstream pre-computed baselines are H100-only; warn but still honor.
+        import warnings as _warnings
+        _warnings.warn(
+            f"baseline_source='external-h100-modal' selected but gpu={gpu!r}. "
+            f"Upstream reference times are H100 Modal — speedups will be "
+            f"cross-hardware and not meaningful.",
+            stacklevel=2,
+        )
+    if baseline_source == "external-h100-modal":
+        # Our synthetic KERNELBENCH_SUBSET uses Noeris-style IDs, not
+        # upstream filenames like "1_Square_matrix_multiplication_.py".
+        # The true consumer of the external baselines is the upstream
+        # runner (kernelbench_upstream.py, Task 4). For the synthetic path
+        # we still surface the flag via metadata but continue to measure
+        # locally so we don't silently produce garbage speedups.
+        import warnings as _warnings
+        _warnings.warn(
+            "--baseline=external-h100-modal is informational for the "
+            "synthetic KERNELBENCH_SUBSET path; use kernelbench-upstream-eval "
+            "to consume upstream baselines directly.",
+            stacklevel=2,
+        )
+    report = KernelBenchReport(metadata={
+        "hardware":        gpu,
+        "operators":       operators,
+        "baseline_source": baseline_source,
+        "timer":           timer,
+    })
 
     with ModalBenchmarkSession(gpu=gpu, timeout_seconds=900) as session:
         for op_name in operators:

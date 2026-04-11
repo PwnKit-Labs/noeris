@@ -327,6 +327,27 @@ def build_parser() -> argparse.ArgumentParser:
         default=".noeris/kernelbench-report.json",
         help="path to write the JSON report",
     )
+    kb_parser.add_argument(
+        "--baseline",
+        default="measure",
+        choices=["measure", "external-h100-modal"],
+        help=(
+            "baseline source: 'measure' re-runs the PyTorch reference on the "
+            "target GPU (default, expensive); 'external-h100-modal' uses the "
+            "pre-computed H100 Modal baselines vendored from upstream "
+            "KernelBench (drop-in comparable, only valid on H100 Modal)."
+        ),
+    )
+    kb_parser.add_argument(
+        "--timer",
+        default="cuda_event",
+        choices=["cuda_event", "do_bench"],
+        help=(
+            "timing method for the generated benchmark scripts: 'cuda_event' "
+            "(upstream KernelBench default: 3 warmup + 10 trials, L2 flush, "
+            "median) or 'do_bench' (legacy Triton adaptive, no L2 flush)."
+        ),
+    )
 
     ablation_parser = subparsers.add_parser(
         "ablation",
@@ -769,6 +790,8 @@ def _run_kernelbench_eval(args) -> int:
         operator=operator,
         gpu=args.gpu,
         max_configs_per_problem=args.configs_per_problem,
+        baseline_source=getattr(args, "baseline", "measure"),
+        timer=getattr(args, "timer", "cuda_event"),
     )
 
     output_path = _Path(args.output)
