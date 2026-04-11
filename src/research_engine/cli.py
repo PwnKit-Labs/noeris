@@ -349,6 +349,30 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    kb_up_parser = subparsers.add_parser(
+        "kernelbench-upstream-eval",
+        help=(
+            "run Noeris kernels against actual upstream KernelBench L1 "
+            "problems (fp32, upstream shapes, cuda_event+L2-flush timing) "
+            "for honest apples-to-apples comparison"
+        ),
+    )
+    kb_up_parser.add_argument(
+        "--gpu", default="A100",
+        help="GPU type for Modal execution (A100 or H100).",
+    )
+    kb_up_parser.add_argument(
+        "--timer",
+        default="cuda_event",
+        choices=["cuda_event", "do_bench"],
+        help="timing method (cuda_event matches upstream).",
+    )
+    kb_up_parser.add_argument(
+        "--output",
+        default="docs/results/kernelbench-upstream-l1-a100.md",
+        help="path to write the markdown summary (JSON path is auto-derived).",
+    )
+
     ablation_parser = subparsers.add_parser(
         "ablation",
         help="run cross-run learning ablation: with vs without database",
@@ -672,6 +696,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "kernelbench-eval":
         return _run_kernelbench_eval(args)
 
+    if args.command == "kernelbench-upstream-eval":
+        return _run_kernelbench_upstream_eval(args)
+
     if args.command == "ablation":
         return _run_ablation(args)
 
@@ -804,6 +831,25 @@ def _run_kernelbench_eval(args) -> int:
     print(report.summary_text())
     print(f"\nFull report written to {output_path}")
     print(f"Summary written to {summary_path}")
+    return 0
+
+
+def _run_kernelbench_upstream_eval(args) -> int:
+    """Task 4: run Noeris kernels against actual upstream L1 problems."""
+    from .kernelbench_upstream import run_kernelbench_upstream_eval
+
+    report = run_kernelbench_upstream_eval(
+        gpu=args.gpu,
+        timer=args.timer,
+    )
+    out_md = _Path(args.output)
+    out_md.parent.mkdir(parents=True, exist_ok=True)
+    out_md.write_text(report.summary_text())
+    out_json = out_md.with_suffix(".json")
+    out_json.write_text(json.dumps(report.to_dict(), indent=2) + "\n")
+    print(report.summary_text())
+    print(f"\nFull report: {out_json}")
+    print(f"Summary:     {out_md}")
     return 0
 
 
