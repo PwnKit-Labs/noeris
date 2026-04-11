@@ -59,6 +59,12 @@ KERNELBENCH_SUBSET = {
         {"id": "kb_L2_ce_long_llama", "n_rows": 4096, "n_cols": 32000, "level": 2},
         {"id": "kb_L2_ce_llama3", "n_rows": 2048, "n_cols": 128256, "level": 2},
     ],
+    "attention": [
+        {"id": "kb_L2_attn_short", "batch": 4, "heads": 16, "seq_len": 512, "head_dim": 64, "level": 2},
+        {"id": "kb_L2_attn_med", "batch": 2, "heads": 16, "seq_len": 2048, "head_dim": 128, "level": 2},
+        {"id": "kb_L3_attn_long", "batch": 1, "heads": 16, "seq_len": 4096, "head_dim": 128, "level": 3},
+        {"id": "kb_L3_attn_llama7b", "batch": 1, "heads": 32, "seq_len": 4096, "head_dim": 128, "level": 3},
+    ],
 }
 
 
@@ -190,6 +196,8 @@ def build_benchmark_script_with_baseline(
         from .triton_layernorm import generate_layernorm_benchmark_script as gen_fn
     elif operator == "cross_entropy":
         from .triton_cross_entropy import generate_cross_entropy_benchmark_script as gen_fn
+    elif operator == "attention":
+        from .triton_attention import generate_attention_benchmark_script as gen_fn
     else:
         raise ValueError(f"Unknown operator: {operator}")
 
@@ -286,6 +294,24 @@ def _pytorch_baseline_snippet(operator: str) -> str:
         bytes_moved = n_rows * n_cols * 2 + n_rows * 8 + n_rows * 2
         gb_per_s = bytes_moved / (ms * 1e-3) / 1e9
         pytorch_baselines.append({"shape_name": shape.get("name", ""), "ms": round(ms, 4), "gb_per_s": round(gb_per_s, 2), "tflops": round(gb_per_s, 2)})
+    output["pytorch_baselines"] = pytorch_baselines
+'''
+    elif operator == "attention":
+        return '''
+    # Measure PyTorch scaled_dot_product_attention baseline
+    pytorch_baselines = []
+    for shape in shapes:
+        batch = shape["batch"]
+        heads = shape["heads"]
+        seq_len = shape["seq_len"]
+        head_dim = shape["head_dim"]
+        q = torch.randn((batch, heads, seq_len, head_dim), device="cuda", dtype=torch.float16)
+        k = torch.randn((batch, heads, seq_len, head_dim), device="cuda", dtype=torch.float16)
+        v = torch.randn((batch, heads, seq_len, head_dim), device="cuda", dtype=torch.float16)
+        ms = triton.testing.do_bench(lambda: torch.nn.functional.scaled_dot_product_attention(q, k, v, is_causal=False), warmup=10, rep=50)
+        flops = 4.0 * batch * heads * seq_len * seq_len * head_dim
+        tflops = flops / (ms * 1e-3) / 1e12
+        pytorch_baselines.append({"shape_name": shape.get("name", ""), "ms": round(ms, 4), "tflops": round(tflops, 2)})
     output["pytorch_baselines"] = pytorch_baselines
 '''
     return ""

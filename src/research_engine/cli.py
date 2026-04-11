@@ -230,7 +230,7 @@ def build_parser() -> argparse.ArgumentParser:
     triton_parser.add_argument(
         "--operator",
         default="matmul",
-        choices=["matmul", "rmsnorm", "softmax", "layernorm", "cross_entropy"],
+        choices=["matmul", "rmsnorm", "softmax", "layernorm", "cross_entropy", "attention"],
         help="which Triton operator to search",
     )
     triton_parser.add_argument(
@@ -273,7 +273,7 @@ def build_parser() -> argparse.ArgumentParser:
     kb_parser.add_argument(
         "--operator",
         default="",
-        choices=["", "matmul", "rmsnorm", "softmax", "layernorm", "cross_entropy"],
+        choices=["", "matmul", "rmsnorm", "softmax", "layernorm", "cross_entropy", "attention"],
         help="restrict to one operator, or leave empty for all",
     )
     kb_parser.add_argument(
@@ -744,6 +744,13 @@ def _parse_operator_shape(operator_name: str, shape_str: str) -> dict:
         return {"n_rows": int(parts[0]), "hidden_dim": int(parts[1])}
     elif operator_name in ("softmax", "cross_entropy"):
         return {"n_rows": int(parts[0]), "n_cols": int(parts[1])}
+    elif operator_name == "attention":
+        return {
+            "batch": int(parts[0]),
+            "heads": int(parts[1]),
+            "seq_len": int(parts[2]),
+            "head_dim": int(parts[3]),
+        }
     return {"raw": shape_str}
 
 
