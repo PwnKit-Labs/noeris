@@ -106,7 +106,7 @@ def qk_norm_rope_kernel(
 
 
 # ---------------------------------------------------------------------------
-# Backward kernel — the novel contribution
+# Backward kernel — fused training prologue (no known prior art for backward)
 # ---------------------------------------------------------------------------
 
 @triton.jit
@@ -526,6 +526,7 @@ QK_NORM_ROPE_BWD_SPEC = register_operator(TritonOperatorSpec(
         "Backward pass for fused Gemma 3/4 attention prologue: QK-RMSNorm "
         "(1+scale affine) + split-pair RoPE. Recomputes forward intermediates "
         "(FlashAttention-style), uses atomic_add for dscale accumulation. "
-        "Novel — no framework fuses the Gemma prologue backward pass."
+        "To our knowledge, no existing framework fuses the full Gemma "
+        "prologue backward pass (existing fusions are inference-only)."
     ),
 ))

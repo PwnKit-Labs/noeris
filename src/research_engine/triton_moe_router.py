@@ -517,7 +517,7 @@ MOE_ROUTER_SPEC = register_operator(TritonOperatorSpec(
     shared_memory_check_fn=moe_router_shared_memory_check,
     description=(
         "Fused Gemma 4 26B-A4B MoE router: hidden @ W -> softmax -> top-8 -> "
-        "renormalize, in ONE Triton kernel. Novel vs vLLM which launches 4 "
-        "separate kernels per router. Shared expert is a separate dense path."
+        "renormalize, in ONE Triton kernel. vLLM launches 4 separate "
+        "kernels per router. Shared expert is a separate dense path."
     ),
 ))

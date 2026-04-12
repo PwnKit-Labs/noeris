@@ -147,8 +147,8 @@ def generate_attention_decode_benchmark_script(
     return f'''#!/usr/bin/env python3
 """Auto-generated paged-KV decode attention benchmark.
 
-Novel Triton implementation of single-query decode against a paged KV cache.
-vLLM has no Triton paged attention -- this is from-scratch.
+From-scratch Triton implementation of single-query decode against a paged KV cache.
+vLLM's paged attention is CUDA-only; this is a Triton alternative.
 """
 
 import json
@@ -548,7 +548,7 @@ ATTENTION_DECODE_SPEC = register_operator(TritonOperatorSpec(
     description=(
         "Decode-time paged-KV attention: single-query against non-contiguous "
         "page-table-indexed KV cache with online softmax, GQA, and sliding "
-        "window. Novel Triton implementation -- vLLM has no Triton paged "
-        "attention."
+        "window. From-scratch Triton implementation -- vLLM's paged "
+        "attention is CUDA-only."
     ),
 ))

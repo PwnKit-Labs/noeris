@@ -128,7 +128,7 @@ Source of the kernel itself: [`src/research_engine/triton_qk_norm_rope.py`](http
 
 The kernel itself is mine. But it would not have happened without:
 
-1. **The [vLLM team's open-source Gemma 4 implementation](https://github.com/vllm-project/vllm/pull/38826)**, which I read directly to determine what they *don't* fuse. The gap wasn't obvious from docs.
+1. **The [vLLM team's open-source Gemma 4 implementation](https://github.com/vllm-project/vllm/pull/38826)**, which I read directly to understand their fusion approach. vLLM has `enable_qk_norm_rope_fusion` (disabled by default due to H100 issues), SGLang has `fused_qknorm_rope`, and Modular has fused RoPE+RMSNorm. Our contribution is making the fusion practical via parameterized Triton with autotuning and supporting Gemma's `(1+w)` affine mode.
 2. **[ScalingIntelligence's KernelBench](https://github.com/ScalingIntelligence/KernelBench)**, which gave me a disciplined timing methodology (`cuda_event` + L2 flush + 3W/10T median) I could match exactly, so the numbers above are directly comparable to upstream methodology.
 3. **Google's Gemma 4 architectural audit materials**: HuggingFace [config.json files](https://huggingface.co/google/gemma-4-31B), the [Gemma 3 technical report](https://arxiv.org/html/2503.19786v1) on arXiv, and the [Kaitchup architecture breakdown](https://kaitchup.substack.com/p/gemma-4-31b-and-26b-a4b-architecture) I used to confirm the `head_dim=256/512`, GQA ratios, and `(1 + weight)` affine details.
 
@@ -136,7 +136,7 @@ The kernel itself is mine. But it would not have happened without:
 
 The fused kernel was found through an autonomous kernel optimization system called **Noeris** that I've been building. It has 9 parameterized Triton operators, a shape-indexed cross-run configuration database, a learned cost model (R² = 0.94), a multi-armed bandit for config selection, and an adaptive meta-bandit router that learns which selector to trust per iteration. The cross-hardware transfer Spearman correlation (A100 → H100) is 0.967.
 
-The kernel above is the system's first measured novel-kernel result against a SOTA reference stack. Paper draft: [`docs/paper/noeris.md`](https://github.com/PwnKit-Labs/noeris/blob/main/docs/paper/noeris.md). MIT License. Questions and corrections welcome.
+The kernel above is the system's first measured fused-kernel result against a SOTA reference stack — building on prior art (vLLM's `enable_qk_norm_rope_fusion`, SGLang's `fused_qknorm_rope`) but making the fusion practical via parameterized Triton with autotuning. Paper draft: [`docs/paper/noeris.md`](https://github.com/PwnKit-Labs/noeris/blob/main/docs/paper/noeris.md). MIT License. Questions and corrections welcome.
 
 ---
 

@@ -39,7 +39,7 @@ AutoKernel ([arXiv:2603.21331](https://arxiv.org/abs/2603.21331)) is the closest
 
 ---
 
-## 3. Novel Kernel: Fused QK-RMSNorm+RoPE
+## 3. Fused QK-RMSNorm+RoPE (Practical Implementation)
 
 | Metric | Noeris | Nearest Competitor |
 |---|---|---|
@@ -76,7 +76,7 @@ AutoKernel ([arXiv:2603.21331](https://arxiv.org/abs/2603.21331)) is the closest
 
 ### Where Noeris wins
 
-1. **Novel fused kernel**: 10-13x on QK-RMSNorm+RoPE is a real, reproducible result with no published competitor on A100/H100.
+1. **Practical fused kernel**: 10-13x on QK-RMSNorm+RoPE is a real, reproducible result. Prior art exists (vLLM's `enable_qk_norm_rope_fusion`, SGLang's `fused_qknorm_rope`) but is disabled or limited. Our Triton implementation with autotuning makes the fusion practical on A100/H100 and supports Gemma's `(1+w)` affine mode.
 2. **Memory-bound operators**: RMSNorm (11.66x), cross-entropy (9.65x), softmax (6.38x) beat AutoKernel by 2-4x on speedup ratios.
 3. **Cost**: Full evaluation costs $1.44. Reproduction is trivial.
 4. **Search infrastructure**: Cost model (+45% matmul) and bandit selector (+133% matmul) demonstrably outperform random grid search when the parameter space is large.
@@ -107,7 +107,7 @@ The fused QK-RMSNorm+RoPE kernel is a legitimate systems contribution, but a sin
 
 ### Strongest submission angle
 
-**"Fused operator kernels for Gemma-family inference + a search infrastructure that discovers hardware-specific configs across GPU tiers."** Lead with the novel kernel (10-13x, three GPUs, zero competitors), support with the cost model/bandit ablation, and present the per-operator results as secondary evidence. Acknowledge matmul and attention losses honestly.
+**"Fused operator kernels for Gemma-family inference + a search infrastructure that discovers hardware-specific configs across GPU tiers."** Lead with the practical fused kernel (10-13x prologue speedup, three GPUs; prior art exists but is disabled/limited — vLLM reports 2-3% E2E), support with the cost model/bandit ablation, and present the per-operator results as secondary evidence. Acknowledge matmul and attention losses honestly.
 
 **Recommended venue**: MLSys 2027 (systems track), NeurIPS 2026 workshop on efficient ML, or ISCA/MICRO workshop on GPU optimization. A full MLSys/NeurIPS main-track paper would need either (a) the cross-run learning ablation to go positive with longer budgets, or (b) upstream KernelBench full-suite results that are competitive with Kernel-Smith/CUDA Agent.
 

@@ -565,6 +565,9 @@ QK_NORM_ROPE_SPEC = register_operator(TritonOperatorSpec(
     shared_memory_check_fn=qk_norm_rope_shared_memory_check,
     description=(
         "Fused Gemma 3/4 attention prologue: QK-RMSNorm (1+scale affine) + "
-        "split-pair RoPE. Novel vs vLLM which launches 4 separate kernels."
+        "split-pair RoPE. Prior art exists (vLLM enable_qk_norm_rope_fusion, "
+        "SGLang fused_qknorm_rope) but disabled/limited; our Triton "
+        "implementation with autotuning makes it practical and supports "
+        "Gemma (1+w) affine mode."
     ),
 ))

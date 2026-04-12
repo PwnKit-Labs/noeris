@@ -99,25 +99,25 @@ Clean FP8 GEMM kernels with fine-grained scaling for Hopper and Blackwell. Up to
 
 ### 2.2 Co-Evolving World Model for Triton Optimization
 **What:** Adapt K-Search's co-evolving world model concept to Triton autotuning -- maintain explicit hypotheses about WHY certain tile sizes / num_warps / num_stages work for certain shapes, and use those hypotheses to guide config proposals.  
-**Why it's novel:** K-Search does this for CUDA kernel structure. Nobody has applied it to Triton config space where the search dimensions are well-defined (BLOCK_M/N/K, warps, stages, GROUP_SIZE).  
+**Why it's novel:** K-Search does this for CUDA kernel structure. To our knowledge, no published system has applied it to Triton config space where the search dimensions are well-defined (BLOCK_M/N/K, warps, stages, GROUP_SIZE).  
 **Difficulty:** 4-6 weeks.  
 **Builds on:** Existing hypothesis engine, LLM proposer.
 
 ### 2.3 Hardware-Counter-Guided Optimization Loop
 **What:** Integrate NCU/Nsight profiling metrics (compute utilization, memory bandwidth, L2 cache hit rate, occupancy, stall breakdown) into the optimization feedback loop, not just wall-clock time.  
-**Why it's novel:** KernelAgent does this for one-shot optimization. No autonomous multi-run system uses hardware counters to guide iterative config search. The counter data could feed into the GP surrogate.  
+**Why it's novel:** KernelAgent does this for one-shot optimization. To our knowledge, no autonomous multi-run system uses hardware counters to guide iterative config search. The counter data could feed into the GP surrogate.  
 **Difficulty:** 2-3 weeks (NCU integration, metric extraction, feedback encoding).  
 **Builds on:** Existing Modal GPU infrastructure, smoke tests.
 
 ### 2.4 Fused Training Prologue Kernels (Beyond Inference)
 **What:** Extend QK-RMSNorm+RoPE fusion to the training backward pass. Fuse dRoPE + dRMSNorm + dQ/dK into a single kernel for Gemma 4 fine-tuning.  
-**Why it's novel:** vLLM has a forward-only `enable_qk_norm_rope_fusion` pass (disabled by default due to H100 regression). All existing fusions (Liger, Unsloth, vLLM) are either inference-only or fuse individual ops. No framework fuses the full Gemma attention prologue backward pass.  
+**Why it's novel:** vLLM has a forward-only `enable_qk_norm_rope_fusion` pass (disabled by default due to H100 regression). SGLang has `fused_qknorm_rope`, Modular has fused RoPE+RMSNorm kernels. All existing fusions (Liger, Unsloth, vLLM, SGLang) are either inference-only or fuse individual ops. To our knowledge, no framework fuses the full Gemma attention prologue backward pass.  
 **Difficulty:** 4-6 weeks (backward pass Triton is harder, need gradient verification).  
 **Builds on:** Existing QK-RMSNorm+RoPE forward kernel, verification infrastructure.
 
 ### 2.5 Autonomous FP8 Kernel Search
 **What:** Add FP8 variants to Noeris's operator suite. Use the autonomous search loop to find optimal FP8 tile configs, which have a different performance landscape than BF16/FP16.  
-**Why it's novel:** DeepGEMM hand-tunes FP8 configs. Nobody has applied autonomous config search to FP8 Triton kernels specifically.  
+**Why it's novel:** DeepGEMM hand-tunes FP8 configs. To our knowledge, no published system has applied autonomous config search to FP8 Triton kernels specifically.  
 **Difficulty:** 3-4 weeks (need H100/B200 access, FP8 Triton support is maturing).  
 **Builds on:** Existing grouped_gemm, matmul operators.
 
@@ -194,7 +194,7 @@ Add NCU metric extraction to the Modal benchmark loop. Collect compute utilizati
 ### Priority 3: Fused Training Backward Pass for QK-RMSNorm+RoPE (4-6 weeks)
 **Novelty: High | Impact: Medium-High | Tractability: Medium**
 
-The forward fusion is proven (10-13x). Building the backward pass makes the kernel usable for training, not just inference. No existing framework fuses the Gemma prologue backward pass. This turns the paper from "inference optimization" into "training optimization" -- much higher impact story.
+The forward fusion is proven (10-13x). Building the backward pass makes the kernel usable for training, not just inference. To our knowledge, no existing framework fuses the full Gemma prologue backward pass (existing fusions are inference-only). This turns the paper from "inference optimization" into "training optimization" -- much higher impact story.
 
 ### Priority 4: FP8 Kernel Autotuning (3-4 weeks)
 **Novelty: Medium | Impact: High | Tractability: Medium**

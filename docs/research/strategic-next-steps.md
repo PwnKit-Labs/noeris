@@ -141,7 +141,7 @@ Arguments for eventually adding code gen:
 **Day 10-11: Paged-KV decode attention benchmarks.**
 - The from-scratch Triton paged-KV decode exists but lacks published A100/H100 numbers.
 - Run full shape sweep. Compare against vLLM's CUDA paged attention (if accessible via Python API) or against FlashDecoding.
-- This is the second novel kernel claim.
+- This is the second fused-kernel claim (paged-KV decode has no prior Triton implementation in vLLM).
 
 **Day 12: MAP-Elites behavioral dimension analysis.**
 - Visualize the MAP-Elites archive: plot config diversity along (memory-bound vs compute-bound, tile size, occupancy) axes.
@@ -161,7 +161,7 @@ Arguments for eventually adding code gen:
 | 3 | Backward A100/H100 numbers | Training applicability claim |
 | 5 | Shape-transfer ablation | Validates or kills the system thesis |
 | 9 | Multi-operator stacking | End-to-end speedup claim |
-| 11 | Paged-KV decode numbers | Second novel kernel |
+| 11 | Paged-KV decode numbers | Second fused-kernel claim |
 | 14 | Submission-ready draft | — |
 
 ### What NOT to build
