@@ -461,7 +461,7 @@ def _sanitize_source_assessments(
     if not isinstance(payload, list):
         return []
     valid_sources = {source.identifier for source in sources}
-    assessments: list[SourceAssessment] = []
+    assessments_by_source: dict[str, SourceAssessment] = {}
     for item in payload:
         if not isinstance(item, dict):
             continue
@@ -470,14 +470,21 @@ def _sanitize_source_assessments(
         confidence = _sanitize_level(item.get("confidence"), allowed={"low", "medium", "high"})
         if source_id not in valid_sources or not rationale:
             continue
-        assessments.append(
-            SourceAssessment(
-                source_id=source_id,
-                confidence=confidence,
-                rationale=rationale,
-            )
+        candidate = SourceAssessment(
+            source_id=source_id,
+            confidence=confidence,
+            rationale=rationale,
         )
-    return assessments[: len(sources)]
+        existing = assessments_by_source.get(source_id)
+        if existing is None or _confidence_weight(candidate.confidence) > _confidence_weight(existing.confidence):
+            assessments_by_source[source_id] = candidate
+            continue
+        if (
+            _confidence_weight(candidate.confidence) == _confidence_weight(existing.confidence)
+            and len(candidate.rationale) > len(existing.rationale)
+        ):
+            assessments_by_source[source_id] = candidate
+    return list(assessments_by_source.values())[: len(sources)]
 
 
 def _backfill_source_assessments(
@@ -609,6 +616,15 @@ def _sanitize_level(value: object, *, allowed: set[str]) -> str:
     if not isinstance(value, str):
         return "medium"
     text = value.strip().lower()
+    aliases = {
+        "weak": "low",
+        "uncertain": "low",
+        "moderate": "medium",
+        "mixed": "medium",
+        "strong": "high",
+        "certain": "high",
+    }
+    text = aliases.get(text, text)
     return text if text in allowed else "medium"
 
 
