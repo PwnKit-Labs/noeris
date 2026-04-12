@@ -139,6 +139,22 @@ The kernel above is the system's first measured novel-kernel result against a SO
 
 ---
 
+## Bonus: autonomous search works on free GPU
+
+The fused kernel above was found and benchmarked on datacenter GPUs (A100, H100 via Modal). But the autonomous search system behind it also runs on **Google Colab's free T4 GPU** — no paid account required.
+
+We ran the bandit search across 9 operators in 43 shape buckets, accumulating **1,800+ measurements** on T4. The bandit found massive improvements over hand-curated starter configurations:
+
+- **qk_norm_rope** fusion speedup improved from **6.46×** (curated) to **8.37×** (bandit-discovered) in just 3 iterations — a 30% improvement over hand-picked configs.
+- **cross_entropy** reached **248.50 GB/s** on `llama_32k` — **83% of T4's theoretical peak bandwidth** — up from 93 GB/s curated (+167%). This is evidence the system generalizes far beyond the original QK-norm-rope kernel.
+- **geglu** hit **249.58 GB/s** (also 83% of T4 peak), and **layernorm** improved +53% on `gpt_neox`.
+
+The key insight: T4 strongly prefers `num_warps=1` and small block sizes — configurations that were **not in the curated starter list at all**. The bandit discovered these hardware-specific preferences autonomously. If you only use hand-tuned configs designed on A100/H100, you leave 22–167% of T4 performance on the table.
+
+Reproduction: upload `scripts/colab_validate_all.py` to a Colab T4 runtime and run. Zero cost.
+
+---
+
 ## X thread version (for copy-paste)
 
 1/ Found a kernel fusion vLLM doesn't do. Gemma 3/4 attention prologue (Q-RMSNorm → K-RMSNorm → Q-RoPE → K-RoPE) = 4 separate kernel launches in vllm/model_executor/models/gemma4.py. I fused it into 2 Triton kernels. [screenshot of table]

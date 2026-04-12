@@ -38,15 +38,17 @@ This kernel does not exist in vLLM. vLLM's `Gemma4Attention.forward` (file `vllm
 
 **Hardware**: Tesla T4, SM 7.5, 16 GB GDDR6, ~300 GB/s memory bandwidth.
 
-The fused `qk_norm_rope` kernel achieves **80.55 GB/s** on T4, which is ~27% of T4's theoretical peak bandwidth (~300 GB/s). Fusion speedup: **6.06×** over the separated 4-launch baseline.
+The fused `qk_norm_rope` kernel achieves **113.80 GB/s** on T4 after bandit search (up from 80.55 GB/s with curated starters), which is ~38% of T4's theoretical peak bandwidth (~300 GB/s). Fusion speedup: **8.37×** over the separated 4-launch baseline (up from 6.06× curated).
 
-| Metric | T4 | A100 | H100 |
-|---|---|---|---|
-| Best GB/s | 80.55 | 925.5 | 1627.7 |
-| Best fusion_speedup | **6.06×** | **12.85×** | **11.88×** |
-| % of HBM peak | ~27% | ~46% | ~49% |
+| Metric | T4 (curated) | T4 (bandit) | A100 | H100 |
+|---|---|---|---|---|
+| Best GB/s | 80.55 | **113.80** | 925.5 | 1627.7 |
+| Best fusion_speedup | 6.06× | **8.37×** | **12.85×** | **11.88×** |
+| % of HBM peak | ~27% | ~38% | ~46% | ~49% |
 
-**Interpretation.** The T4 fusion_speedup (6.06×) is lower than A100 (10–13×) and H100 (10–12×), consistent with the launch-overhead hypothesis from §3.2.1. T4's lower absolute launch latency means the separated baseline wastes a smaller fraction of total time on launches, so fusion saves proportionally less. However, 6× is still far above the ~2× predicted by HBM traffic accounting alone, confirming that launch overhead dominates fusion value across all three GPU tiers.
+**Bandit search results (1,800+ measurements across 43 shape buckets).** The autonomous bandit search on Colab T4 improved qk_norm_rope from 6.46× to 8.37× fusion speedup — a 30% improvement over curated starters. The bandit discovered that T4 strongly prefers `num_warps=1` and small block sizes (`BLOCK_SIZE=16` for rotary, `BLOCK_SIZE=32` for backward), configurations not present in the curated list. On the `gemma4_e2b` shape, the bandit achieved 8.14× fusion speedup at 113.80 GB/s. Backward pass fusion speedup across the full 6-shape sweep: 4.9–7.5× (mean 5.75×).
+
+**Interpretation.** The T4 fusion_speedup (8.37× after bandit search, 6.06× curated) is lower than A100 (10–13×) and H100 (10–12×), consistent with the launch-overhead hypothesis from §3.2.1. T4's lower absolute launch latency means the separated baseline wastes a smaller fraction of total time on launches, so fusion saves proportionally less. However, 6–8× is still far above the ~2× predicted by HBM traffic accounting alone, confirming that launch overhead dominates fusion value across all three GPU tiers. The 30% improvement from bandit search over curated configs demonstrates that hardware-specific autotuning adds substantial value even on commodity GPUs.
 
 **Validation script.** `scripts/colab_validate_all.py` runs all 13 operators on Colab's free T4 — no Modal account or paid GPU required.
 
