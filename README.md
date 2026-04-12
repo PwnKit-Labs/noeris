@@ -1,8 +1,19 @@
+<p align="center">
+  <img src="docs/brand/noeris-mark.svg" alt="Noeris mark" width="96" height="96" />
+</p>
+
 # Noeris
 
-Autonomous GPU kernel search with parameterized Triton templates, shape-indexed cross-run memory, and learned selectors.
+> PwnKit Labs Research OS for autonomous empirical discovery.
 
-**PwnKit Labs project.** Noeris is the Research OS inside PwnKit Labs: open-source adversarial reliability infrastructure for both humans and AI agents. Its current flagship track is autonomous GPU kernel optimization.
+Noeris is the Research OS inside PwnKit Labs: open-source adversarial reliability infrastructure for both humans and AI agents. Its current flagship track is autonomous GPU kernel optimization.
+
+<p align="center">
+  <img alt="Python" src="https://img.shields.io/badge/python-3.11+-111827?style=flat-square&logo=python&logoColor=F7C948">
+  <img alt="License" src="https://img.shields.io/badge/license-MIT-111827?style=flat-square">
+  <img alt="Flagship track" src="https://img.shields.io/badge/flagship-gpu%20kernel%20search-111827?style=flat-square">
+  <img alt="Hardware" src="https://img.shields.io/badge/validated-T4%20%7C%20A100%20%7C%20H100-111827?style=flat-square">
+</p>
 
 ## TL;DR
 
@@ -17,6 +28,13 @@ Autonomous GPU kernel search with parameterized Triton templates, shape-indexed 
 - **~$0.01 per iteration** on Modal. The full A100+H100 fusion_speedup table above was produced for under $0.20.
 
 Paper draft (12,500+ words): [`docs/paper/noeris.md`](docs/paper/noeris.md).
+
+## At a glance
+
+- **Research OS, not a one-off benchmark script.** Shared ingestion, memory, execution, and verification substrate.
+- **Flagship track: GPU kernels.** Parameterized Triton search with cross-run memory, learned selectors, and real hardware validation.
+- **Systems story with evidence.** KernelBench-style reports, paper draft, hardware comparison tables, and stored artifacts.
+- **Broader ceiling preserved.** The same substrate can support long-context, tool-use, evaluation, and future research tracks.
 
 ## Architecture
 
