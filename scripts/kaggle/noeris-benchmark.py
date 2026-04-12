@@ -33,21 +33,16 @@ if dataset_zip and dataset_zip.endswith(".zip"):
     subprocess.check_call([sys.executable, "-m", "pip", "install",
                            "-e", "/tmp/noeris", "numpy", "scikit-learn", "-q"])
 elif dataset_zip and os.path.isdir(dataset_zip):
-    # Dataset was auto-extracted by Kaggle
-    print(f"Installing from auto-extracted dataset at {dataset_zip}...")
-    # The extracted root should contain pyproject.toml
-    extract_root = os.path.dirname(dataset_zip)
-    subprocess.check_call([sys.executable, "-m", "pip", "install",
-                           "-e", extract_root, "numpy", "scikit-learn", "-q"])
-    os.makedirs("/tmp/noeris", exist_ok=True)
+    # Dataset was auto-extracted by Kaggle (read-only filesystem)
+    # Copy to /tmp/ for pip install -e (needs write access for .egg-info)
     import shutil
-    for item in ["src", "scripts", "pyproject.toml"]:
-        src_path = os.path.join(extract_root, item)
-        dst_path = os.path.join("/tmp/noeris", item)
-        if os.path.isdir(src_path):
-            shutil.copytree(src_path, dst_path, dirs_exist_ok=True)
-        elif os.path.isfile(src_path):
-            shutil.copy2(src_path, dst_path)
+    kaggle_root = "/kaggle/input/noeris-source-code"
+    print(f"Copying from read-only Kaggle input to /tmp/noeris...")
+    if os.path.exists("/tmp/noeris"):
+        shutil.rmtree("/tmp/noeris")
+    shutil.copytree(kaggle_root, "/tmp/noeris")
+    subprocess.check_call([sys.executable, "-m", "pip", "install",
+                           "-e", "/tmp/noeris", "numpy", "scikit-learn", "-q"])
 else:
     # Fallback: clone from GitHub (needs internet/phone verification)
     print(f"Dataset not found at any candidate path, cloning from GitHub...")
