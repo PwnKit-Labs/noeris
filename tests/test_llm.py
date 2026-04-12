@@ -397,7 +397,7 @@ class LlmPlannerTests(unittest.TestCase):
                 "output_text": (
                     '{"claims":[{"title":"Claim","source":"source-1","summary":"Summary",'
                     '"evidence_refs":["source-1"]}],"open_questions":["What next?"],'
-                    '"contradictions":[],"source_assessments":[{"source_id":"source-1","confidence":"strong","rationale":"Direct primary source"}]}'
+                    '"contradictions":[],"source_assessments":[{"source_id":"source-1","confidence":"strong","rationale":"Direct primary source","evidence_type":"direct"}]}'
                 )
             }
         )
@@ -425,6 +425,7 @@ class LlmPlannerTests(unittest.TestCase):
         )
 
         self.assertEqual(context.source_assessments[0].confidence, "high")
+        self.assertEqual(context.source_assessments[0].evidence_type, "direct")
 
     def test_research_memory_keeps_stronger_duplicate_assessment(self) -> None:
         http_client = _FakeHttpClient(
@@ -433,8 +434,8 @@ class LlmPlannerTests(unittest.TestCase):
                     '{"claims":[{"title":"Claim","source":"source-1","summary":"Summary",'
                     '"evidence_refs":["source-1"]}],"open_questions":["What next?"],'
                     '"contradictions":[],"source_assessments":['
-                    '{"source_id":"source-1","confidence":"low","rationale":"Weak hint"},'
-                    '{"source_id":"source-1","confidence":"high","rationale":"Direct primary source with explicit benchmark evidence"}'
+                    '{"source_id":"source-1","confidence":"low","rationale":"Weak hint","evidence_type":"speculative"},'
+                    '{"source_id":"source-1","confidence":"high","rationale":"Direct primary source with explicit benchmark evidence","evidence_type":"direct"}'
                     ']}'
                 )
             }
@@ -464,7 +465,43 @@ class LlmPlannerTests(unittest.TestCase):
 
         self.assertEqual(len(context.source_assessments), 1)
         self.assertEqual(context.source_assessments[0].confidence, "high")
+        self.assertEqual(context.source_assessments[0].evidence_type, "direct")
         self.assertIn("benchmark evidence", context.source_assessments[0].rationale)
+
+    def test_research_memory_normalizes_evidence_type_synonyms(self) -> None:
+        http_client = _FakeHttpClient(
+            {
+                "output_text": (
+                    '{"claims":[{"title":"Claim","source":"source-1","summary":"Summary",'
+                    '"evidence_refs":["source-1"]}],"open_questions":["What next?"],'
+                    '"contradictions":[],"source_assessments":[{"source_id":"source-1","confidence":"medium","rationale":"Heuristic summary","evidence_type":"speculative"}]}'
+                )
+            }
+        )
+        client = ResponsesApiClient(
+            config=ResponsesProviderConfig(
+                provider_name="openai",
+                api_key="sk-test",
+                base_url="https://api.openai.com/v1",
+                model="gpt-4.1-mini",
+            ),
+            http_client=http_client,
+        )
+        planner = LlmResearchMemory(client=client)
+        context = planner.build_context(
+            ResearchTopic(name="tool use", objective="improve reliability"),
+            [
+                ResearchSource(
+                    identifier="source-1",
+                    kind="paper",
+                    title="Source",
+                    locator="https://example.com",
+                    excerpt="Example",
+                )
+            ],
+        )
+
+        self.assertEqual(context.source_assessments[0].evidence_type, "speculative")
 
     def test_research_memory_falls_back_to_source_claims_when_model_returns_none(self) -> None:
         http_client = _FakeHttpClient(

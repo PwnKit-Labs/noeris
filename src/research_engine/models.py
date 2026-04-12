@@ -36,6 +36,7 @@ class SourceAssessment:
     source_id: str
     confidence: str
     rationale: str
+    evidence_type: str = "indirect"
 
 
 @dataclass(slots=True)

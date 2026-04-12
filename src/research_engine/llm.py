@@ -468,12 +468,17 @@ def _sanitize_source_assessments(
         source_id = _clean_text(item.get("source_id"))
         rationale = _clean_text(item.get("rationale"))
         confidence = _sanitize_level(item.get("confidence"), allowed={"low", "medium", "high"})
+        evidence_type = _sanitize_level(
+            item.get("evidence_type"),
+            allowed={"direct", "indirect", "speculative"},
+        )
         if source_id not in valid_sources or not rationale:
             continue
         candidate = SourceAssessment(
             source_id=source_id,
             confidence=confidence,
             rationale=rationale,
+            evidence_type=evidence_type,
         )
         existing = assessments_by_source.get(source_id)
         if existing is None or _confidence_weight(candidate.confidence) > _confidence_weight(existing.confidence):
@@ -505,6 +510,7 @@ def _backfill_source_assessments(
                 source_id=source.identifier,
                 confidence="medium",
                 rationale=rationale,
+                evidence_type="indirect",
             )
         )
     return output[: len(sources)]
@@ -790,8 +796,9 @@ _RESEARCH_CONTEXT_SCHEMA = {
                     "source_id": {"type": "string"},
                     "confidence": {"type": "string"},
                     "rationale": {"type": "string"},
+                    "evidence_type": {"type": "string"},
                 },
-                "required": ["source_id", "confidence", "rationale"],
+                "required": ["source_id", "confidence", "rationale", "evidence_type"],
             },
         },
     },
