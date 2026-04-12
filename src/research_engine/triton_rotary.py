@@ -216,11 +216,12 @@ def rotary_kernel(
     x_even = tl.load(x_base + 2 * offs, mask=mask, other=0.0).to(tl.float32)
     x_odd = tl.load(x_base + 2 * offs + 1, mask=mask, other=0.0).to(tl.float32)
 
-    # cos/sin lookup — use a simpler indexing: we require the launcher
-    # to compute s_idx and pass it via cos_ptr_offset on the host side.
-    # For simplicity, cos/sin for this (batch,seq,head) row live at cos_ptr.
-    c = tl.load(cos_ptr + offs, mask=mask, other=1.0).to(tl.float32)
-    s = tl.load(sin_ptr + offs, mask=mask, other=0.0).to(tl.float32)
+    # cos/sin lookup: the flat launcher expands cos/sin to (B*S*H, D//2)
+    # so each program's row is at offset pid * cos_stride_s.
+    cos_base = cos_ptr + pid * cos_stride_s
+    sin_base = sin_ptr + pid * cos_stride_s
+    c = tl.load(cos_base + offs, mask=mask, other=1.0).to(tl.float32)
+    s = tl.load(sin_base + offs, mask=mask, other=0.0).to(tl.float32)
 
     out_even = x_even * c - x_odd * s
     out_odd = x_even * s + x_odd * c
