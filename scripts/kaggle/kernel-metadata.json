@@ -1,0 +1,13 @@
+{
+  "id": "dtozturk02/noeris-gpu-benchmark",
+  "title": "Noeris GPU Benchmark — 14 Operators on T4",
+  "code_file": "noeris-benchmark.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_internet": true,
+  "competition_sources": [],
+  "dataset_sources": [],
+  "kernel_sources": []
+}
