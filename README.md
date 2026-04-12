@@ -5,8 +5,8 @@ Autonomous GPU kernel search with parameterized Triton templates, shape-indexed 
 ## TL;DR
 
 - **Novel kernel: fused QK-RMSNorm + RoPE prologue for Gemma 3/4.** vLLM does not fuse this sequence (confirmed by source read at [`vllm/model_executor/models/gemma4.py:395-427`](https://github.com/vllm-project/vllm/pull/38826)). Our fused Triton kernel beats vLLM's 4-launch separated baseline by **10.2–12.9× on A100** and **10.4–11.9× on H100** across all 6 Gemma 3/4 shape buckets (60/60 correct). Peak throughput **1627.7 GB/s on H100** (≈49% of HBM3 theoretical peak). See [`docs/results/qk-norm-rope-fusion-speedup.md`](docs/results/qk-norm-rope-fusion-speedup.md).
-- **9 parameterized Triton operators**: matmul, rmsnorm, softmax, layernorm, cross_entropy, attention (GQA + causal + sliding-window + fused QK-norm), rotary, fused GeGLU, fused QK-RMSNorm+RoPE (new).
-- **Full Gemma 4 attention support**: grouped-query attention with `NUM_KV_HEADS` / `GROUP_SIZE` constexprs, `head_dim=512` global-layer buckets, QK-norm with Gemma-mode `(1 + w)` affine — covers 31B Dense (32:4 GQA), 26B-A4B (16:2 GQA), E2B (8:1 GQA), plus Llama 3 70B and Mistral GQA buckets.
+- **13 parameterized Triton operators** covering the full Gemma 4 inference pipeline: matmul, rmsnorm (Gemma `1+w` affine), softmax (with softcap), layernorm, cross_entropy, attention (GQA + causal + sliding-window + QK-norm + YOCO KV-share), rotary (dual-base θ=10k/1M with p-RoPE), fused GeGLU, fused QK-RMSNorm+RoPE, MoE router (fused matmul+softmax+top-k), grouped GEMM (sort-free MoE expert dispatch), PLE gather (Gemma E2B/E4B per-layer embeddings), **paged-KV decode attention** (from-scratch Triton — vLLM's is CUDA-only).
+- **Full Gemma 4 architecture support**: grouped-query attention with `NUM_KV_HEADS` / `GROUP_SIZE` constexprs, asymmetric `head_dim=256/512` local/global layers, QK-norm with Gemma-mode `(1 + w)` affine, YOCO KV-cache sharing, MoE routing for 26B-A4B (128 experts, top-8), decode-time paged attention with page-table indirection + sliding-window page skipping — covers 31B Dense, 26B-A4B MoE, E2B, E4B, plus Llama 3 70B and Mistral GQA buckets. **110 shape buckets** across all operators, **556 unit tests**.
 - **Learned feasibility**: shared-memory filter removed, bandit learns per-shape config feasibility from runtime failures. Zero hardcoded priors.
 - **Learned GBR cost model**: R² = 0.94 on 516 training points; A100-trained rankings transfer to H100 with Spearman ρ = **0.967**.
 - **Adaptive meta-bandit router** validated across 3 independent trials: matches the best fixed selector within 0.5%; naive alternating ensemble stalls.
@@ -19,7 +19,7 @@ Paper draft (12,500+ words): [`docs/paper/noeris.md`](docs/paper/noeris.md).
 
 ```mermaid
 flowchart LR
-    OP[Operator Registry<br/>8 Triton templates] --> PROP[LLM Proposer<br/>+ cross-run insights]
+    OP[Operator Registry<br/>13 Triton operators] --> PROP[LLM Proposer<br/>+ cross-run insights]
     DB[(Shape-Indexed<br/>Config DB)] --> PROP
     DB --> CM[Cost Model<br/>GBR, R²=0.94]
     PROP --> SEL
