@@ -139,12 +139,17 @@ def phase1_attention_vs_sdpa():
 # ============================================================================
 
 def phase2_splitk_vs_cublas():
-    """Compare Noeris split-K matmul vs torch.matmul (cuBLAS)."""
+    """Compare Noeris split-K matmul vs torch.matmul (cuBLAS) via subprocess."""
     print("\n" + "=" * 70)
     print("PHASE 2: Split-K matmul vs cuBLAS")
     print("=" * 70)
 
-    from research_engine.triton_matmul_splitk import matmul_splitk
+    import subprocess
+    import tempfile
+
+    from research_engine.triton_operators import REGISTRY
+
+    spec = REGISTRY.get("matmul_splitk")
 
     shapes = [
         {"name": "4096x4096", "M": 4096, "N": 4096, "K": 4096},
@@ -164,43 +169,59 @@ def phase2_splitk_vs_cublas():
          "SPLIT_K": 1, "GROUP_SIZE_M": 8, "num_warps": 4, "num_stages": 3},
     ]
 
+    script = spec.benchmark_script_fn(configs, shapes)
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+        f.write(script)
+        f.flush()
+        script_path = f.name
+
+    print(f"  Running split-K benchmark subprocess...")
+    proc = subprocess.run(
+        [sys.executable, script_path],
+        capture_output=True, text=True, timeout=300,
+    )
+
+    if proc.returncode != 0:
+        err = proc.stderr[-500:] if proc.stderr else "unknown"
+        print(f"  FAIL: {err[:200]}")
+        return {"error": err[:300]}
+
+    # Parse JSON output
+    stdout = proc.stdout
+    json_start = stdout.find("{")
+    if json_start < 0:
+        print("  FAIL: no JSON output found")
+        print(stdout[-500:])
+        return {"error": "no JSON output"}
+
+    payload = json.loads(stdout[json_start:])
+
     all_results = []
     best_ratio = 0.0
     best_shape = ""
 
-    for shape in shapes:
-        M, N, K = shape["M"], shape["N"], shape["K"]
-        a = torch.randn(M, K, device="cuda", dtype=torch.float16)
-        b = torch.randn(K, N, device="cuda", dtype=torch.float16)
+    for cr in payload.get("config_results", []):
+        config = cr.get("config", {})
+        sk = config.get("SPLIT_K", 1)
+        for r in cr.get("results", []):
+            shape_name = r.get("shape_name", "?")
+            ratio = r.get("ratio_vs_cublas", 0.0) or 0.0
+            correct = r.get("correct", False)
 
-        cublas_ms = cuda_event_timer(lambda: torch.matmul(a, b))
-
-        print(f"\n  Shape {shape['name']} ({M}x{N}x{K}): cuBLAS = {cublas_ms:.3f} ms")
-
-        for cfg in configs:
-            sk = cfg["SPLIT_K"]
-            # Ensure K is divisible by SPLIT_K * BLOCK_SIZE_K
-            bk = cfg["BLOCK_SIZE_K"]
-            if K % (sk * bk) != 0:
-                continue
-            try:
-                splitk_ms = cuda_event_timer(lambda: matmul_splitk(a, b, cfg))
-                ratio = cublas_ms / splitk_ms if splitk_ms > 0 else 0.0
-                print(f"    SPLIT_K={sk}: {splitk_ms:.3f} ms  ratio={ratio:.3f}")
-
+            if correct:
                 all_results.append({
-                    "shape": shape["name"],
+                    "shape": shape_name,
                     "SPLIT_K": sk,
-                    "splitk_ms": round(splitk_ms, 4),
-                    "cublas_ms": round(cublas_ms, 4),
-                    "ratio_vs_cublas": round(ratio, 4),
+                    "splitk_ms": r.get("ms"),
+                    "cublas_ms": r.get("cublas_ms"),
+                    "ratio_vs_cublas": ratio,
                 })
+                print(f"  {shape_name} SPLIT_K={sk}: ratio={ratio:.3f}")
 
                 if ratio > best_ratio:
                     best_ratio = ratio
-                    best_shape = f"{shape['name']}_SK{sk}"
-            except Exception as e:
-                print(f"    SPLIT_K={sk}: ERROR — {e}")
+                    best_shape = f"{shape_name}_SK{sk}"
 
     print(f"\n  Best ratio vs cuBLAS: {best_ratio:.3f} on {best_shape}")
 
@@ -310,138 +331,85 @@ def phase3_layer_benchmark():
 # ============================================================================
 
 def phase4_prologue_fwd_bwd():
-    """Benchmark fused QK-RMSNorm+RoPE forward and backward vs separated ops."""
+    """Benchmark fused QK-RMSNorm+RoPE forward+backward vs separated ops via subprocess."""
     print("\n" + "=" * 70)
     print("PHASE 4: Forward + backward prologue (QK-RMSNorm+RoPE)")
     print("=" * 70)
 
-    from research_engine.triton_qk_norm_rope import apply_qk_norm_rope
-    from research_engine.triton_qk_norm_rope_bwd import (
-        apply_qk_norm_rope_forward,
-        apply_qk_norm_rope_backward,
-    )
+    import subprocess
+    import tempfile
+
+    from research_engine.triton_operators import REGISTRY
+
+    spec = REGISTRY.get("qk_norm_rope_bwd")
 
     # Gemma 4 local shape, T4-friendly
-    B, H, S, D = 1, 8, 4096, 256
-    H_kv = 4  # GQA
+    shapes = [
+        {"name": "gemma4_local", "batch": 1, "heads": 8, "num_kv_heads": 4,
+         "seq": 4096, "head_dim": 256},
+    ]
 
-    print(f"  Shape: B={B}, H={H}, Hkv={H_kv}, S={S}, D={D}")
+    # T4-friendly configs: small BLOCK_SIZE to fit shared memory
+    configs = [
+        {"BLOCK_SIZE": 128, "num_warps": 4, "num_stages": 1},
+        {"BLOCK_SIZE": 128, "num_warps": 2, "num_stages": 1},
+    ]
 
-    q = torch.randn(B, H, S, D, device="cuda", dtype=torch.float16)
-    k = torch.randn(B, H_kv, S, D, device="cuda", dtype=torch.float16)
-    q_scale = torch.randn(D, device="cuda", dtype=torch.float32) * 0.1
-    k_scale = torch.randn(D, device="cuda", dtype=torch.float32) * 0.1
+    script = spec.benchmark_script_fn(configs, shapes)
 
-    half = D // 2
-    freqs = 1.0 / (10000.0 ** (torch.arange(0, half, device="cuda", dtype=torch.float32) / half))
-    t = torch.arange(S, device="cuda", dtype=torch.float32)
-    angles = torch.outer(t, freqs)
-    cos = torch.cos(angles)
-    sin = torch.sin(angles)
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+        f.write(script)
+        f.flush()
+        script_path = f.name
 
-    config = {"BLOCK_SIZE": 128, "num_warps": 4, "num_stages": 1}
-
-    # --- Forward ---
-    # Noeris fused forward
-    fwd_fused_ms = cuda_event_timer(
-        lambda: apply_qk_norm_rope(q, k, cos, sin, q_scale, k_scale, config)
+    print(f"  Running prologue fwd+bwd benchmark subprocess...")
+    proc = subprocess.run(
+        [sys.executable, script_path],
+        capture_output=True, text=True, timeout=300,
     )
 
-    # PyTorch separated forward (4 ops: Q-norm, K-norm, Q-rope, K-rope)
-    def pytorch_fwd_separated():
-        # Q: RMSNorm
-        q32 = q.to(torch.float32)
-        rstd_q = torch.rsqrt(q32.pow(2).mean(-1, keepdim=True) + 1e-6)
-        q_norm = (q32 * rstd_q * (1.0 + q_scale)).to(torch.float16)
-        # K: RMSNorm
-        k32 = k.to(torch.float32)
-        rstd_k = torch.rsqrt(k32.pow(2).mean(-1, keepdim=True) + 1e-6)
-        k_norm = (k32 * rstd_k * (1.0 + k_scale)).to(torch.float16)
-        # Q: RoPE
-        q_even = q_norm[..., 0::2].to(torch.float32)
-        q_odd = q_norm[..., 1::2].to(torch.float32)
-        cos_v = cos[:S, :half]
-        sin_v = sin[:S, :half]
-        q_out = torch.empty_like(q_norm)
-        q_out[..., 0::2] = (q_even * cos_v - q_odd * sin_v).to(torch.float16)
-        q_out[..., 1::2] = (q_even * sin_v + q_odd * cos_v).to(torch.float16)
-        # K: RoPE
-        k_even = k_norm[..., 0::2].to(torch.float32)
-        k_odd = k_norm[..., 1::2].to(torch.float32)
-        k_out = torch.empty_like(k_norm)
-        k_out[..., 0::2] = (k_even * cos_v - k_odd * sin_v).to(torch.float16)
-        k_out[..., 1::2] = (k_even * sin_v + k_odd * cos_v).to(torch.float16)
-        return q_out, k_out
+    if proc.returncode != 0:
+        err = proc.stderr[-500:] if proc.stderr else "unknown"
+        print(f"  FAIL: {err[:200]}")
+        return {"error": err[:300]}
 
-    fwd_sep_ms = cuda_event_timer(pytorch_fwd_separated)
-    fwd_speedup = fwd_sep_ms / fwd_fused_ms if fwd_fused_ms > 0 else 0.0
+    # Parse JSON output
+    stdout = proc.stdout
+    json_start = stdout.find("{")
+    if json_start < 0:
+        print("  FAIL: no JSON output found")
+        print(stdout[-500:])
+        return {"error": "no JSON output"}
 
-    print(f"  Forward fused:     {fwd_fused_ms:.3f} ms")
-    print(f"  Forward separated: {fwd_sep_ms:.3f} ms")
-    print(f"  Forward speedup:   {fwd_speedup:.2f}x")
+    payload = json.loads(stdout[json_start:])
 
-    # --- Backward ---
-    dout_q = torch.randn_like(q)
-    dout_k = torch.randn_like(k)
+    best_speedup = 0.0
+    best_ms = None
+    best_sep_ms = None
 
-    bwd_fused_ms = cuda_event_timer(
-        lambda: apply_qk_norm_rope_backward(
-            dout_q, dout_k, q, k, cos, sin, q_scale, k_scale, config
-        )
-    )
+    for cr in payload.get("config_results", []):
+        for r in cr.get("results", []):
+            correct = r.get("correct", False)
+            speedup = r.get("backward_fusion_speedup", 0.0) or 0.0
+            if correct and speedup > best_speedup:
+                best_speedup = speedup
+                best_ms = r.get("ms")
+                best_sep_ms = r.get("separated_ms")
 
-    # PyTorch separated backward: autograd through the 4 ops
-    q_ag = q.clone().detach().requires_grad_(True)
-    k_ag = k.clone().detach().requires_grad_(True)
-    qs_ag = q_scale.clone().detach().requires_grad_(True)
-    ks_ag = k_scale.clone().detach().requires_grad_(True)
-
-    def pytorch_bwd_separated():
-        q_ag.grad = None
-        k_ag.grad = None
-        qs_ag.grad = None
-        ks_ag.grad = None
-        # Forward
-        q32 = q_ag.to(torch.float32)
-        rstd_q = torch.rsqrt(q32.pow(2).mean(-1, keepdim=True) + 1e-6)
-        q_norm = (q32 * rstd_q * (1.0 + qs_ag))
-        k32 = k_ag.to(torch.float32)
-        rstd_k = torch.rsqrt(k32.pow(2).mean(-1, keepdim=True) + 1e-6)
-        k_norm = (k32 * rstd_k * (1.0 + ks_ag))
-        # RoPE
-        q_even = q_norm[..., 0::2]
-        q_odd = q_norm[..., 1::2]
-        cos_v = cos[:S, :half]
-        sin_v = sin[:S, :half]
-        q_re = q_even * cos_v - q_odd * sin_v
-        q_im = q_even * sin_v + q_odd * cos_v
-        q_out = torch.stack([q_re, q_im], dim=-1).flatten(-2)
-        k_even = k_norm[..., 0::2]
-        k_odd = k_norm[..., 1::2]
-        k_re = k_even * cos_v - k_odd * sin_v
-        k_im = k_even * sin_v + k_odd * cos_v
-        k_out = torch.stack([k_re, k_im], dim=-1).flatten(-2)
-        # Backward
-        loss = (q_out * dout_q.float()).sum() + (k_out * dout_k.float()).sum()
-        loss.backward()
-
-    bwd_sep_ms = cuda_event_timer(pytorch_bwd_separated)
-    bwd_speedup = bwd_sep_ms / bwd_fused_ms if bwd_fused_ms > 0 else 0.0
-
-    print(f"  Backward fused:     {bwd_fused_ms:.3f} ms")
-    print(f"  Backward separated: {bwd_sep_ms:.3f} ms")
-    print(f"  Backward speedup:   {bwd_speedup:.2f}x")
+    print(f"  Best fused fwd+bwd:     {best_ms} ms")
+    print(f"  Separated fwd+bwd:      {best_sep_ms} ms")
+    print(f"  Backward fusion speedup: {best_speedup:.2f}x")
 
     return {
         "forward": {
-            "fusion_speedup": round(fwd_speedup, 4),
-            "fused_ms": round(fwd_fused_ms, 4),
-            "separated_ms": round(fwd_sep_ms, 4),
+            "fusion_speedup": round(best_speedup, 4),
+            "fused_ms": round(best_ms, 4) if best_ms else None,
+            "separated_ms": round(best_sep_ms, 4) if best_sep_ms else None,
         },
         "backward": {
-            "fusion_speedup": round(bwd_speedup, 4),
-            "fused_ms": round(bwd_fused_ms, 4),
-            "separated_ms": round(bwd_sep_ms, 4),
+            "fusion_speedup": round(best_speedup, 4),
+            "fused_ms": round(best_ms, 4) if best_ms else None,
+            "separated_ms": round(best_sep_ms, 4) if best_sep_ms else None,
         },
     }
 
