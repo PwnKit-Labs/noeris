@@ -5,8 +5,9 @@
 <h1 align="center">Noeris</h1>
 
 <p align="center">
-  <strong>PwnKit Labs Research OS for autonomous empirical discovery.</strong><br/>
-  Noeris is the Research OS inside PwnKit Labs: open-source adversarial reliability infrastructure for both humans and AI agents. Its current flagship track is autonomous GPU kernel optimization.
+  <strong>The Research OS for PwnKit Labs.</strong><br/>
+  It powers autonomous empirical discovery across model behavior, systems optimization, and agent reliability.<br/>
+  Current flagship track: GPU kernel optimization.
 </p>
 
 <p align="center">
