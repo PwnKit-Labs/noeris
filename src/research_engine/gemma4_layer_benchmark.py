@@ -99,261 +99,48 @@ import time
 
 import torch
 import torch.nn.functional as F
-import triton
-import triton.language as tl
+
+# Import Noeris operator launchers from the installed research_engine package.
+# This avoids inlining kernel source that can drift out of sync with the
+# canonical operator modules.
+from research_engine.triton_rmsnorm import rmsnorm as _noeris_rmsnorm_raw
+from research_engine.triton_qk_norm_rope import apply_qk_norm_rope as _noeris_qk_norm_rope_raw
+from research_engine.triton_geglu import geglu as _noeris_geglu_raw
+from research_engine.triton_attention import flash_attn as _noeris_flash_attn_raw
 
 
 LAYER_CONFIGS = json.loads({configs_json!r})
 
 
 # =============================================================================
-# Triton kernels — Noeris fused operators
+# Noeris operator wrappers (delegate to installed Triton kernels)
 # =============================================================================
 
-# --- RMSNorm (affine_mode=1: Gemma style y = x * rstd * (1 + w)) ---
-
-@triton.jit
-def rmsnorm_kernel(
-    x_ptr, w_ptr, out_ptr,
-    n_cols,
-    eps: tl.constexpr,
-    BLOCK_SIZE: tl.constexpr,
-):
-    row = tl.program_id(0)
-    offs = tl.arange(0, BLOCK_SIZE)
-    mask = offs < n_cols
-
-    x = tl.load(x_ptr + row * n_cols + offs, mask=mask, other=0.0).to(tl.float32)
-    var = tl.sum(x * x, axis=0) / n_cols
-    rstd = 1.0 / tl.sqrt(var + eps)
-    w = tl.load(w_ptr + offs, mask=mask, other=0.0).to(tl.float32)
-    out = x * rstd * (1.0 + w)
-    tl.store(out_ptr + row * n_cols + offs, out.to(tl.float16), mask=mask)
-
+# Default configs that work well on T4/A100/H100
+_RMSNORM_CONFIG = {{"BLOCK_SIZE": 128, "num_warps": 4, "num_stages": 1}}
+_QK_NORM_ROPE_CONFIG = {{"BLOCK_SIZE": 128, "num_warps": 4, "num_stages": 1}}
+_GEGLU_CONFIG = {{"BLOCK_SIZE": 128, "num_warps": 4, "num_stages": 1}}
+_ATTN_CONFIG = {{"BLOCK_M": 64, "BLOCK_N": 64, "num_warps": 4, "num_stages": 2}}
 
 def noeris_rmsnorm(x, w, eps=1e-6):
-    n_rows, n_cols = x.shape
-    out = torch.empty_like(x)
-    BLOCK_SIZE = triton.next_power_of_2(n_cols)
-    rmsnorm_kernel[(n_rows,)](x, w, out, n_cols, eps=eps, BLOCK_SIZE=BLOCK_SIZE,
-                              num_warps=min(8, max(1, BLOCK_SIZE // 256)),
-                              num_stages=1)
-    return out
+    """RMSNorm via the canonical Triton kernel (Gemma affine_mode=1)."""
+    return _noeris_rmsnorm_raw(x, w, _RMSNORM_CONFIG, eps=eps, affine_mode=1)
 
 
-# --- Fused QK-RMSNorm + RoPE ---
-
-@triton.jit
-def qk_norm_rope_kernel(
-    qk_ptr, scale_ptr, cos_ptr, sin_ptr, out_ptr,
-    stride_b, stride_h, stride_s, stride_d,
-    cos_stride_s, cos_stride_d,
-    n_heads, seq_len, head_dim,
-    eps: tl.constexpr,
-    HALF_DIM: tl.constexpr,
-):
-    pid = tl.program_id(0)
-    total_heads = tl.load(qk_ptr - qk_ptr)  # dummy; we use pid arithmetic
-    # Decompose pid -> (batch, head, seq)
-    bs_idx = pid // (n_heads * seq_len)
-    rem = pid % (n_heads * seq_len)
-    h_idx = rem // seq_len
-    s_idx = rem % seq_len
-
-    base = bs_idx * stride_b + h_idx * stride_h + s_idx * stride_s
-
-    # Load even and odd halves
-    offs = tl.arange(0, HALF_DIM)
-    mask = offs < (head_dim // 2)
-
-    x_even = tl.load(qk_ptr + base + offs * 2, mask=mask, other=0.0).to(tl.float32)
-    x_odd  = tl.load(qk_ptr + base + offs * 2 + 1, mask=mask, other=0.0).to(tl.float32)
-
-    # RMSNorm over full head_dim: var = (sum_even^2 + sum_odd^2) / head_dim
-    var = (tl.sum(x_even * x_even, axis=0) + tl.sum(x_odd * x_odd, axis=0)) / head_dim
-    rstd = 1.0 / tl.sqrt(var + eps)
-
-    # Affine: (1 + scale)
-    s_even = tl.load(scale_ptr + offs * 2, mask=mask, other=0.0).to(tl.float32)
-    s_odd  = tl.load(scale_ptr + offs * 2 + 1, mask=mask, other=0.0).to(tl.float32)
-    x_even = x_even * rstd * (1.0 + s_even)
-    x_odd  = x_odd  * rstd * (1.0 + s_odd)
-
-    # RoPE rotation
-    cos_val = tl.load(cos_ptr + s_idx * cos_stride_s + offs * cos_stride_d, mask=mask, other=1.0).to(tl.float32)
-    sin_val = tl.load(sin_ptr + s_idx * cos_stride_s + offs * cos_stride_d, mask=mask, other=0.0).to(tl.float32)
-
-    out_even = x_even * cos_val - x_odd * sin_val
-    out_odd  = x_even * sin_val + x_odd * cos_val
-
-    tl.store(out_ptr + base + offs * 2,     out_even.to(tl.float16), mask=mask)
-    tl.store(out_ptr + base + offs * 2 + 1, out_odd.to(tl.float16),  mask=mask)
-
-
-def noeris_qk_norm_rope(qk, scale, cos, sin):
-    """Fused QK-RMSNorm + RoPE for one tensor (Q or K)."""
-    B, H, S, D = qk.shape
-    out = torch.empty_like(qk)
-    HALF_DIM = triton.next_power_of_2(D // 2)
-    grid = (B * H * S,)
-
-    qk_norm_rope_kernel[grid](
-        qk, scale, cos, sin, out,
-        qk.stride(0), qk.stride(1), qk.stride(2), qk.stride(3),
-        cos.stride(0), cos.stride(1),
-        H, S, D,
-        eps=1e-6, HALF_DIM=HALF_DIM,
-        num_warps=min(8, max(1, HALF_DIM // 32)),
-        num_stages=1,
-    )
-    return out
-
-
-# --- Fused GeGLU ---
-
-@triton.jit
-def geglu_kernel(
-    gate_ptr, up_ptr, out_ptr,
-    n_cols,
-    BLOCK_SIZE: tl.constexpr,
-):
-    row = tl.program_id(0)
-    offs = tl.arange(0, BLOCK_SIZE)
-    mask = offs < n_cols
-
-    gate = tl.load(gate_ptr + row * n_cols + offs, mask=mask, other=0.0).to(tl.float32)
-    up   = tl.load(up_ptr   + row * n_cols + offs, mask=mask, other=0.0).to(tl.float32)
-
-    sqrt_2_over_pi = 0.7978845608028654
-    coeff = 0.044715
-    inner = sqrt_2_over_pi * (up + coeff * up * up * up)
-    gelu_up = 0.5 * up * (1.0 + tl.extra.libdevice.tanh(inner))
-    out = gate * gelu_up
-
-    tl.store(out_ptr + row * n_cols + offs, out.to(tl.float16), mask=mask)
+def noeris_qk_norm_rope(q, k, q_scale, k_scale, cos, sin):
+    """Fused QK-RMSNorm + RoPE via the canonical Triton kernel."""
+    return _noeris_qk_norm_rope_raw(q, k, cos, sin, q_scale, k_scale, _QK_NORM_ROPE_CONFIG)
 
 
 def noeris_geglu(gate, up):
-    n_rows, n_cols = gate.shape
-    out = torch.empty_like(gate)
-    BLOCK_SIZE = triton.next_power_of_2(n_cols)
-    geglu_kernel[(n_rows,)](gate, up, out, n_cols, BLOCK_SIZE=BLOCK_SIZE,
-                            num_warps=min(16, max(1, BLOCK_SIZE // 256)),
-                            num_stages=1)
-    return out
-
-
-# --- FlashAttention (with GQA + sliding-window) ---
-
-@triton.jit
-def flash_attn_kernel(
-    Q_ptr, K_ptr, V_ptr, O_ptr,
-    stride_qb, stride_qh, stride_qs, stride_qd,
-    stride_kb, stride_kh, stride_ks, stride_kd,
-    stride_vb, stride_vh, stride_vs, stride_vd,
-    stride_ob, stride_oh, stride_os, stride_od,
-    seq_len, head_dim, num_kv_heads, scale,
-    WINDOW_SIZE: tl.constexpr,
-    IS_CAUSAL: tl.constexpr,
-    BLOCK_M: tl.constexpr,
-    BLOCK_N: tl.constexpr,
-    BLOCK_D: tl.constexpr,
-):
-    pid_m = tl.program_id(0)
-    pid_bh = tl.program_id(1)
-    batch_idx = pid_bh // tl.load(Q_ptr - Q_ptr + Q_ptr.dtype.element_ty(0) + 1)  # placeholder
-    # Simplified: compute via strides
-    # We flatten batch*heads into pid_bh
-    num_q_heads = stride_qb // stride_qh if stride_qh > 0 else 1
-    q_head_idx = pid_bh % num_q_heads if num_q_heads > 0 else 0
-    b_idx = pid_bh // num_q_heads if num_q_heads > 0 else 0
-    kv_head_idx = q_head_idx * num_kv_heads // num_q_heads if num_q_heads > 0 else 0
-
-    q_off = b_idx * stride_qb + q_head_idx * stride_qh
-    k_off = b_idx * stride_kb + kv_head_idx * stride_kh
-    v_off = b_idx * stride_vb + kv_head_idx * stride_vh
-    o_off = b_idx * stride_ob + q_head_idx * stride_oh
-
-    m_start = pid_m * BLOCK_M
-    m_offs = m_start + tl.arange(0, BLOCK_M)
-    d_offs = tl.arange(0, BLOCK_D)
-
-    q = tl.load(Q_ptr + q_off + m_offs[:, None] * stride_qs + d_offs[None, :] * stride_qd,
-                mask=(m_offs[:, None] < seq_len) & (d_offs[None, :] < head_dim), other=0.0)
-
-    m_i = tl.full([BLOCK_M], float("-inf"), dtype=tl.float32)
-    l_i = tl.zeros([BLOCK_M], dtype=tl.float32)
-    acc = tl.zeros([BLOCK_M, BLOCK_D], dtype=tl.float32)
-
-    # Determine key range
-    if IS_CAUSAL:
-        max_kn = tl.minimum(m_start + BLOCK_M, seq_len)
-    else:
-        max_kn = seq_len
-
-    if WINDOW_SIZE > 0 and IS_CAUSAL:
-        min_kn = tl.maximum(0, m_start - WINDOW_SIZE + 1)
-    else:
-        min_kn = 0
-
-    n_start = (min_kn // BLOCK_N) * BLOCK_N
-
-    for n_off in range(0, (max_kn + BLOCK_N - 1) // BLOCK_N * BLOCK_N, BLOCK_N):
-        if n_off >= n_start:
-            n_offs = n_off + tl.arange(0, BLOCK_N)
-            k = tl.load(K_ptr + k_off + n_offs[None, :] * stride_ks + d_offs[:, None] * stride_kd,
-                        mask=(n_offs[None, :] < seq_len) & (d_offs[:, None] < head_dim), other=0.0)
-            qk = tl.dot(q.to(tl.float16), k.to(tl.float16)).to(tl.float32) * scale
-
-            # Masking
-            if IS_CAUSAL:
-                causal_mask = m_offs[:, None] >= n_offs[None, :]
-                qk = tl.where(causal_mask, qk, float("-inf"))
-            if WINDOW_SIZE > 0:
-                window_mask = (m_offs[:, None] - n_offs[None, :]) < WINDOW_SIZE
-                qk = tl.where(window_mask, qk, float("-inf"))
-
-            m_new = tl.maximum(m_i, tl.max(qk, axis=1))
-            alpha = tl.exp(m_i - m_new)
-            p = tl.exp(qk - m_new[:, None])
-            l_i = l_i * alpha + tl.sum(p, axis=1)
-            acc = acc * alpha[:, None]
-
-            v = tl.load(V_ptr + v_off + n_offs[:, None] * stride_vs + d_offs[None, :] * stride_vd,
-                        mask=(n_offs[:, None] < seq_len) & (d_offs[None, :] < head_dim), other=0.0)
-            acc += tl.dot(p.to(tl.float16), v.to(tl.float16)).to(tl.float32)
-            m_i = m_new
-
-    acc = acc / l_i[:, None]
-    tl.store(O_ptr + o_off + m_offs[:, None] * stride_os + d_offs[None, :] * stride_od,
-             acc.to(tl.float16),
-             mask=(m_offs[:, None] < seq_len) & (d_offs[None, :] < head_dim))
+    """Fused GeGLU via the canonical Triton kernel."""
+    return _noeris_geglu_raw(gate, up, _GEGLU_CONFIG)
 
 
 def noeris_attention(Q, K, V, num_kv_heads, window_size=-1, is_causal=True):
-    """FlashAttention with GQA + optional sliding window."""
-    B, H, S, D = Q.shape
-    O = torch.empty_like(Q)
-    scale = 1.0 / math.sqrt(D)
-
-    BLOCK_M = 64
-    BLOCK_N = 64
-    BLOCK_D = triton.next_power_of_2(D)
-    grid = (triton.cdiv(S, BLOCK_M), B * H)
-
-    flash_attn_kernel[grid](
-        Q, K, V, O,
-        Q.stride(0), Q.stride(1), Q.stride(2), Q.stride(3),
-        K.stride(0), K.stride(1), K.stride(2), K.stride(3),
-        V.stride(0), V.stride(1), V.stride(2), V.stride(3),
-        O.stride(0), O.stride(1), O.stride(2), O.stride(3),
-        S, D, num_kv_heads, scale,
-        WINDOW_SIZE=window_size if window_size > 0 else -1,
-        IS_CAUSAL=is_causal,
-        BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_D=BLOCK_D,
-        num_warps=4, num_stages=2,
-    )
-    return O
+    """FlashAttention with GQA + optional sliding window via the canonical Triton kernel."""
+    return _noeris_flash_attn_raw(Q, K, V, _ATTN_CONFIG, is_causal=is_causal,
+                                  window_size=window_size, num_kv_heads=num_kv_heads)
 
 
 # =============================================================================
@@ -391,7 +178,7 @@ def build_rope_cache(seq_len, head_dim, device, base=10000.0):
     freqs = 1.0 / (base ** (torch.arange(0, half, device=device, dtype=torch.float32) / half))
     t = torch.arange(seq_len, device=device, dtype=torch.float32)
     angles = torch.outer(t, freqs)
-    return torch.cos(angles).to(torch.float16), torch.sin(angles).to(torch.float16)
+    return torch.cos(angles), torch.sin(angles)
 
 
 # =============================================================================
@@ -472,8 +259,8 @@ def benchmark_layer(cfg):
     w_q          = torch.randn(D, H * Dh, device=device, dtype=torch.float16)
     w_k          = torch.randn(D, Hkv * Dh, device=device, dtype=torch.float16)
     w_v          = torch.randn(D, Hkv * Dh, device=device, dtype=torch.float16)
-    q_scale      = torch.randn(Dh, device=device, dtype=torch.float16)
-    k_scale      = torch.randn(Dh, device=device, dtype=torch.float16)
+    q_scale      = torch.randn(Dh, device=device, dtype=torch.float32) * 0.1
+    k_scale      = torch.randn(Dh, device=device, dtype=torch.float32) * 0.1
     cos, sin     = build_rope_cache(S, Dh, device)
     w_pre_mlp    = torch.randn(D, device=device, dtype=torch.float16)
     w_gate_up    = torch.randn(D, Dff * 2, device=device, dtype=torch.float16)
@@ -497,13 +284,10 @@ def benchmark_layer(cfg):
         v = (h.view(-1, D) @ w_v).view(B, S, Hkv, Dh).permute(0, 2, 1, 3)
 
         # Step 3: Fused QK-RMSNorm + RoPE (our headline kernel!)
-        q = noeris_qk_norm_rope(q, q_scale, cos, sin)
-        k = noeris_qk_norm_rope(k, k_scale, cos, sin)
+        q, k = noeris_qk_norm_rope(q, k, q_scale, k_scale, cos, sin)
 
-        # Step 4: Attention (GQA + sliding-window)
-        k_exp = expand_kv_for_gqa(k, H, Hkv)
-        v_exp = expand_kv_for_gqa(v, H, Hkv)
-        attn_out = noeris_attention(q, k_exp, v_exp, Hkv,
+        # Step 4: Attention (GQA + sliding-window) — flash_attn handles GQA internally
+        attn_out = noeris_attention(q, k, v, Hkv,
                                     window_size=ws, is_causal=causal)
 
         # Step 5: Post-attention residual
@@ -543,16 +327,12 @@ def benchmark_layer(cfg):
     v_t = (h_norm.view(-1, D) @ w_v).view(B, S, Hkv, Dh).permute(0, 2, 1, 3)
 
     def step3_noeris():
-        noeris_qk_norm_rope(q_t, q_scale, cos, sin)
-        noeris_qk_norm_rope(k_t, k_scale, cos, sin)
+        noeris_qk_norm_rope(q_t, k_t, q_scale, k_scale, cos, sin)
     noeris_step_times["3_qk_norm_rope"] = cuda_event_timer(step3_noeris)
 
-    q_nr = noeris_qk_norm_rope(q_t, q_scale, cos, sin)
-    k_nr = noeris_qk_norm_rope(k_t, k_scale, cos, sin)
-    k_exp = expand_kv_for_gqa(k_nr, H, Hkv)
-    v_exp = expand_kv_for_gqa(v_t, H, Hkv)
+    q_nr, k_nr = noeris_qk_norm_rope(q_t, k_t, q_scale, k_scale, cos, sin)
     def step4_noeris():
-        return noeris_attention(q_nr, k_exp, v_exp, Hkv,
+        return noeris_attention(q_nr, k_nr, v_t, Hkv,
                                 window_size=ws, is_causal=causal)
     noeris_step_times["4_attention"] = cuda_event_timer(step4_noeris)
 
