@@ -1,9 +1,12 @@
 name: Triton Iterate
 
 on:
-  schedule:
-    - cron: "0 3 * * *"
-    - cron: "0 15 * * *"
+  # DISABLED: scheduled runs were spawning 8 operators × 10 auto-chain
+  # runs = 80 Modal A100 sessions per trigger, consuming ~$5-10/day in
+  # credits while the user slept. Re-enable when the budget is confirmed.
+  # schedule:
+  #   - cron: "0 3 * * *"
+  #   - cron: "0 15 * * *"
   workflow_dispatch:
     inputs:
       operator:
