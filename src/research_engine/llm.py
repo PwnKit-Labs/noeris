@@ -299,6 +299,7 @@ class LlmResearchMemory(ResearchMemory):
                             "title": source.title,
                             "locator": source.locator,
                             "excerpt": source.excerpt,
+                            "updated_at": source.updated_at,
                         }
                         for source in selected_sources
                     ],
@@ -535,6 +536,14 @@ def _rank_hypotheses(
     context: ResearchContext,
 ) -> list[Hypothesis]:
     claim_to_source = {claim.title: claim.source for claim in context.claims}
+    source_updated_at = {
+        source.identifier: source.updated_at
+        for source in context.sources
+    }
+    newest_source_ts = max(
+        (source.updated_at for source in context.sources if source.updated_at),
+        default=None,
+    )
     source_confidence = {
         assessment.source_id: _confidence_weight(assessment.confidence)
         for assessment in context.source_assessments
@@ -551,18 +560,25 @@ def _rank_hypotheses(
     for hypothesis in hypotheses:
         claim_scores = []
         contradiction_bonus = 0.0
+        freshness_bonus = 0.0
         for claim_title in hypothesis.supporting_claims:
             source_id = claim_to_source.get(claim_title)
             if source_id is not None:
                 claim_scores.append(source_confidence.get(source_id, 0.4))
+                freshness_bonus += _freshness_weight(
+                    updated_at=source_updated_at.get(source_id),
+                    newest_updated_at=newest_source_ts,
+                )
             contradiction_bonus += contradiction_map.get(claim_title, 0.0)
         support_score = sum(claim_scores)
         coverage_bonus = 0.35 * len(hypothesis.supporting_claims)
-        score = round(support_score + contradiction_bonus + coverage_bonus, 3)
+        score = round(support_score + contradiction_bonus + freshness_bonus + coverage_bonus, 3)
         rationale_bits = []
         rationale_bits.append(f"{len(hypothesis.supporting_claims)} supporting claims")
         if claim_scores:
             rationale_bits.append(f"source confidence {support_score:.2f}")
+        if freshness_bonus:
+            rationale_bits.append(f"freshness bonus {freshness_bonus:.2f}")
         if contradiction_bonus:
             rationale_bits.append(f"contradiction bonus {contradiction_bonus:.2f}")
         if not claim_scores:
@@ -598,6 +614,14 @@ def _severity_weight(severity: str) -> float:
         "medium": 0.25,
         "high": 0.4,
     }.get(severity, 0.2)
+
+
+def _freshness_weight(*, updated_at: str | None, newest_updated_at: str | None) -> float:
+    if not updated_at or not newest_updated_at:
+        return 0.0
+    if updated_at == newest_updated_at:
+        return 0.15
+    return 0.05
 
 
 _RESEARCH_CONTEXT_SCHEMA = {

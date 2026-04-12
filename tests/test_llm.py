@@ -251,6 +251,7 @@ class LlmPlannerTests(unittest.TestCase):
                 title="Source",
                 locator="https://example.com",
                 excerpt="Example",
+                updated_at="2026-04-10T12:00:00Z",
             )
         ]
 
@@ -260,6 +261,11 @@ class LlmPlannerTests(unittest.TestCase):
         self.assertEqual(context.claims[0].evidence_refs, ["source-1"])
         self.assertEqual(context.source_assessments[0].confidence, "high")
         self.assertEqual(context.contradictions[0].severity, "high")
+        _, request_body, _ = http_client.calls[0]
+        self.assertEqual(
+            request_body["input"][1]["content"][0]["text"].count("updated_at"),
+            1,
+        )
 
     def test_hypothesis_planner_filters_unknown_supporting_claims(self) -> None:
         http_client = _FakeHttpClient(
@@ -354,6 +360,7 @@ class LlmPlannerTests(unittest.TestCase):
                     title="Strong source",
                     locator="https://example.com/1",
                     excerpt="Example",
+                    updated_at="2026-04-11T12:00:00Z",
                 ),
                 ResearchSource(
                     identifier="source-2",
@@ -361,6 +368,7 @@ class LlmPlannerTests(unittest.TestCase):
                     title="Weak source",
                     locator="https://example.com/2",
                     excerpt="Example",
+                    updated_at="2026-04-08T12:00:00Z",
                 ),
             ],
             source_assessments=[
@@ -408,6 +416,89 @@ class LlmPlannerTests(unittest.TestCase):
         self.assertEqual(hypotheses[0].title, "Strong contradiction idea")
         self.assertGreater(hypotheses[0].priority_score, hypotheses[1].priority_score)
         self.assertIn("contradiction bonus", hypotheses[0].ranking_rationale)
+
+    def test_hypothesis_planner_prefers_fresher_support_when_confidence_ties(self) -> None:
+        http_client = _FakeHttpClient(
+            {
+                "output_text": (
+                    '{"hypotheses":['
+                    '{"title":"Older-source idea","rationale":"Because",'
+                    '"novelty_reason":"Gap","expected_signal":"Higher accuracy",'
+                    '"supporting_claims":["Older claim"]},'
+                    '{"title":"Fresher-source idea","rationale":"Because too",'
+                    '"novelty_reason":"Gap 2","expected_signal":"Higher recall",'
+                    '"supporting_claims":["Fresher claim"]}'
+                    ']}'
+                )
+            }
+        )
+        client = ResponsesApiClient(
+            config=ResponsesProviderConfig(
+                provider_name="openai",
+                api_key="sk-test",
+                base_url="https://api.openai.com/v1",
+                model="gpt-4.1-mini",
+            ),
+            http_client=http_client,
+        )
+        context = ResearchContext(
+            topic="tool use",
+            sources=[
+                ResearchSource(
+                    identifier="source-1",
+                    kind="paper",
+                    title="Fresh source",
+                    locator="https://example.com/1",
+                    excerpt="Example",
+                    updated_at="2026-04-11T12:00:00Z",
+                ),
+                ResearchSource(
+                    identifier="source-2",
+                    kind="paper",
+                    title="Older source",
+                    locator="https://example.com/2",
+                    excerpt="Example",
+                    updated_at="2026-04-08T12:00:00Z",
+                ),
+            ],
+            source_assessments=[
+                SourceAssessment(
+                    source_id="source-1",
+                    confidence="medium",
+                    rationale="Recent evidence",
+                ),
+                SourceAssessment(
+                    source_id="source-2",
+                    confidence="medium",
+                    rationale="Older evidence",
+                ),
+            ],
+            claims=[
+                Claim(
+                    title="Fresher claim",
+                    source="source-1",
+                    summary="Summary",
+                    evidence_refs=["source-1"],
+                    evidence_kind="llm-extracted",
+                ),
+                Claim(
+                    title="Older claim",
+                    source="source-2",
+                    summary="Summary",
+                    evidence_refs=["source-2"],
+                    evidence_kind="llm-extracted",
+                ),
+            ],
+        )
+        planner = LlmHypothesisPlanner(client=client)
+
+        hypotheses = planner.plan(
+            ResearchTopic(name="tool use", objective="improve reliability"),
+            context,
+        )
+
+        self.assertEqual(hypotheses[0].title, "Fresher-source idea")
+        self.assertIn("freshness bonus", hypotheses[0].ranking_rationale)
 
 
 if __name__ == "__main__":
