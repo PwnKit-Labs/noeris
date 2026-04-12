@@ -88,10 +88,14 @@ class CliTests(unittest.TestCase):
         self.assertEqual(payload, [])
 
     def test_status_command_reports_empty_workspace(self) -> None:
-        with _temp_workspace():
+        with _temp_workspace(), patch(
+            "research_engine.cli._status_workflow_summary",
+            return_value={"repo": "PwnKit-Labs/noeris", "workflows": {}},
+        ):
             exit_code, payload = _run_cli_json("status")
         self.assertEqual(exit_code, 0)
         self.assertIn("capabilities", payload)
+        self.assertEqual(payload["workflow_summary"]["repo"], "PwnKit-Labs/noeris")
         self.assertEqual(payload["run_count"], 0)
         self.assertEqual(payload["artifact_bundle_count"], 0)
 
@@ -182,7 +186,13 @@ class CliTests(unittest.TestCase):
         self.assertTrue(exported["bundle_dir"].endswith(payload["run_id"]))
 
     def test_status_command_reports_latest_run_and_artifacts(self) -> None:
-        with _temp_workspace():
+        with _temp_workspace(), patch(
+            "research_engine.cli._status_workflow_summary",
+            return_value={
+                "repo": "PwnKit-Labs/noeris",
+                "workflows": {"CI": {"queued": 1, "completed": 2, "latest_display_title": "Latest"}},
+            },
+        ):
             run_exit_code, payload = _run_cli_json("benchmark-run", "tool-use-reliability")
             _run_cli_json(
                 "export-history",
@@ -198,6 +208,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(status_payload["latest_run"]["run_id"], payload["run_id"])
         self.assertTrue(status_payload["history_artifacts_present"]["history_summary_json"])
         self.assertTrue(status_payload["history_artifacts_present"]["history_brief_md"])
+        self.assertIn("CI", status_payload["workflow_summary"]["workflows"])
 
     def test_benchmark_run_command_persists_and_exports_empirical_lane(self) -> None:
         with _temp_workspace():

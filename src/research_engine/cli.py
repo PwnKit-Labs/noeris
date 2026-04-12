@@ -5,6 +5,7 @@ from dataclasses import asdict
 import json
 import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path as _Path
 
@@ -555,6 +556,7 @@ def main(argv: list[str] | None = None) -> int:
                 "history_brief_md": (history_dir / "history-brief.md").exists(),
             },
             "latest_run": latest or {},
+            "workflow_summary": _status_workflow_summary(),
         }
         print(json.dumps(payload, indent=2))
         return 0
@@ -864,6 +866,80 @@ def main(argv: list[str] | None = None) -> int:
     )
     print(json.dumps(pipeline.run_cycle_dict(topic), indent=2))
     return 0
+
+
+def _status_workflow_summary() -> dict[str, object]:
+    if shutil.which("gh") is None:
+        return {}
+    try:
+        remote_url = subprocess.check_output(
+            ["git", "config", "--get", "remote.origin.url"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except Exception:
+        return {}
+    repo = _parse_github_repo_slug(remote_url)
+    if not repo:
+        return {}
+    try:
+        payload = json.loads(
+            subprocess.check_output(
+                [
+                    "gh",
+                    "run",
+                    "list",
+                    "--repo",
+                    repo,
+                    "--limit",
+                    "20",
+                    "--json",
+                    "workflowName,status,conclusion,databaseId,displayTitle",
+                ],
+                text=True,
+                stderr=subprocess.DEVNULL,
+            )
+        )
+    except Exception:
+        return {}
+
+    workflows: dict[str, dict[str, object]] = {}
+    for row in payload:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("workflowName", "")).strip()
+        if not name:
+            continue
+        item = workflows.setdefault(
+            name,
+            {"queued": 0, "in_progress": 0, "completed": 0, "latest_display_title": ""},
+        )
+        status = str(row.get("status", "")).strip()
+        if status in {"queued", "in_progress", "completed"}:
+            item[status] = int(item.get(status, 0)) + 1
+        if not item["latest_display_title"]:
+            item["latest_display_title"] = row.get("displayTitle", "")
+        if status == "completed":
+            conclusion = str(row.get("conclusion", "")).strip() or "unknown"
+            key = f"completed_{conclusion}"
+            item[key] = int(item.get(key, 0)) + 1
+    return {"repo": repo, "workflows": workflows}
+
+
+def _parse_github_repo_slug(remote_url: str) -> str:
+    text = remote_url.strip()
+    if text.startswith("https://github.com/"):
+        slug = text.removeprefix("https://github.com/")
+    elif text.startswith("git@github.com:"):
+        slug = text.removeprefix("git@github.com:")
+    else:
+        return ""
+    if slug.endswith(".git"):
+        slug = slug[:-4]
+    parts = [part for part in slug.split("/") if part]
+    if len(parts) != 2:
+        return ""
+    return f"{parts[0]}/{parts[1]}"
 
 
 def _run_kernelbench_l4_eval(args) -> int:
