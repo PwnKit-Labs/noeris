@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Comprehensive bombshell measurement script for Colab T4.
+"""Comprehensive bombshell measurement script for free T4 GPU (Kaggle or Colab).
+
+Primary platform: Kaggle (30 hr/week free T4, API-driven via `kaggle kernels push`).
+Backup platform: Google Colab (~4-5 hr/day free T4).
 
 Validates ALL headline claims in a single ~20-minute run:
   Phase 1: Attention sliding-window vs SDPA (can we beat FlashAttention?)
@@ -8,9 +11,9 @@ Validates ALL headline claims in a single ~20-minute run:
   Phase 4: Forward + backward prologue (fused QK-RMSNorm+RoPE)
   Phase 5: Bandit search convergence on attention
 
-Usage in Colab:
+Usage (Kaggle or Colab):
   !git clone https://github.com/PwnKit-Labs/noeris && cd noeris
-  !pip install -e . numpy scikit-learn
+  !pip install -e . numpy scikit-learn -q
   !python scripts/colab_bombshell.py
 
 Outputs machine-readable JSON with all results.

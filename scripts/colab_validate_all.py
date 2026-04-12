@@ -1,10 +1,17 @@
-"""Run this in Google Colab (free T4 GPU) to validate all 13 Noeris operators.
+"""Validate all Noeris operators on a free T4 GPU (Kaggle or Google Colab).
 
-Usage in Colab:
+Primary platform: Kaggle (30 hr/week free T4, API-driven via `kaggle kernels push`).
+Backup platform: Google Colab (~4-5 hr/day free T4).
+
+Usage on Kaggle:
+  1. New Notebook → Settings → GPU T4 x2, enable Internet
+  2. !git clone https://github.com/PwnKit-Labs/noeris && cd noeris && pip install -e . numpy scikit-learn -q
+  3. !cd noeris && python scripts/colab_validate_all.py
+
+Usage on Colab:
   1. Open https://colab.research.google.com
   2. New notebook → Runtime → Change runtime type → T4 GPU
-  3. In a cell: !git clone https://github.com/PwnKit-Labs/noeris && cd noeris && pip install -e . numpy scikit-learn
-  4. In the next cell: !cd noeris && python scripts/colab_validate_all.py
+  3. Same commands as above.
 
 No Modal needed. No billing. Free T4 GPU.
 """

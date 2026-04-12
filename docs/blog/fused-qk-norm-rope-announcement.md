@@ -141,7 +141,7 @@ The kernel above is the system's first measured novel-kernel result against a SO
 
 ## Bonus: autonomous search works on free GPU
 
-The fused kernel above was found and benchmarked on datacenter GPUs (A100, H100 via Modal). But the autonomous search system behind it also runs on **Google Colab's free T4 GPU** — no paid account required.
+The fused kernel above was found and benchmarked on datacenter GPUs (A100, H100 via Modal). But the autonomous search system behind it also runs on **Kaggle's free T4 GPU** (30 hr/week, API-driven) or Google Colab's free T4 — no paid account required.
 
 We ran the bandit search across 9 operators in 43 shape buckets, accumulating **1,800+ measurements** on T4. The bandit found massive improvements over hand-curated starter configurations:
 
@@ -151,7 +151,7 @@ We ran the bandit search across 9 operators in 43 shape buckets, accumulating **
 
 The key insight: T4 strongly prefers `num_warps=1` and small block sizes — configurations that were **not in the curated starter list at all**. The bandit discovered these hardware-specific preferences autonomously. If you only use hand-tuned configs designed on A100/H100, you leave 22–167% of T4 performance on the table.
 
-Reproduction: upload `scripts/colab_validate_all.py` to a Colab T4 runtime and run. Zero cost.
+Reproduction: upload `scripts/colab_validate_all.py` to a Kaggle T4 notebook (primary) or Colab T4 runtime and run. Zero cost.
 
 ---
 

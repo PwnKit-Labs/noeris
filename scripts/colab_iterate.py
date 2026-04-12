@@ -1,13 +1,16 @@
-"""Run the Noeris autonomous search loop on Google Colab's free T4 GPU.
+"""Run the Noeris autonomous search loop on a free T4 GPU (Kaggle or Colab).
+
+Primary platform: Kaggle (30 hr/week free T4, API-driven via `kaggle kernels push`).
+Backup platform: Google Colab (~4-5 hr/day free T4).
 
 This is the CORE of the Noeris system: generate configs → benchmark on GPU →
 update the config database → learn → repeat. The bandit selector uses
 Thompson sampling with Beta posteriors to explore the config space, and the
 cost model (if available) filters candidates before GPU evaluation.
 
-Usage in Colab:
+Usage (Kaggle or Colab):
   !git clone https://github.com/PwnKit-Labs/noeris && cd noeris
-  !pip install -e . numpy scikit-learn
+  !pip install -e . numpy scikit-learn -q
   !python scripts/colab_iterate.py --operator qk_norm_rope --iterations 3 --configs-per-iter 8
 
 Each iteration benchmarks `configs-per-iter` configurations across all shape

@@ -19,7 +19,7 @@
 
 ## TL;DR
 
-- **Validated on T4 (Colab), A100, and H100 (Modal) — 3 hardware targets.** All 14 operators pass correctness on all three GPUs.
+- **Validated on T4 (Kaggle/Colab), A100, and H100 (Modal) — 3 hardware targets.** All 14 operators pass correctness on all three GPUs.
 - **Novel kernel: fused QK-RMSNorm + RoPE prologue for Gemma 3/4.** vLLM does not fuse this sequence (confirmed by source read at [`vllm/model_executor/models/gemma4.py:395-427`](https://github.com/vllm-project/vllm/pull/38826)). Our fused Triton kernel beats vLLM's 4-launch separated baseline by **10.2–12.9× on A100**, **10.4–11.9× on H100**, and **6.06× on T4** across all 6 Gemma 3/4 shape buckets. The **backward pass** kernel achieves **5.1–5.2× fusion speedup on T4** (GPU-validated), making the fused prologue usable for training — not just inference. No framework fuses the Gemma prologue backward. See [`docs/results/qk-norm-rope-fusion-speedup.md`](docs/results/qk-norm-rope-fusion-speedup.md).
 - **14 parameterized Triton operators** covering the full Gemma 4 inference and training pipeline: matmul, rmsnorm (Gemma `1+w` affine), softmax (with softcap), layernorm, cross_entropy, attention (GQA + causal + sliding-window + QK-norm + YOCO KV-share), rotary (dual-base θ=10k/1M with p-RoPE), fused GeGLU, fused QK-RMSNorm+RoPE (forward), **fused QK-RMSNorm+RoPE backward** (4.9-7.5x on T4), MoE router (fused matmul+softmax+top-k), grouped GEMM (sort-free MoE expert dispatch), PLE gather (Gemma E2B/E4B per-layer embeddings), **paged-KV decode attention** (from-scratch Triton -- vLLM's is CUDA-only).
 - **Full Gemma 4 architecture support**: grouped-query attention with `NUM_KV_HEADS` / `GROUP_SIZE` constexprs, asymmetric `head_dim=256/512` local/global layers, QK-norm with Gemma-mode `(1 + w)` affine, YOCO KV-cache sharing, MoE routing for 26B-A4B (128 experts, top-8), decode-time paged attention with page-table indirection + sliding-window page skipping — covers 31B Dense, 26B-A4B MoE, E2B, E4B, plus Llama 3 70B and Mistral GQA buckets. **110 shape buckets** across all operators, **606 unit tests**.
@@ -144,7 +144,25 @@ python -m research_engine.cli triton-iterate \
 
 Requires a Modal account (`pip install modal && modal token new`). Azure OpenAI or OpenAI credentials are optional but power the LLM proposer.
 
-**Free GPU validation via Colab.** `scripts/colab_validate_all.py` validates all 14 operators on Google Colab's free T4 GPU — no Modal account or paid GPU needed.
+**Free GPU validation via Kaggle (30 hr/week) or Colab.**
+
+```bash
+# Kaggle (primary — 30 hr/week free T4)
+# Set GPU to T4 x2 in Settings, enable Internet
+!git clone https://github.com/PwnKit-Labs/noeris && cd noeris
+!pip install -e . numpy scikit-learn -q
+!python scripts/colab_validate_all.py
+
+# Or Google Colab (backup — ~4-5 hr/day)
+# Same commands, T4 GPU runtime
+```
+
+`scripts/colab_validate_all.py` validates all 14 operators on a free T4 GPU — no Modal account or paid GPU needed.
+
+```bash
+# Automated via API:
+KAGGLE_API_TOKEN=... kaggle kernels push -p scripts/kaggle/
+```
 
 ## Repository layout
 

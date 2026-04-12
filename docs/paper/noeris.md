@@ -255,9 +255,9 @@ Every shape beats the separated baseline by **≥5×**, with the best cases hitt
 
 **Why so much higher than our pre-measurement estimate?** A purely HBM-accounting cost model predicts ~2× fusion speedup: the separated path reads and writes Q twice (once for RMSNorm, once for RoPE), while the fused path reads and writes it once. The measured 10-13× is **5-6× higher** than this model predicts. The gap is **kernel launch overhead**. At these tile sizes each individual kernel takes 30-100 µs on A100/H100; the CUDA launch latency (~5-10 µs per launch) is therefore 10-20% of each separated call, and going from 4 launches to 2 saves a disproportionate fraction of end-to-end time. This is precisely the regime where Triton fusion provides asymmetric value — not at the HBM-bandwidth frontier, but at the launch-amortization frontier.
 
-**T4 validation (Google Colab free tier).** To confirm that the fusion speedup is hardware-independent and not an artifact of high-end GPU launch overhead, we validated the fused kernel on a Tesla T4 (SM 7.5, ~300 GB/s HBM bandwidth) using Google Colab's free tier. The fused kernel achieves **6.06× fusion_speedup** on T4 at 80.55 GB/s (~27% of T4 peak). The lower fusion multiplier compared to A100 (10–13×) and H100 (10–12×) is consistent with the launch-overhead hypothesis: T4's lower absolute launch latency means the separated baseline wastes a smaller fraction of its total time on launches. Crucially, the fusion benefit remains substantial (6×) even on a GPU with 1/7th the bandwidth of A100 — confirming that the result generalizes across hardware tiers and is not specific to datacenter GPUs.
+**T4 validation (Google Kaggle/Colab free tier).** To confirm that the fusion speedup is hardware-independent and not an artifact of high-end GPU launch overhead, we validated the fused kernel on a Tesla T4 (SM 7.5, ~300 GB/s HBM bandwidth) using Google Colab's free tier. The fused kernel achieves **6.06× fusion_speedup** on T4 at 80.55 GB/s (~27% of T4 peak). The lower fusion multiplier compared to A100 (10–13×) and H100 (10–12×) is consistent with the launch-overhead hypothesis: T4's lower absolute launch latency means the separated baseline wastes a smaller fraction of its total time on launches. Crucially, the fusion benefit remains substantial (6×) even on a GPU with 1/7th the bandwidth of A100 — confirming that the result generalizes across hardware tiers and is not specific to datacenter GPUs.
 
-**Backward pass fusion (GPU-validated on Colab T4).** To make the fused prologue usable for training — not just inference — we implemented and validated the backward pass kernel (commit `a2af08e`). The backward kernel fuses the reverse of the forward sequence: RoPE inverse rotation, Gemma-mode `(1 + weight)` affine backward, and RMSNorm backward (weight gradient + input gradient), replacing 4 separate backward launches with 2 fused kernels. Validated on Colab T4:
+**Backward pass fusion (GPU-validated on Kaggle/Colab T4).** To make the fused prologue usable for training — not just inference — we implemented and validated the backward pass kernel (commit `a2af08e`). The backward kernel fuses the reverse of the forward sequence: RoPE inverse rotation, Gemma-mode `(1 + weight)` affine backward, and RMSNorm backward (weight gradient + input gradient), replacing 4 separate backward launches with 2 fused kernels. Validated on Kaggle/Colab T4:
 
 | Shape | Backward fusion_speedup | GB/s | Correct |
 |---|---|---|---|
@@ -282,7 +282,7 @@ The two sets measure **different workloads**. Our internal benchmark uses 2D row
 
 ### 4.1 Experimental Setup
 
-**Hardware.** Benchmarks run on three hardware targets. The A100 target is an `NVIDIA A100-SXM4-40GB` with 40 GB HBM2e (Modal). The H100 target is an `NVIDIA H100 SXM5-80GB` (Modal). Containers are warm-started; the first call may incur a ~10 s cold-start overhead that is excluded from timing. The T4 target is a `Tesla T4` (SM 7.5, 16 GB, ~300 GB/s HBM bandwidth) provisioned through Google Colab's free tier. All 14 operators are validated on all three GPUs; performance benchmarks (§4.2–§4.11) use A100 and H100, while T4 serves as a correctness and fusion-portability check (see §3.2.1).
+**Hardware.** Benchmarks run on three hardware targets. The A100 target is an `NVIDIA A100-SXM4-40GB` with 40 GB HBM2e (Modal). The H100 target is an `NVIDIA H100 SXM5-80GB` (Modal). Containers are warm-started; the first call may incur a ~10 s cold-start overhead that is excluded from timing. The T4 target is a `Tesla T4` (SM 7.5, 16 GB, ~300 GB/s HBM bandwidth) provisioned through Kaggle's free tier (30 hr/week, primary) or Google Colab's free tier (backup). All 14 operators are validated on all three GPUs; performance benchmarks (§4.2–§4.11) use A100 and H100, while T4 serves as a correctness and fusion-portability check (see §3.2.1).
 
 **Software.** Triton kernels are written against Triton 2.x (matching the Modal image). PyTorch eager baselines use the version bundled in the same Modal image. Both the Triton and PyTorch versions present in the Modal `noeris-gpu` image at the time of evaluation are used uniformly across all problems.
 
@@ -570,7 +570,7 @@ The framework is fully built: problem definitions, substitutor, and a self-conta
 
 ### 4.13 Honest Negative Result: Per-Operator GP Surrogates Do Not Help
 
-We investigated whether Gaussian Process (GP) surrogates or ensemble regressors could improve per-operator, per-GPU configuration selection beyond the Thompson-sampling bandit. Using 1,050 real T4 measurements across 21 shape buckets and 4 operators collected during the Colab autonomous search loop, we trained GP (RBF kernel), GP (Matern kernel), RandomForest, and GBR models to predict throughput from configuration parameters within a single operator on a single GPU.
+We investigated whether Gaussian Process (GP) surrogates or ensemble regressors could improve per-operator, per-GPU configuration selection beyond the Thompson-sampling bandit. Using 1,050 real T4 measurements across 21 shape buckets and 4 operators collected during the Kaggle/Colab autonomous search loop, we trained GP (RBF kernel), GP (Matern kernel), RandomForest, and GBR models to predict throughput from configuration parameters within a single operator on a single GPU.
 
 **All models produced negative R² — worse than predicting the mean.** The fundamental issue is signal-to-noise ratio: within a single operator on a single GPU, config-dependent throughput variation is 10–20%, while run-to-run measurement noise is 5–10%. The surrogate has too little signal to learn from.
 
@@ -578,9 +578,9 @@ This contrasts sharply with two settings where surrogates *do* add value: (a) th
 
 **Takeaway.** Surrogate models add value when pooled across operators (GBR cost model) or across hardware (Spearman ρ = 0.967 A100→H100 transfer), but not within a single operator on a single GPU where the signal-to-noise ratio is too low. The Thompson-sampling bandit remains the correct tool for per-operator configuration selection.
 
-### 4.14 Bandit Search Convergence on Commodity Hardware (Colab T4, 1,800+ measurements)
+### 4.14 Bandit Search Convergence on Commodity Hardware (Kaggle/Colab T4, 1,800+ measurements)
 
-To validate that the autonomous search loop works on commodity hardware — not just datacenter GPUs — we ran the full bandit search on Google Colab's free T4 GPU across 9 operators in 43 shape buckets, accumulating over 1,800 measurements.
+To validate that the autonomous search loop works on commodity hardware — not just datacenter GPUs — we ran the full bandit search on free T4 GPUs (Kaggle and Google Colab) across 9 operators in 43 shape buckets, accumulating over 1,800 measurements.
 
 The bandit discovered massive improvements over curated starter configurations across all 9 operators:
 
