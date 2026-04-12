@@ -468,6 +468,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional cap on problems per level",
     )
 
+    gemma4_parser = subparsers.add_parser(
+        "gemma4-layer-bench",
+        help="generate (or run) end-to-end Gemma 4 decoder layer benchmark: Noeris fused vs PyTorch separated",
+    )
+    gemma4_parser.add_argument(
+        "--output",
+        default="",
+        help="path to write the generated script (default: print to stdout)",
+    )
+    gemma4_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=True,
+        help="generate and print the benchmark script without executing (default: true)",
+    )
+
     train_parser = subparsers.add_parser(
         "train-cost-model",
         help="Train a learned cost model from one or more ConfigDatabase files",
@@ -797,6 +813,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "kernelbench-hf-coverage":
         return _run_kernelbench_hf_coverage(args)
 
+    if args.command == "gemma4-layer-bench":
+        return _run_gemma4_layer_bench(args)
+
     try:
         pipeline = build_pipeline(
             use_llm=args.llm,
@@ -860,6 +879,26 @@ def _run_kernelbench_hf_coverage(args) -> int:
         limit_per_level=args.limit_per_level,
     )
     print(json.dumps(report, indent=2))
+    return 0
+
+
+def _run_gemma4_layer_bench(args) -> int:
+    """Generate (and optionally run) the Gemma 4 decoder layer benchmark."""
+    from .gemma4_layer_benchmark import generate_gemma4_layer_benchmark_script
+
+    script = generate_gemma4_layer_benchmark_script()
+
+    if args.output:
+        out = _Path(args.output)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(script)
+        print(f"Benchmark script written to {out}")
+    else:
+        print(script)
+
+    if args.dry_run:
+        print("\n# --dry-run is active; script printed but not executed.", file=sys.stderr)
+
     return 0
 
 
