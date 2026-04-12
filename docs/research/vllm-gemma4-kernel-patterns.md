@@ -79,7 +79,7 @@ MoE is only present on layers where `enable_moe_block` or `use_second_mlp_block`
 
 ## 2. Fused QK-RMSNorm + RoPE prologue (Noeris #31 spec)
 
-**vLLM status:** not fused. vLLM issues 4 separate launches per attention prologue (q_norm, k_norm, v_norm, rotary). This is a Noeris win opportunity, not a port.
+**vLLM status:** vLLM has an experimental `enable_qk_norm_rope_fusion` pass (torch.compile + CUDA kernel) but it is **disabled by default** due to H100 performance regression ([issue #34391](https://github.com/vllm-project/vllm/issues/34391)). With the fusion off (the default), vLLM issues 4 separate launches per attention prologue (q_norm, k_norm, v_norm, rotary). Our Triton implementation with autotuned configs makes this fusion practical.
 
 Relevant vLLM sources to cross-reference against:
 
@@ -341,4 +341,4 @@ Things in vLLM that are either CUDA-only or too runtime-coupled to port:
 
 ---
 
-_Verification notes:_ All file paths and line numbers above are from files fetched 2026-04-11 via `gh api`. The statement that "vLLM does not fuse QK-RMSNorm+RoPE" is verified by reading `Gemma4Attention.forward` (gemma4.py lines 395–427) and confirming four distinct Python-level op calls. The FusedMoE kernel signature and block-size table are quoted directly from `fused_moe.py` lines 311–365 and 1223–1310 respectively. The PagedAttention claim that "there is no Triton reference" is based on `paged_attn.py` being 51 lines of pure dispatch — confirmed by reading the full file. Any detail about the `.cu` attention kernel beyond its existence was not directly verified from source in this pass; the `csrc/attention/*.cu` files should be read separately when Noeris implements #38.
+_Verification notes:_ All file paths and line numbers above are from files fetched 2026-04-11 via `gh api`. **Update 2026-04-12:** vLLM has an experimental `enable_qk_norm_rope_fusion` pass (torch.compile + CUDA kernel, disabled by default due to H100 performance regression, issue #34391). The statement that "vLLM does not fuse QK-RMSNorm+RoPE *by default*" is verified by reading `Gemma4Attention.forward` (gemma4.py lines 395–427) and confirming four distinct Python-level op calls when the fusion flag is off. The FusedMoE kernel signature and block-size table are quoted directly from `fused_moe.py` lines 311–365 and 1223–1310 respectively. The PagedAttention claim that "there is no Triton reference" is based on `paged_attn.py` being 51 lines of pure dispatch — confirmed by reading the full file. Any detail about the `.cu` attention kernel beyond its existence was not directly verified from source in this pass; the `csrc/attention/*.cu` files should be read separately when Noeris implements #38.

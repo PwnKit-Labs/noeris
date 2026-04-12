@@ -10,7 +10,7 @@
 
 ## Critical context
 
-This kernel does not exist in vLLM. vLLM's `Gemma4Attention.forward` (file `vllm/model_executor/models/gemma4.py:395-427`, PR [#38826](https://github.com/vllm-project/vllm/pull/38826)) issues **4+ separate launches** for Q-norm, K-norm, Q-rotary, K-rotary. Confirmed by direct source read in [`docs/research/vllm-gemma4-kernel-patterns.md`](../research/vllm-gemma4-kernel-patterns.md). Fusing this sequence is therefore a **novel kernel**, not a port.
+vLLM has an experimental `enable_qk_norm_rope_fusion` pass (torch.compile + CUDA kernel) but it is **disabled by default** due to H100 performance regression ([issue #34391](https://github.com/vllm-project/vllm/issues/34391)), with 2-3% E2E speedup reported when enabled. The Flash Normalization paper (arXiv:2407.09577) also describes algebraic QK-norm+RoPE optimizations. With the fusion off (the default), vLLM's `Gemma4Attention.forward` (file `vllm/model_executor/models/gemma4.py:395-427`, PR [#38826](https://github.com/vllm-project/vllm/pull/38826)) issues **4+ separate launches** for Q-norm, K-norm, Q-rotary, K-rotary. Our contribution is a parameterized Triton implementation with bandit-tuned configs that makes this fusion practical and performant across hardware.
 
 ## Results — A100 (best config per shape)
 

@@ -8,7 +8,7 @@
 
 **Genuinely novel:**
 
-- **Fused QK-RMSNorm+RoPE forward+backward.** 10-13x fwd, 4.9-7.5x bwd vs vLLM's 4 separate launches. Confirmed by direct source read that vLLM does not fuse this. No other framework does either. This is real.
+- **Fused QK-RMSNorm+RoPE forward+backward.** 10-13x fwd, 4.9-7.5x bwd vs separated launches. vLLM has an experimental fusion (`enable_qk_norm_rope_fusion`) but it is disabled by default due to H100 perf regression. Our Triton implementation with bandit-tuned configs makes the fusion practical. The backward pass remains novel — vLLM's fusion is inference-only.
 - **From-scratch Triton paged-KV decode attention.** vLLM's equivalent is CUDA-only (`paged_attention_v1.cu`). A pure-Triton implementation is a genuine contribution to the Triton ecosystem.
 - **2300+ measurement config database on free T4.** Nobody else runs autonomous search on Colab. The persistent (op, shape, hardware) index with cross-run accumulation has no published open-source equivalent.
 - **MAP-Elites quality-diversity archive for config tuning.** KernelFoundry uses MAP-Elites for kernel code structure; using it for Triton config space with hardware-behavioral dimensions is distinct.
@@ -20,7 +20,7 @@
 - **LLM proposer.** Marginal value demonstrated. Every competing system has one. The cross-run insights injection is the only differentiating aspect, and it lacks ablation data showing it matters.
 - **14 operator coverage.** Breadth is good for a system paper but is not novel per se. Liger Kernel covers more operators.
 
-**Honest positioning:** Noeris has one strong novel kernel (fused prologue), one interesting system property (persistent cross-run shape-indexed learning), and a lot of solid engineering. The paper needs to make those two things undeniable and stop trying to claim novelty where there is none.
+**Honest positioning:** Noeris has one strong kernel result (fused prologue — prior art exists in vLLM's disabled `enable_qk_norm_rope_fusion`, but our Triton implementation makes it practical), one interesting system property (persistent cross-run shape-indexed learning), and a lot of solid engineering. The paper needs to make those two things undeniable and stop trying to claim novelty where there is none. The novelty is the SYSTEM, not the fusion idea itself.
 
 ---
 

@@ -111,7 +111,7 @@ Clean FP8 GEMM kernels with fine-grained scaling for Hopper and Blackwell. Up to
 
 ### 2.4 Fused Training Prologue Kernels (Beyond Inference)
 **What:** Extend QK-RMSNorm+RoPE fusion to the training backward pass. Fuse dRoPE + dRMSNorm + dQ/dK into a single kernel for Gemma 4 fine-tuning.  
-**Why it's novel:** All existing fusions (Liger, Unsloth, vLLM) are either inference-only or fuse individual ops. Nobody has fused the full Gemma attention prologue backward pass.  
+**Why it's novel:** vLLM has a forward-only `enable_qk_norm_rope_fusion` pass (disabled by default due to H100 regression). All existing fusions (Liger, Unsloth, vLLM) are either inference-only or fuse individual ops. No framework fuses the full Gemma attention prologue backward pass.  
 **Difficulty:** 4-6 weeks (backward pass Triton is harder, need gradient verification).  
 **Builds on:** Existing QK-RMSNorm+RoPE forward kernel, verification infrastructure.
 

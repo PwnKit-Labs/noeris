@@ -43,18 +43,18 @@ AutoKernel ([arXiv:2603.21331](https://arxiv.org/abs/2603.21331)) is the closest
 
 | Metric | Noeris | Nearest Competitor |
 |---|---|---|
-| Fusion speedup (A100) | **10.2-12.9x** | Nobody ships this kernel |
-| Fusion speedup (H100) | **10.4-11.9x** | Nobody ships this kernel |
+| Fusion speedup (A100) | **10.2-12.9x** | vLLM has fusion pass but disabled by default (H100 regression) |
+| Fusion speedup (H100) | **10.4-11.9x** | vLLM has fusion pass but disabled by default (H100 regression) |
 | Peak bandwidth (H100) | **1628 GB/s** (49% of HBM3 peak) | N/A |
 
 **Competitive landscape check:**
-- **vLLM**: Does NOT fuse the Gemma 3/4 prologue. Confirmed 4+ separate launches in `gemma4.py:395-427`. ([source](https://github.com/vllm-project/vllm/pull/38826))
+- **vLLM**: Has an experimental `enable_qk_norm_rope_fusion` pass (torch.compile + CUDA kernel) but it is **disabled by default** due to H100 performance regression ([issue #34391](https://github.com/vllm-project/vllm/issues/34391)). With fusion off, vLLM issues 4+ separate launches in `gemma4.py:395-427`. Reported benefit when enabled: 2-3% E2E. ([source](https://github.com/vllm-project/vllm/pull/38826))
 - **Liger Kernel**: Has individual RMSNorm, RoPE, GeGLU kernels. No fused QK-norm+RoPE. ([source](https://github.com/linkedin/Liger-Kernel))
 - **Unsloth**: Has a 2.3x faster fused QK-RoPE kernel, but it does NOT include RMSNorm in the fusion. Different (smaller) fusion scope.
 - **FlashAttention-4**: Fuses prologue into the attention kernel on Blackwell (B200), reaching 1605 TFLOPS. But FA4 targets Blackwell-specific async MMA; it does not exist for A100/H100. ([source](https://www.together.ai/blog/flashattention-4))
 - **FlashInfer**: No published fused prologue kernel.
 
-**Verdict: This is genuinely novel.** No published system fuses QK-RMSNorm+RoPE into a single Triton kernel for Gemma 3/4 on A100/H100. The 10-13x speedup is real and attributable to launch-overhead elimination (4 launches reduced to 1). FlashAttention-4 subsumes this on Blackwell but does not exist for prior hardware. Unsloth's QK-RoPE fusion is the nearest work but excludes normalization.
+**Verdict: The fusion idea has prior art (vLLM's `enable_qk_norm_rope_fusion`, Flash Normalization arXiv:2407.09577). Our contribution is making it practical.** vLLM's torch.compile+CUDA approach is disabled by default due to H100 regressions. Our parameterized Triton implementation with bandit-tuned configs achieves 10-13x prologue speedup reliably across A100/H100. The 10-13x speedup is real and attributable to launch-overhead elimination (4 launches reduced to 2). FlashAttention-4 subsumes this on Blackwell but does not exist for prior hardware. Unsloth's QK-RoPE fusion is the nearest work but excludes normalization. The novelty is the SYSTEM (autonomous search + parameterized kernels), not the fusion idea itself.
 
 ---
 
@@ -94,7 +94,7 @@ The fused QK-RMSNorm+RoPE kernel is a legitimate systems contribution, but a sin
 ### Likely reviewer criticisms
 
 1. "The 10-13x speedup is just launch overhead elimination for small tensors. The HBM model predicts 2x; the rest is PyTorch overhead, not algorithmic innovation."
-   - **Rebuttal**: Launch overhead IS the bottleneck at these shapes, and no one else has shipped the fusion. The kernel reaches 49% of HBM peak, proving it is not just overhead avoidance. The practical impact on Gemma 3/4 inference is real regardless of the source of the speedup.
+   - **Rebuttal**: Launch overhead IS the bottleneck at these shapes. vLLM attempted the fusion (`enable_qk_norm_rope_fusion`) but had to disable it due to H100 regressions — our Triton approach avoids this. The kernel reaches 49% of HBM peak, proving it is not just overhead avoidance. The practical impact on Gemma 3/4 inference is real regardless of the source of the speedup.
 
 2. "KernelBench evaluation on 53 curated problems is not comparable to the standard 250-problem suite."
    - **Rebuttal**: Acknowledged. We do not claim KernelBench SOTA. The curated suite tests our Triton templates on shapes that matter for LLM inference. Full-suite evaluation is future work.
