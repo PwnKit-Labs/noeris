@@ -1,64 +1,27 @@
 #!/usr/bin/env python3
 """Noeris GPU benchmark on Kaggle T4.
 
-Validates all 14 operators + runs bandit search on key operators.
+Validates all 15 operators + runs bandit search on key operators.
 Push via: KAGGLE_API_TOKEN=... kaggle kernels push -p scripts/kaggle/
 """
 import subprocess
 import sys
 import os
 
-# Install from Kaggle dataset (no internet needed)
-import zipfile, glob
-# Debug: list what's in the input directory
-print("Kaggle input contents:")
-for p in glob.glob("/kaggle/input/**/*", recursive=True):
-    print(f"  {p}")
-
-# Try multiple possible paths
-dataset_zip = None
-for candidate in [
-    "/kaggle/input/noeris-source-code/noeris-code.zip",
-    "/kaggle/input/noeris-source-code.zip",
-    "/kaggle/input/noeris-source-code/src",  # auto-extracted
-]:
-    if os.path.exists(candidate):
-        dataset_zip = candidate
-        break
-
-if dataset_zip and dataset_zip.endswith(".zip"):
-    print("Installing from Kaggle dataset (offline)...")
-    with zipfile.ZipFile(dataset_zip, 'r') as z:
-        z.extractall("/tmp/noeris")
-    subprocess.check_call([sys.executable, "-m", "pip", "install",
-                           "-e", "/tmp/noeris", "numpy", "scikit-learn", "-q"])
-elif dataset_zip and os.path.isdir(dataset_zip):
-    # Dataset was auto-extracted by Kaggle (read-only filesystem)
-    # Copy to /tmp/ for pip install -e (needs write access for .egg-info)
-    import shutil
-    kaggle_root = "/kaggle/input/noeris-source-code"
-    print(f"Copying from read-only Kaggle input to /tmp/noeris...")
-    if os.path.exists("/tmp/noeris"):
-        shutil.rmtree("/tmp/noeris")
-    shutil.copytree(kaggle_root, "/tmp/noeris")
-    subprocess.check_call([sys.executable, "-m", "pip", "install",
-                           "-e", "/tmp/noeris", "numpy", "scikit-learn", "-q"])
-else:
-    # Fallback: clone from GitHub (needs internet/phone verification)
-    print(f"Dataset not found at any candidate path, cloning from GitHub...")
-    subprocess.run(["git", "clone", "--depth", "1",
-                    "https://github.com/PwnKit-Labs/noeris.git", "/tmp/noeris"],
-                   check=True)
-    subprocess.check_call([sys.executable, "-m", "pip", "install",
-                           "-e", "/tmp/noeris", "numpy", "scikit-learn", "-q"])
+# Clone and install noeris
+subprocess.run(["git", "clone", "--depth", "1",
+                "https://github.com/PwnKit-Labs/noeris.git", "/tmp/noeris"],
+               check=True)
+subprocess.check_call([sys.executable, "-m", "pip", "install",
+                       "-e", "/tmp/noeris", "numpy", "scikit-learn", "-q"])
 
 print("=" * 60)
-print("PHASE 1: Validate all 14 operators")
+print("PHASE 1: Validate all 15 operators")
 print("=" * 60)
 subprocess.run([sys.executable, "/tmp/noeris/scripts/colab_validate_all.py"])
 
 print("\n" + "=" * 60)
-print("PHASE 2: Bandit search on key operators (5 iter × 10 configs)")
+print("PHASE 2: Bandit search on key operators (3 iter × 8 configs)")
 print("=" * 60)
 for op in ["qk_norm_rope", "rmsnorm", "softmax", "geglu", "cross_entropy",
            "layernorm", "rotary", "qk_norm_rope_bwd"]:
