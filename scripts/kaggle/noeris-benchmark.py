@@ -8,14 +8,12 @@ import subprocess
 import sys
 import os
 
-# Install noeris
+# Clone and install noeris (clone first, then pip install from local)
+subprocess.run(["git", "clone", "--depth", "1",
+                "https://github.com/peaktwilight/noeris.git", "/tmp/noeris"],
+               check=True)
 subprocess.check_call([sys.executable, "-m", "pip", "install",
-                       "git+https://github.com/peaktwilight/noeris",
-                       "numpy", "scikit-learn", "-q"])
-
-# Clone for scripts access
-subprocess.check_call(["git", "clone", "https://github.com/peaktwilight/noeris", "/tmp/noeris"],
-                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                       "-e", "/tmp/noeris", "numpy", "scikit-learn", "-q"])
 
 print("=" * 60)
 print("PHASE 1: Validate all 14 operators")
