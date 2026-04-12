@@ -120,7 +120,7 @@ LAYER_CONFIGS = json.loads({configs_json!r})
 _RMSNORM_CONFIG = {{"BLOCK_SIZE": 128, "num_warps": 4, "num_stages": 1}}
 _QK_NORM_ROPE_CONFIG = {{"BLOCK_SIZE": 128, "num_warps": 4, "num_stages": 1}}
 _GEGLU_CONFIG = {{"BLOCK_SIZE": 128, "num_warps": 4, "num_stages": 1}}
-_ATTN_CONFIG = {{"BLOCK_M": 64, "BLOCK_N": 64, "num_warps": 4, "num_stages": 2}}
+_ATTN_CONFIG = {{"BLOCK_M": 32, "BLOCK_N": 32, "num_warps": 2, "num_stages": 3}}
 
 def noeris_rmsnorm(x, w, eps=1e-6):
     """RMSNorm via the canonical Triton kernel (Gemma affine_mode=1)."""
@@ -278,10 +278,10 @@ def benchmark_layer(cfg):
         # Step 1: Pre-attention RMSNorm (Gemma affine_mode=1)
         h = noeris_rmsnorm(hidden_in.view(-1, D), w_pre_attn).view(B, S, D)
 
-        # Step 2: QKV projection
-        q = (h.view(-1, D) @ w_q).view(B, S, H, Dh).permute(0, 2, 1, 3)
-        k = (h.view(-1, D) @ w_k).view(B, S, Hkv, Dh).permute(0, 2, 1, 3)
-        v = (h.view(-1, D) @ w_v).view(B, S, Hkv, Dh).permute(0, 2, 1, 3)
+        # Step 2: QKV projection — contiguous (B, H, S, D) for Triton kernels
+        q = (h.view(-1, D) @ w_q).view(B, S, H, Dh).permute(0, 2, 1, 3).contiguous()
+        k = (h.view(-1, D) @ w_k).view(B, S, Hkv, Dh).permute(0, 2, 1, 3).contiguous()
+        v = (h.view(-1, D) @ w_v).view(B, S, Hkv, Dh).permute(0, 2, 1, 3).contiguous()
 
         # Step 3: Fused QK-RMSNorm + RoPE (our headline kernel!)
         q, k = noeris_qk_norm_rope(q, k, q_scale, k_scale, cos, sin)
@@ -316,25 +316,25 @@ def benchmark_layer(cfg):
 
     h_norm = step1_noeris().view(B, S, D)
     def step2_noeris():
-        q = (h_norm.view(-1, D) @ w_q)
-        k = (h_norm.view(-1, D) @ w_k)
-        v = (h_norm.view(-1, D) @ w_v)
+        q = (h_norm.view(-1, D) @ w_q).view(B, S, H, Dh).permute(0, 2, 1, 3).contiguous()
+        k = (h_norm.view(-1, D) @ w_k).view(B, S, Hkv, Dh).permute(0, 2, 1, 3).contiguous()
+        v = (h_norm.view(-1, D) @ w_v).view(B, S, Hkv, Dh).permute(0, 2, 1, 3).contiguous()
         return q, k, v
     noeris_step_times["2_qkv_proj"] = cuda_event_timer(step2_noeris)
 
-    q_t = (h_norm.view(-1, D) @ w_q).view(B, S, H, Dh).permute(0, 2, 1, 3)
-    k_t = (h_norm.view(-1, D) @ w_k).view(B, S, Hkv, Dh).permute(0, 2, 1, 3)
-    v_t = (h_norm.view(-1, D) @ w_v).view(B, S, Hkv, Dh).permute(0, 2, 1, 3)
+    q_t = (h_norm.view(-1, D) @ w_q).view(B, S, H, Dh).permute(0, 2, 1, 3).contiguous()
+    k_t = (h_norm.view(-1, D) @ w_k).view(B, S, Hkv, Dh).permute(0, 2, 1, 3).contiguous()
+    v_t = (h_norm.view(-1, D) @ w_v).view(B, S, Hkv, Dh).permute(0, 2, 1, 3).contiguous()
 
     def step3_noeris():
         noeris_qk_norm_rope(q_t, k_t, q_scale, k_scale, cos, sin)
-    noeris_step_times["3_qk_norm_rope"] = cuda_event_timer(step3_noeris)
+    noeris_step_times["3_qk_norm_rope_fused"] = cuda_event_timer(step3_noeris)
 
     q_nr, k_nr = noeris_qk_norm_rope(q_t, k_t, q_scale, k_scale, cos, sin)
     def step4_noeris():
         return noeris_attention(q_nr, k_nr, v_t, Hkv,
                                 window_size=ws, is_causal=causal)
-    noeris_step_times["4_attention"] = cuda_event_timer(step4_noeris)
+    noeris_step_times["4_attention_flash"] = cuda_event_timer(step4_noeris)
 
     attn_out = step4_noeris().permute(0, 2, 1, 3).reshape(B, S, D)
     h_post_attn = hidden + attn_out
@@ -344,12 +344,21 @@ def benchmark_layer(cfg):
     noeris_step_times["6_pre_mlp_rmsnorm"] = cuda_event_timer(step6_noeris)
 
     h_mlp = step6_noeris().view(B, S, D)
+    def step7a_noeris():
+        return h_mlp.view(-1, D) @ w_gate_up
+    noeris_step_times["7a_gate_up_proj"] = cuda_event_timer(step7a_noeris)
+
     gate_up = h_mlp.view(-1, D) @ w_gate_up
     gate_t = gate_up[:, :Dff]
     up_t   = gate_up[:, Dff:]
-    def step7_noeris():
+    def step7b_noeris():
         return noeris_geglu(gate_t, up_t)
-    noeris_step_times["7_geglu"] = cuda_event_timer(step7_noeris)
+    noeris_step_times["7b_geglu_fused"] = cuda_event_timer(step7b_noeris)
+
+    mlp_act = noeris_geglu(gate_t, up_t)
+    def step7c_noeris():
+        return mlp_act @ w_down
+    noeris_step_times["7c_down_proj"] = cuda_event_timer(step7c_noeris)
 
     # Total end-to-end Noeris fused
     noeris_fused_ms = cuda_event_timer(lambda: noeris_fused_layer(hidden))
@@ -366,10 +375,10 @@ def benchmark_layer(cfg):
         # Step 1: Pre-attention RMSNorm
         h = pytorch_rmsnorm(hidden_in.view(-1, D), w_pre_attn).view(B, S, D)
 
-        # Step 2: QKV projection
-        q = (h.view(-1, D) @ w_q).view(B, S, H, Dh).permute(0, 2, 1, 3)
-        k = (h.view(-1, D) @ w_k).view(B, S, Hkv, Dh).permute(0, 2, 1, 3)
-        v = (h.view(-1, D) @ w_v).view(B, S, Hkv, Dh).permute(0, 2, 1, 3)
+        # Step 2: QKV projection — contiguous (B, H, S, D) for SDPA
+        q = (h.view(-1, D) @ w_q).view(B, S, H, Dh).permute(0, 2, 1, 3).contiguous()
+        k = (h.view(-1, D) @ w_k).view(B, S, Hkv, Dh).permute(0, 2, 1, 3).contiguous()
+        v = (h.view(-1, D) @ w_v).view(B, S, Hkv, Dh).permute(0, 2, 1, 3).contiguous()
 
         # Step 3: Separate Q-RMSNorm, K-RMSNorm, Q-RoPE, K-RoPE (4 ops)
         q = pytorch_qk_norm_rope_separated(q, q_scale, cos, sin)
@@ -415,13 +424,23 @@ def benchmark_layer(cfg):
         return pytorch_rmsnorm(hidden.view(-1, D), w_pre_attn)
     pytorch_step_times["1_pre_attn_rmsnorm"] = cuda_event_timer(step1_pytorch)
 
+    h_norm_pt = step1_pytorch().view(B, S, D)
+    def step2_pytorch():
+        q = (h_norm_pt.view(-1, D) @ w_q).view(B, S, H, Dh).permute(0, 2, 1, 3).contiguous()
+        k = (h_norm_pt.view(-1, D) @ w_k).view(B, S, Hkv, Dh).permute(0, 2, 1, 3).contiguous()
+        v = (h_norm_pt.view(-1, D) @ w_v).view(B, S, Hkv, Dh).permute(0, 2, 1, 3).contiguous()
+        return q, k, v
+    pytorch_step_times["2_qkv_proj"] = cuda_event_timer(step2_pytorch)
+
     def step3_pytorch():
         pytorch_qk_norm_rope_separated(q_t, q_scale, cos, sin)
         pytorch_qk_norm_rope_separated(k_t, k_scale, cos, sin)
-    pytorch_step_times["3_qk_norm_rope_separated"] = cuda_event_timer(step3_pytorch)
+    pytorch_step_times["3_qk_norm_rope_4ops"] = cuda_event_timer(step3_pytorch)
 
+    q_pt = pytorch_qk_norm_rope_separated(q_t, q_scale, cos, sin)
+    k_pt = pytorch_qk_norm_rope_separated(k_t, k_scale, cos, sin)
     def step4_pytorch():
-        k_e = expand_kv_for_gqa(k_t, H, Hkv)
+        k_e = expand_kv_for_gqa(k_pt, H, Hkv)
         v_e = expand_kv_for_gqa(v_t, H, Hkv)
         if ws > 0:
             rows = torch.arange(S, device="cuda").unsqueeze(1)
@@ -435,9 +454,18 @@ def benchmark_layer(cfg):
         return pytorch_rmsnorm(h_post_attn.view(-1, D), w_pre_mlp)
     pytorch_step_times["6_pre_mlp_rmsnorm"] = cuda_event_timer(step6_pytorch)
 
-    def step7_pytorch():
+    h_mlp_pt = step6_pytorch().view(B, S, D)
+    def step7a_pytorch():
+        return h_mlp_pt.view(-1, D) @ w_gate_up
+    pytorch_step_times["7a_gate_up_proj"] = cuda_event_timer(step7a_pytorch)
+
+    def step7b_pytorch():
         return pytorch_geglu_separated(gate_t, up_t)
-    pytorch_step_times["7_geglu_separated"] = cuda_event_timer(step7_pytorch)
+    pytorch_step_times["7b_geglu_separated"] = cuda_event_timer(step7b_pytorch)
+
+    def step7c_pytorch():
+        return mlp_act @ w_down
+    pytorch_step_times["7c_down_proj"] = cuda_event_timer(step7c_pytorch)
 
     # Total end-to-end PyTorch separated
     pytorch_separated_ms = cuda_event_timer(lambda: pytorch_separated_layer(hidden))
@@ -455,13 +483,28 @@ def benchmark_layer(cfg):
     # =====================================================================
     layer_speedup = pytorch_separated_ms / noeris_fused_ms if noeris_fused_ms > 0 else 0.0
 
-    print(f"\\n  --- Per-step timing (ms) ---")
-    print(f"  Noeris fused steps:")
-    for step, ms in sorted(noeris_step_times.items()):
-        print(f"    {{step}}: {{ms:.3f}} ms")
-    print(f"  PyTorch separated steps:")
-    for step, ms in sorted(pytorch_step_times.items()):
-        print(f"    {{step}}: {{ms:.3f}} ms")
+    print("\\n  --- Per-step timing (ms) ---")
+    hdr = "  {{:<30s}} {{:>10s}} {{:>10s}} {{:>10s}}".format("Step", "Noeris", "PyTorch", "Speedup")
+    print(hdr)
+    print("  " + "─" * 62)
+    for n_key, n_ms in sorted(noeris_step_times.items()):
+        # Find matching pytorch step by step number prefix
+        prefix = n_key[:2]
+        p_keys = [k for k in pytorch_step_times if k.startswith(prefix)]
+        if p_keys:
+            p_ms = pytorch_step_times[p_keys[0]]
+            spd = p_ms / n_ms if n_ms > 0 else 0.0
+            row = "    {{:<28s}} {{:>8.3f}}   {{:>8.3f}}   {{:>8.2f}}x".format(n_key, n_ms, p_ms, spd)
+        else:
+            row = "    {{:<28s}} {{:>8.3f}}   {{:>8s}}   {{:>8s}}".format(n_key, n_ms, "—", "—")
+        print(row)
+    # Print pytorch-only steps
+    for p_key, p_ms in sorted(pytorch_step_times.items()):
+        prefix = p_key[:2]
+        n_keys = [k for k in noeris_step_times if k.startswith(prefix)]
+        if not n_keys:
+            row = "    {{:<28s}} {{:>8s}}   {{:>8.3f}}   {{:>8s}}".format(p_key, "—", p_ms, "—")
+            print(row)
     print(f"\\n  --- Total layer ---")
     print(f"  noeris_fused_ms:      {{noeris_fused_ms:.3f}}")
     print(f"  pytorch_separated_ms: {{pytorch_separated_ms:.3f}}")

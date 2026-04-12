@@ -56,6 +56,33 @@ class Gemma4LayerBenchmarkTests(unittest.TestCase):
         self.assertIn("step_times", script)
         self.assertIn("noeris_step_times", script)
         self.assertIn("pytorch_step_times", script)
+        # Ensure all major steps are individually timed
+        for key in [
+            "1_pre_attn_rmsnorm",
+            "2_qkv_proj",
+            "4_attention",
+            "6_pre_mlp_rmsnorm",
+            "7a_gate_up_proj",
+            "7c_down_proj",
+        ]:
+            self.assertIn(key, script, f"Missing per-step key: {key}")
+
+    def test_benchmark_script_uses_all_noeris_kernels(self) -> None:
+        """Generated script wires all 4 Noeris kernels into the fused path."""
+        script = generate_gemma4_layer_benchmark_script()
+        self.assertIn("noeris_rmsnorm", script)
+        self.assertIn("noeris_qk_norm_rope", script)
+        self.assertIn("noeris_attention", script)
+        self.assertIn("noeris_geglu", script)
+        # Verify the attention wrapper calls flash_attn
+        self.assertIn("_noeris_flash_attn_raw", script)
+
+    def test_benchmark_script_t4_friendly_attn_config(self) -> None:
+        """Attention config uses small blocks suitable for T4 with large head_dim."""
+        script = generate_gemma4_layer_benchmark_script()
+        # BLOCK_M and BLOCK_N should be 32 for T4 compatibility
+        self.assertIn('"BLOCK_M": 32', script)
+        self.assertIn('"BLOCK_N": 32', script)
 
     def test_configs_have_required_fields(self) -> None:
         """Each config has all required layer dimension fields."""
