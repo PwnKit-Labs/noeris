@@ -57,6 +57,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("agenda", help="print the current research agenda")
     subparsers.add_parser("benchmarks", help="print the current standing benchmark goals")
     subparsers.add_parser("ci-env", help="show GitHub env/secret mapping from local Codex config")
+    subparsers.add_parser("status", help="show local verification and artifact status")
 
     cycle_parser = subparsers.add_parser("cycle", help="run a scaffolded research cycle")
     cycle_parser.add_argument("--topic", required=True, help="topic under investigation")
@@ -526,6 +527,23 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"error": "No local Codex config provider found."}, indent=2))
             return 1
         print(json.dumps(render_github_env_setup(config), indent=2))
+        return 0
+    if args.command == "status":
+        store = JsonFileRunStore()
+        runs = store.list_runs()
+        latest = runs[0] if runs else None
+        artifacts_dir = _Path(".noeris/artifacts")
+        history_dir = _Path(".noeris/history")
+        payload = {
+            "run_count": len(runs),
+            "artifact_bundle_count": sum(1 for path in artifacts_dir.iterdir()) if artifacts_dir.exists() else 0,
+            "history_artifacts_present": {
+                "history_summary_json": (history_dir / "history-summary.json").exists(),
+                "history_brief_md": (history_dir / "history-brief.md").exists(),
+            },
+            "latest_run": latest or {},
+        }
+        print(json.dumps(payload, indent=2))
         return 0
     if args.command == "sources":
         topic = ResearchTopic(

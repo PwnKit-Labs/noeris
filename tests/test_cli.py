@@ -87,6 +87,13 @@ class CliTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload, [])
 
+    def test_status_command_reports_empty_workspace(self) -> None:
+        with _temp_workspace():
+            exit_code, payload = _run_cli_json("status")
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["run_count"], 0)
+        self.assertEqual(payload["artifact_bundle_count"], 0)
+
     def test_run_command_persists_a_record(self) -> None:
         with _temp_workspace():
             exit_code, payload = _run_cli_json("run", "--topic", "long-context reasoning")
@@ -172,6 +179,23 @@ class CliTests(unittest.TestCase):
         self.assertEqual(export_exit_code, 0)
         self.assertEqual(exported["run_id"], payload["run_id"])
         self.assertTrue(exported["bundle_dir"].endswith(payload["run_id"]))
+
+    def test_status_command_reports_latest_run_and_artifacts(self) -> None:
+        with _temp_workspace():
+            run_exit_code, payload = _run_cli_json("benchmark-run", "tool-use-reliability")
+            _run_cli_json(
+                "export-history",
+                "--benchmark-id",
+                "tool-use-reliability",
+            )
+            status_exit_code, status_payload = _run_cli_json("status")
+        self.assertEqual(run_exit_code, 0)
+        self.assertEqual(status_exit_code, 0)
+        self.assertGreaterEqual(status_payload["run_count"], 1)
+        self.assertGreaterEqual(status_payload["artifact_bundle_count"], 1)
+        self.assertEqual(status_payload["latest_run"]["run_id"], payload["run_id"])
+        self.assertTrue(status_payload["history_artifacts_present"]["history_summary_json"])
+        self.assertTrue(status_payload["history_artifacts_present"]["history_brief_md"])
 
     def test_benchmark_run_command_persists_and_exports_empirical_lane(self) -> None:
         with _temp_workspace():
