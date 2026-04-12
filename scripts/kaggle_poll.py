@@ -1,12 +1,12 @@
 """Poll a Kaggle kernel and pull results when complete.
 
 Usage: KAGGLE_API_TOKEN=... python scripts/kaggle_poll.py [kernel-slug]
-Default slug: peaktwilight/noeris-gpu-benchmark-14-operators-on-t4
+Default slug: PwnKit-Labs/noeris-gpu-benchmark-14-operators-on-t4
 """
 import argparse, os, sys, time, tempfile, json
 from kaggle.api.kaggle_api_extended import KaggleApi
 
-DEFAULT_SLUG = "peaktwilight/noeris-gpu-benchmark-14-operators-on-t4"
+DEFAULT_SLUG = "PwnKit-Labs/noeris-gpu-benchmark-14-operators-on-t4"
 
 def get_api():
     api = KaggleApi(); api.authenticate(); return api

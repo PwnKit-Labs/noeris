@@ -6,7 +6,7 @@ Thompson sampling with Beta posteriors to explore the config space, and the
 cost model (if available) filters candidates before GPU evaluation.
 
 Usage in Colab:
-  !git clone https://github.com/peaktwilight/noeris && cd noeris
+  !git clone https://github.com/PwnKit-Labs/noeris && cd noeris
   !pip install -e . numpy scikit-learn
   !python scripts/colab_iterate.py --operator qk_norm_rope --iterations 3 --configs-per-iter 8
 

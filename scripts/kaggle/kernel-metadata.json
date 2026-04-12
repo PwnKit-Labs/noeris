@@ -1,6 +1,6 @@
 {
-  "id": "dtozturk02/noeris-gpu-benchmark",
-  "title": "Noeris GPU Benchmark — 14 Operators on T4",
+  "id": "PwnKit-Labs/noeris-gpu-benchmark",
+  "title": "noeris-gpu-benchmark",
   "code_file": "noeris-benchmark.py",
   "language": "python",
   "kernel_type": "script",

@@ -310,7 +310,7 @@ predictions.
 All results are reproducible with:
 
 ```bash
-git clone https://github.com/peaktwilight/noeris
+git clone https://github.com/PwnKit-Labs/noeris
 cd noeris
 pip install -e ".[dev]"
 pip install modal scikit-learn datasets

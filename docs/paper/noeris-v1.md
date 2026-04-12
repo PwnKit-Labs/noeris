@@ -37,7 +37,7 @@ time.
 
 The system runs autonomously via GitHub Actions + Modal at ≈$0.01 per
 benchmark iteration. Source code, reproduction scripts, and raw data
-are available at https://github.com/peaktwilight/noeris.
+are available at https://github.com/PwnKit-Labs/noeris.
 
 ## 1. Introduction
 
@@ -440,14 +440,14 @@ is fundamentally wrong. We outline specific experimental designs that
 would better test the claim and leave them as future work.
 
 All code, raw benchmark data, and reproduction scripts are available
-at https://github.com/peaktwilight/noeris under an open-source license.
+at https://github.com/PwnKit-Labs/noeris under an open-source license.
 
 ## A. Reproduction
 
 Everything in this paper can be reproduced with:
 
 ```bash
-git clone https://github.com/peaktwilight/noeris
+git clone https://github.com/PwnKit-Labs/noeris
 cd noeris
 pip install -e .
 pip install modal scikit-learn datasets

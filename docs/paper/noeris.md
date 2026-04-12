@@ -14,7 +14,7 @@ The system covers thirteen additional operators beyond the fused forward prologu
 
 Cost-model-filtered search outperforms unfiltered grid search by **+37.35% on cross_entropy** and **+5.26% on softmax**. A three-way selector comparison shows cost model and bandit are complementary (cost model leads on attention +66% and softmax +5%; bandit leads on matmul +134% vs +45%). An adaptive meta-bandit router matches the best fixed selector within 0.5% across 3 independent trials. A100-trained cost model rankings transfer to H100 with Spearman ρ = **0.967**. A learned-feasibility refactor replaces all hand-coded shared-memory filters with runtime reward=0 signal — the bandit learns which configurations are infeasible per shape, with no hardcoded prior.
 
-The system runs at ~$0.01 per iteration. The full fused-prologue A100+H100 table above was produced for approximately $0.20 in Modal credits, reproducible via `scripts/smoke_modal.py --full --h100 --qk-only --write-results`. Code and data are available at https://github.com/peaktwilight/noeris (MIT License).
+The system runs at ~$0.01 per iteration. The full fused-prologue A100+H100 table above was produced for approximately $0.20 in Modal credits, reproducible via `scripts/smoke_modal.py --full --h100 --qk-only --write-results`. Code and data are available at https://github.com/PwnKit-Labs/noeris (MIT License).
 
 ---
 
@@ -26,7 +26,7 @@ A shared limitation of published systems is that **search state does not persist
 
 Noeris investigates an alternative. Rather than rewriting kernel source per invocation, we generate kernels from a compact parameter tuple (e.g., `BLOCK_SIZE_M`, `BLOCK_SIZE_N`, `num_warps`, `num_stages`) and store winning configurations in a **shape-indexed cross-run database** keyed by `(operator, shape_bucket, hardware)`. When an LLM proposer is invoked, it sees the database state as cross-run insights, allowing it to reason about what has worked on similar shapes before. A gradient-boosted cost model trained on accumulated benchmark data then rank-orders grid candidates at prediction time, without incurring additional GPU calls.
 
-All code, benchmark data, and reproduction scripts are available at https://github.com/peaktwilight/noeris under the MIT License. We make six contributions:
+All code, benchmark data, and reproduction scripts are available at https://github.com/PwnKit-Labs/noeris under the MIT License. We make six contributions:
 
 1. **A novel fused kernel, discovered and measured via the search loop.** The Gemma 3/4 attention prologue (`Q-RMSNorm → K-RMSNorm → Q-RoPE → K-RoPE`) is **not fused in vLLM**, the reference LLM inference stack (confirmed by direct source read of [`vllm/model_executor/models/gemma4.py:395-427`](https://github.com/vllm-project/vllm/pull/38826), see [`docs/research/vllm-gemma4-kernel-patterns.md`](../research/vllm-gemma4-kernel-patterns.md)). Our fused Triton kernel (`triton_qk_norm_rope.py`, §3.2.1) beats vLLM's separated-launches baseline by 10.2–12.9× on A100 and 10.4–11.9× on H100 across six Gemma 3/4 shape buckets (60/60 correct, zero failures). Peak 1627.7 GB/s on H100 `gemma4_31b_global`. To our knowledge, this is the first published measurement of a fused Gemma 3/4 prologue kernel.
 
@@ -686,16 +686,16 @@ Hardware cross-learning experiments (§4.9) establish that A100-trained cost mod
 
 The initial cross-run learning ablation (§4.5) remains negative: at 5 iterations with strong curated priors, database-guided LLM proposals do not outperform stateless proposals within the measurement noise floor. We interpret this as evidence that strong curated priors dominate the result, not as evidence against persistent cross-run learning in principle. Demonstrating that contribution requires weaker priors, longer budgets, and colder novel shapes — all supported by the existing CLI but not yet run at scale.
 
-All code, raw benchmark data, and reproduction scripts are available at https://github.com/peaktwilight/noeris under the MIT License.
+All code, raw benchmark data, and reproduction scripts are available at https://github.com/PwnKit-Labs/noeris under the MIT License.
 
 ---
 
 ## A. Reproduction
 
-The repository is publicly available at https://github.com/peaktwilight/noeris (MIT License). Everything in this paper can be reproduced with:
+The repository is publicly available at https://github.com/PwnKit-Labs/noeris (MIT License). Everything in this paper can be reproduced with:
 
 ```bash
-git clone https://github.com/peaktwilight/noeris
+git clone https://github.com/PwnKit-Labs/noeris
 cd noeris
 pip install -e ".[dev]"
 pip install modal scikit-learn datasets

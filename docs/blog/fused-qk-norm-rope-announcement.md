@@ -112,7 +112,7 @@ The missing factor is kernel launch overhead. Each individual kernel at these ti
 ## Reproduce it
 
 ```bash
-git clone https://github.com/peaktwilight/noeris
+git clone https://github.com/PwnKit-Labs/noeris
 cd noeris
 pip install -e . modal numpy scikit-learn
 # You'll need a Modal account. Then:
@@ -121,7 +121,7 @@ python scripts/smoke_modal.py --full --h100 --qk-only --write-results
 
 Runtime: ~3 minutes per GPU. Cost: ~$0.20 total (A100 + H100 both). Results land in `docs/results/qk-norm-rope-{a100,h100}-full.json`.
 
-Source of the kernel itself: [`src/research_engine/triton_qk_norm_rope.py`](https://github.com/peaktwilight/noeris/blob/main/src/research_engine/triton_qk_norm_rope.py). It's 426 lines including the generated benchmark script; the actual Triton kernel body is about 40 lines.
+Source of the kernel itself: [`src/research_engine/triton_qk_norm_rope.py`](https://github.com/PwnKit-Labs/noeris/blob/main/src/research_engine/triton_qk_norm_rope.py). It's 426 lines including the generated benchmark script; the actual Triton kernel body is about 40 lines.
 
 ## Credit where due
 
@@ -135,7 +135,7 @@ The kernel itself is mine. But it would not have happened without:
 
 The fused kernel was found through an autonomous kernel optimization system called **Noeris** that I've been building. It has 9 parameterized Triton operators, a shape-indexed cross-run configuration database, a learned cost model (R² = 0.94), a multi-armed bandit for config selection, and an adaptive meta-bandit router that learns which selector to trust per iteration. The cross-hardware transfer Spearman correlation (A100 → H100) is 0.967.
 
-The kernel above is the system's first measured novel-kernel result against a SOTA reference stack. Paper draft: [`docs/paper/noeris.md`](https://github.com/peaktwilight/noeris/blob/main/docs/paper/noeris.md). MIT License. Questions and corrections welcome.
+The kernel above is the system's first measured novel-kernel result against a SOTA reference stack. Paper draft: [`docs/paper/noeris.md`](https://github.com/PwnKit-Labs/noeris/blob/main/docs/paper/noeris.md). MIT License. Questions and corrections welcome.
 
 ---
 
@@ -167,8 +167,8 @@ Reproduction: upload `scripts/colab_validate_all.py` to a Colab T4 runtime and r
 
 5/ Critical Gemma gotcha: `Gemma4RMSNorm` uses `y = x * rstd * (1 + weight)`, NOT the standard `y = x * rstd * weight`. If your fused kernel uses the standard form while trained weights assume (1+w), outputs are silently wrong by ~10×. vLLM handles this via separate `GemmaRMSNorm` CustomOp.
 
-6/ Reproduction: `git clone github.com/peaktwilight/noeris && python scripts/smoke_modal.py --full --h100 --qk-only --write-results`. ~3 min/GPU, ~$0.20 on Modal. Open source, MIT. Part of a larger autonomous kernel search system I've been building.
+6/ Reproduction: `git clone github.com/PwnKit-Labs/noeris && python scripts/smoke_modal.py --full --h100 --qk-only --write-results`. ~3 min/GPU, ~$0.20 on Modal. Open source, MIT. Part of a larger autonomous kernel search system I've been building.
 
 7/ This is NOT an "I beat vLLM end-to-end" claim. vLLM is a brilliant piece of engineering. It's "this one specific kernel path in vLLM launches 4× more than it needs to on Gemma 3/4, and here's what happens if you fix it."
 
-8/ Full writeup + data: github.com/peaktwilight/noeris/blob/main/docs/results/qk-norm-rope-fusion-speedup.md. Paper draft: same repo, docs/paper/noeris.md. Questions welcome, corrections especially welcome.
+8/ Full writeup + data: github.com/PwnKit-Labs/noeris/blob/main/docs/results/qk-norm-rope-fusion-speedup.md. Paper draft: same repo, docs/paper/noeris.md. Questions welcome, corrections especially welcome.

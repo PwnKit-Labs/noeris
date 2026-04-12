@@ -10,7 +10,7 @@ import os
 
 # Clone and install noeris (clone first, then pip install from local)
 subprocess.run(["git", "clone", "--depth", "1",
-                "https://github.com/peaktwilight/noeris.git", "/tmp/noeris"],
+                "https://github.com/PwnKit-Labs/noeris.git", "/tmp/noeris"],
                check=True)
 subprocess.check_call([sys.executable, "-m", "pip", "install",
                        "-e", "/tmp/noeris", "numpy", "scikit-learn", "-q"])

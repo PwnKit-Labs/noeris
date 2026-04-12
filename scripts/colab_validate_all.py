@@ -3,7 +3,7 @@
 Usage in Colab:
   1. Open https://colab.research.google.com
   2. New notebook → Runtime → Change runtime type → T4 GPU
-  3. In a cell: !git clone https://github.com/peaktwilight/noeris && cd noeris && pip install -e . numpy scikit-learn
+  3. In a cell: !git clone https://github.com/PwnKit-Labs/noeris && cd noeris && pip install -e . numpy scikit-learn
   4. In the next cell: !cd noeris && python scripts/colab_validate_all.py
 
 No Modal needed. No billing. Free T4 GPU.
