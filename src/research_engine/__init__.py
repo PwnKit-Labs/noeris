@@ -37,6 +37,7 @@ from . import triton_geglu  # noqa: F401  (registers geglu)
 from . import triton_qk_norm_rope  # noqa: F401  (registers qk_norm_rope)
 from . import triton_moe_router  # noqa: F401  (registers moe_router)
 from . import triton_grouped_gemm  # noqa: F401  (registers grouped_gemm)
+from . import triton_ple_gather  # noqa: F401  (registers ple_gather)
 from .triton_operators import REGISTRY as TRITON_OPERATORS  # noqa: F401
 
 __all__ = [
