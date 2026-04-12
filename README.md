@@ -2,6 +2,8 @@
 
 Autonomous GPU kernel search with parameterized Triton templates, shape-indexed cross-run memory, and learned selectors.
 
+**PwnKit Labs project.** Noeris is the Research OS inside PwnKit Labs: open-source adversarial reliability infrastructure for both humans and AI agents. Its current flagship track is autonomous GPU kernel optimization.
+
 ## TL;DR
 
 - **Validated on T4 (Colab), A100, and H100 (Modal) — 3 hardware targets.** All 14 operators pass correctness on all three GPUs.
