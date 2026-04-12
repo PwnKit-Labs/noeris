@@ -425,6 +425,31 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ablation_parser.add_argument("--output", default=".noeris/ablation-report.json")
 
+    kb_l4_parser = subparsers.add_parser(
+        "kernelbench-l4-eval",
+        help="generate (or run) a KernelBench Level 4 op-substitution benchmark script",
+    )
+    kb_l4_parser.add_argument(
+        "--gpu", default="A100",
+        help="GPU type for Modal execution (reserved for future use).",
+    )
+    kb_l4_parser.add_argument(
+        "--problems",
+        default="",
+        help="Comma-separated problem indices to include (default: top-5 attack order).",
+    )
+    kb_l4_parser.add_argument(
+        "--output",
+        default="",
+        help="Path to write the generated script (default: print to stdout).",
+    )
+    kb_l4_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=True,
+        help="Generate and print the benchmark script without executing (default: true).",
+    )
+
     kb_hf_parser = subparsers.add_parser(
         "kernelbench-hf-coverage",
         help="Probe the HuggingFace KernelBench dataset and report operator coverage",
@@ -766,6 +791,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "train-cost-model":
         return _run_train_cost_model(args)
 
+    if args.command == "kernelbench-l4-eval":
+        return _run_kernelbench_l4_eval(args)
+
     if args.command == "kernelbench-hf-coverage":
         return _run_kernelbench_hf_coverage(args)
 
@@ -785,6 +813,41 @@ def main(argv: list[str] | None = None) -> int:
         constraints=args.constraint,
     )
     print(json.dumps(pipeline.run_cycle_dict(topic), indent=2))
+    return 0
+
+
+def _run_kernelbench_l4_eval(args) -> int:
+    """Generate (and optionally run) a KernelBench Level 4 benchmark script."""
+    from .kernelbench_l4 import generate_l4_benchmark_script, get_l4_problems
+
+    all_problems = get_l4_problems()
+
+    # Filter by --problems if provided.
+    if args.problems:
+        indices = [int(x.strip()) for x in args.problems.split(",")]
+        by_id = {p.problem_id: p for p in all_problems}
+        problems = []
+        for idx in indices:
+            if idx not in by_id:
+                print(f"Error: problem index {idx} not found in addressable L4 set.")
+                return 1
+            problems.append(by_id[idx])
+    else:
+        problems = None  # default: top-5 attack order
+
+    script = generate_l4_benchmark_script(problems)
+
+    if args.output:
+        out = _Path(args.output)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(script)
+        print(f"Benchmark script written to {out}")
+    else:
+        print(script)
+
+    if args.dry_run:
+        print("\n# --dry-run is active; script printed but not executed.", file=sys.stderr)
+
     return 0
 
 

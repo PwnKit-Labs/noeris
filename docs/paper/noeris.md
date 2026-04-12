@@ -549,6 +549,16 @@ These are modest wins — 1.05–1.14× — compared to the internal benchmark's
 
 **Assessment.** The internal LLM-shape numbers (§4.2–§4.5) remain valid measurements of Noeris's kernel performance on the workloads they measure — 2D FP16 tensors at LLM activation scales. They should not be cited as "KernelBench speedups" without the shape/layout qualifier. The upstream comparison provides the honest community-standard datapoint and will be expanded to all 12 addressable L1 problems (plus Level 4 HF forward passes, see §6) as the project continues. Raw artifacts: `docs/results/kernelbench-upstream-l1-a100.json` (P0 plumbing run), vendored external baselines at `docs/results/external/`.
 
+### 4.12 KernelBench Level 4: HF Forward Passes (framework)
+
+KernelBench Level 4 consists of 20 HuggingFace model forward passes spanning seven architecture families: GPT-2, OPT, BART, Electra, GPT-Neo, BigBird, and Reformer. Of these, 15 are addressable by Noeris; we skip BigBird (3 problems) and Reformer (2 problems) because their block-sparse and LSH attention mechanisms are not covered by our current kernel set.
+
+The evaluation uses `NoerisOpSubstitutor` (`src/research_engine/kernelbench_l4.py`), which walks the `nn.Module` tree of a pretrained HF model and performs exact-type replacement: `nn.Linear` maps to our fused matmul kernel, `nn.LayerNorm` to our Triton layernorm, `nn.GELU` to our GeGLU kernel (with a unit gate), and GPT-2's `Conv1D` (a transposed linear, not `nn.Conv1d`) receives a dedicated shim. Weights are cast to FP16 at substitution time and cached; activations are cast at the wrapper boundary (FP32 to FP16 to kernel to FP32) so the rest of the model sees the original dtype.
+
+The expected end-to-end ceiling is **1.2--1.5x**, bounded by Amdahl's law: embedding lookups, dropout, attention score computation, and residual adds constitute roughly 15% of forward-pass time and remain untouched. This is a modest but honest target. Notably, no published L4 results exist in the KernelBench ecosystem as of this writing --- this is unclaimed white space.
+
+The framework is fully built: problem definitions, substitutor, and a self-contained benchmark script generator are implemented and tested (commit `b919971`). What remains is GPU validation on A100/H100, which will produce the first published L4 op-substitution numbers. A detailed feasibility study covering attack ordering, per-model Amdahl analysis, and risk assessment is available at `docs/research/l4-op-substitution-feasibility.md`.
+
 ---
 
 ## 5. Related Work
