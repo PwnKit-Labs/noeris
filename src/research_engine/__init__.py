@@ -39,6 +39,7 @@ from . import triton_moe_router  # noqa: F401  (registers moe_router)
 from . import triton_grouped_gemm  # noqa: F401  (registers grouped_gemm)
 from . import triton_ple_gather  # noqa: F401  (registers ple_gather)
 from . import triton_attention_decode  # noqa: F401  (registers attention_decode)
+from . import triton_qk_norm_rope_bwd  # noqa: F401  (registers qk_norm_rope_bwd)
 from .triton_operators import REGISTRY as TRITON_OPERATORS  # noqa: F401
 
 __all__ = [
