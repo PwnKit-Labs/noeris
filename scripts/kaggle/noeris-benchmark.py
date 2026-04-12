@@ -48,6 +48,11 @@ print("=" * 60)
 subprocess.run([sys.executable, "/tmp/noeris/scripts/compiler_analysis.py"])
 
 print("\n" + "=" * 60)
+print("PHASE 6: Multi-model fusion benchmark (LLaMA/Mistral/Phi-3)")
+print("=" * 60)
+subprocess.run([sys.executable, "/tmp/noeris/scripts/multi_model_fusion_benchmark.py"])
+
+print("\n" + "=" * 60)
 print("DONE — Results in /tmp/noeris/.noeris/colab-configs.json")
 print("=" * 60)
 
@@ -64,3 +69,6 @@ if os.path.exists("/tmp/noeris/bombshell_results.json"):
 if os.path.exists("/tmp/noeris/compiler_analysis_results.json"):
     shutil.copy("/tmp/noeris/compiler_analysis_results.json", "/kaggle/working/compiler_analysis_results.json")
     print("Compiler analysis saved to /kaggle/working/compiler_analysis_results.json")
+if os.path.exists("/tmp/noeris/multi_model_results.json"):
+    shutil.copy("/tmp/noeris/multi_model_results.json", "/kaggle/working/multi_model_results.json")
+    print("Multi-model results saved to /kaggle/working/multi_model_results.json")
