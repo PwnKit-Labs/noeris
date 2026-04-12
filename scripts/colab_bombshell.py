@@ -703,6 +703,294 @@ def phase5_bandit_search():
 
 
 # ============================================================================
+# Phase 6: T4 Optimization Shootout
+# ============================================================================
+
+def phase6_t4_shootout():
+    """Head-to-head comparison of 4 approaches for the full layer on T4.
+
+    A: PyTorch separated (baseline from Phase 3)
+    B: torch.compile fused
+    C: Noeris Triton with T4-tuned configs (num_warps=1)
+    D: torch.compile on Noeris-fused path
+    """
+    print("\n" + "=" * 70)
+    print("PHASE 6: T4 Optimization Shootout")
+    print("  4 approaches for full Gemma 4 E2B local layer on T4")
+    print("=" * 70)
+
+    from research_engine.triton_rmsnorm import rmsnorm
+    from research_engine.triton_qk_norm_rope import apply_qk_norm_rope
+    from research_engine.triton_geglu import geglu
+
+    F = torch.nn.functional
+
+    # --- Same shape as Phase 3 ---
+    B, S, D = 1, 2048, 1536
+    H, H_kv, Dh = 8, 1, 256
+    Dff = 6144
+    W = 512
+    eps = 1e-6
+
+    print(f"  Shape: B={B}, S={S}, D={D}, H={H}, Hkv={H_kv}, Dh={Dh}, Dff={Dff}, W={W}")
+
+    # --- Allocate weights ---
+    W_qkv = torch.randn(D, (H + 2 * H_kv) * Dh, device="cuda", dtype=torch.float16)
+    W_o = torch.randn(H * Dh, D, device="cuda", dtype=torch.float16)
+    W_gate_up = torch.randn(D, 2 * Dff, device="cuda", dtype=torch.float16)
+    W_down = torch.randn(Dff, D, device="cuda", dtype=torch.float16)
+
+    rn_w1 = torch.randn(D, device="cuda", dtype=torch.float16)
+    rn_w2 = torch.randn(D, device="cuda", dtype=torch.float16)
+    q_scale = torch.randn(Dh, device="cuda", dtype=torch.float32) * 0.1
+    k_scale = torch.randn(Dh, device="cuda", dtype=torch.float32) * 0.1
+    cos = torch.randn(S, Dh // 2, device="cuda", dtype=torch.float32)
+    sin = torch.randn(S, Dh // 2, device="cuda", dtype=torch.float32)
+
+    x = torch.randn(B, S, D, device="cuda", dtype=torch.float16)
+
+    repeat = H // H_kv
+
+    # ---------------------------------------------------------------
+    # Approach A: PyTorch separated (same as Phase 3 baseline)
+    # ---------------------------------------------------------------
+
+    def pytorch_separated_layer(x_in):
+        # Pre-attn RMSNorm
+        var = x_in.float().pow(2).mean(-1, keepdim=True)
+        normed = (x_in.float() * torch.rsqrt(var + eps)).half() * (1.0 + rn_w1).half()
+        # QKV proj
+        qkv = normed.reshape(B * S, D) @ W_qkv
+        q_dim = H * Dh
+        k_dim = H_kv * Dh
+        q = qkv[:, :q_dim].reshape(B, S, H, Dh).permute(0, 2, 1, 3)
+        k = qkv[:, q_dim:q_dim + k_dim].reshape(B, S, H_kv, Dh).permute(0, 2, 1, 3)
+        v = qkv[:, q_dim + k_dim:].reshape(B, S, H_kv, Dh).permute(0, 2, 1, 3)
+        # QK-RMSNorm + RoPE (4 separate ops)
+        q_var = q.float().pow(2).mean(-1, keepdim=True)
+        q_n = (q.float() * torch.rsqrt(q_var + eps)).half() * (1.0 + q_scale).half()
+        k_var = k.float().pow(2).mean(-1, keepdim=True)
+        k_n = (k.float() * torch.rsqrt(k_var + eps)).half() * (1.0 + k_scale).half()
+        c = cos[None, None, :, :].half()
+        sn = sin[None, None, :, :].half()
+        qe, qo = q_n[..., 0::2], q_n[..., 1::2]
+        q_r = torch.stack([qe * c - qo * sn, qe * sn + qo * c], dim=-1).reshape(q.shape)
+        ke, ko = k_n[..., 0::2], k_n[..., 1::2]
+        k_r = torch.stack([ke * c - ko * sn, ke * sn + ko * c], dim=-1).reshape(k.shape)
+        # SDPA attention
+        k_exp = k_r.unsqueeze(2).expand(B, H_kv, repeat, S, Dh).reshape(B, H, S, Dh)
+        v_exp = v.unsqueeze(2).expand(B, H_kv, repeat, S, Dh).reshape(B, H, S, Dh)
+        attn_out = F.scaled_dot_product_attention(q_r, k_exp, v_exp, is_causal=True)
+        # Output proj + residual
+        o_proj = attn_out.permute(0, 2, 1, 3).reshape(B * S, H * Dh) @ W_o
+        residual = x_in + o_proj.reshape(B, S, D)
+        # Pre-MLP RMSNorm
+        var2 = residual.float().pow(2).mean(-1, keepdim=True)
+        normed2 = (residual.float() * torch.rsqrt(var2 + eps)).half() * (1.0 + rn_w2).half()
+        # GeGLU MLP
+        gate_up = normed2.reshape(B * S, D) @ W_gate_up
+        gate = gate_up[:, :Dff]
+        up_val = gate_up[:, Dff:]
+        activated = F.gelu(up_val, approximate="tanh")
+        hidden = gate * activated
+        mlp_out = hidden @ W_down
+        return residual + mlp_out.reshape(B, S, D)
+
+    print("\n  Timing Approach A: PyTorch separated...")
+    t_a = cuda_event_timer(pytorch_separated_layer, warmup=5, trials=20)
+    print(f"    A (PyTorch separated):  {t_a:.3f} ms")
+
+    # ---------------------------------------------------------------
+    # Approach B: torch.compile fused
+    # ---------------------------------------------------------------
+
+    t_b = None
+    b_error = None
+    try:
+        @torch.compile(mode="reduce-overhead")
+        def compiled_separated_layer(x_in):
+            # Pre-attn RMSNorm
+            var = x_in.float().pow(2).mean(-1, keepdim=True)
+            normed = (x_in.float() * torch.rsqrt(var + eps)).half() * (1.0 + rn_w1).half()
+            # QKV proj
+            qkv = normed.reshape(B * S, D) @ W_qkv
+            q_dim = H * Dh
+            k_dim = H_kv * Dh
+            q = qkv[:, :q_dim].reshape(B, S, H, Dh).permute(0, 2, 1, 3)
+            k = qkv[:, q_dim:q_dim + k_dim].reshape(B, S, H_kv, Dh).permute(0, 2, 1, 3)
+            v = qkv[:, q_dim + k_dim:].reshape(B, S, H_kv, Dh).permute(0, 2, 1, 3)
+            # QK-RMSNorm + RoPE (4 ops, but Inductor should fuse)
+            q_var = q.float().pow(2).mean(-1, keepdim=True)
+            q_n = (q.float() * torch.rsqrt(q_var + eps)).half() * (1.0 + q_scale).half()
+            k_var = k.float().pow(2).mean(-1, keepdim=True)
+            k_n = (k.float() * torch.rsqrt(k_var + eps)).half() * (1.0 + k_scale).half()
+            c = cos[None, None, :, :].half()
+            sn = sin[None, None, :, :].half()
+            qe, qo = q_n[..., 0::2], q_n[..., 1::2]
+            q_r = torch.stack([qe * c - qo * sn, qe * sn + qo * c], dim=-1).reshape(q.shape)
+            ke, ko = k_n[..., 0::2], k_n[..., 1::2]
+            k_r = torch.stack([ke * c - ko * sn, ke * sn + ko * c], dim=-1).reshape(k.shape)
+            # SDPA attention
+            k_exp = k_r.unsqueeze(2).expand(B, H_kv, repeat, S, Dh).reshape(B, H, S, Dh)
+            v_exp = v.unsqueeze(2).expand(B, H_kv, repeat, S, Dh).reshape(B, H, S, Dh)
+            attn_out = F.scaled_dot_product_attention(q_r, k_exp, v_exp, is_causal=True)
+            # Output proj + residual
+            o_proj = attn_out.permute(0, 2, 1, 3).reshape(B * S, H * Dh) @ W_o
+            residual = x_in + o_proj.reshape(B, S, D)
+            # Pre-MLP RMSNorm
+            var2 = residual.float().pow(2).mean(-1, keepdim=True)
+            normed2 = (residual.float() * torch.rsqrt(var2 + eps)).half() * (1.0 + rn_w2).half()
+            # GeGLU MLP
+            gate_up = normed2.reshape(B * S, D) @ W_gate_up
+            gate = gate_up[:, :Dff]
+            up_val = gate_up[:, Dff:]
+            activated = F.gelu(up_val, approximate="tanh")
+            hidden = gate * activated
+            mlp_out = hidden @ W_down
+            return residual + mlp_out.reshape(B, S, D)
+
+        print("\n  Timing Approach B: torch.compile fused (warmup=20 for compilation)...")
+        t_b = cuda_event_timer(compiled_separated_layer, warmup=20, trials=20)
+        print(f"    B (torch.compile fused): {t_b:.3f} ms")
+    except Exception as e:
+        b_error = str(e)[:200]
+        print(f"    B (torch.compile fused): FAILED - {b_error}")
+
+    # ---------------------------------------------------------------
+    # Approach C: Noeris Triton with T4-tuned configs
+    # ---------------------------------------------------------------
+
+    # Config set 1: aggressive num_warps=1
+    t4_rn_cfg_1 = {"BLOCK_SIZE": 2048, "num_warps": 1, "num_stages": 1}
+    t4_qknr_cfg_1 = {"BLOCK_SIZE": 128, "num_warps": 1, "num_stages": 1}
+    t4_geglu_cfg_1 = {"BLOCK_SIZE": 1024, "num_warps": 1, "num_stages": 1}
+
+    # Config set 2: curated num_warps=2
+    t4_rn_cfg_2 = {"BLOCK_SIZE": 2048, "num_warps": 2, "num_stages": 1}
+    t4_qknr_cfg_2 = {"BLOCK_SIZE": 128, "num_warps": 2, "num_stages": 1}
+    t4_geglu_cfg_2 = {"BLOCK_SIZE": 1024, "num_warps": 2, "num_stages": 1}
+
+    def noeris_t4_layer(x_in, rn_cfg, qknr_cfg, geglu_cfg):
+        # Pre-attn RMSNorm (Noeris fused)
+        normed = rmsnorm(x_in.reshape(B * S, D), rn_w1, config=rn_cfg, affine_mode=1).reshape(B, S, D)
+        # QKV proj (same matmul)
+        qkv = normed.reshape(B * S, D) @ W_qkv
+        q_dim = H * Dh
+        k_dim = H_kv * Dh
+        q = qkv[:, :q_dim].reshape(B, S, H, Dh).permute(0, 2, 1, 3)
+        k = qkv[:, q_dim:q_dim + k_dim].reshape(B, S, H_kv, Dh).permute(0, 2, 1, 3)
+        v = qkv[:, q_dim + k_dim:].reshape(B, S, H_kv, Dh).permute(0, 2, 1, 3)
+        # QK-RMSNorm+RoPE (Noeris fused, 1 call)
+        q_r, k_r = apply_qk_norm_rope(q, k, cos, sin, q_scale, k_scale, config=qknr_cfg)
+        # SDPA attention
+        k_exp = k_r.unsqueeze(2).expand(B, H_kv, repeat, S, Dh).reshape(B, H, S, Dh)
+        v_exp = v.unsqueeze(2).expand(B, H_kv, repeat, S, Dh).reshape(B, H, S, Dh)
+        attn_out = F.scaled_dot_product_attention(q_r, k_exp, v_exp, is_causal=True)
+        # Output proj + residual
+        o_proj = attn_out.permute(0, 2, 1, 3).reshape(B * S, H * Dh) @ W_o
+        residual = x_in + o_proj.reshape(B, S, D)
+        # Pre-MLP RMSNorm (Noeris fused)
+        normed2 = rmsnorm(residual.reshape(B * S, D), rn_w2, config=rn_cfg, affine_mode=1).reshape(B, S, D)
+        # GeGLU MLP (Noeris fused)
+        gate_up = normed2.reshape(B * S, D) @ W_gate_up
+        gate = gate_up[:, :Dff]
+        up_val = gate_up[:, Dff:]
+        hidden = geglu(gate, up_val, config=geglu_cfg)
+        mlp_out = hidden @ W_down
+        return residual + mlp_out.reshape(B, S, D)
+
+    print("\n  Timing Approach C: Noeris T4-tuned (config set 1: num_warps=1)...")
+    t_c1 = cuda_event_timer(
+        lambda: noeris_t4_layer(x, t4_rn_cfg_1, t4_qknr_cfg_1, t4_geglu_cfg_1),
+        warmup=5, trials=20,
+    )
+    print(f"    C1 (num_warps=1): {t_c1:.3f} ms")
+
+    print("  Timing Approach C: Noeris T4-tuned (config set 2: num_warps=2)...")
+    t_c2 = cuda_event_timer(
+        lambda: noeris_t4_layer(x, t4_rn_cfg_2, t4_qknr_cfg_2, t4_geglu_cfg_2),
+        warmup=5, trials=20,
+    )
+    print(f"    C2 (num_warps=2): {t_c2:.3f} ms")
+
+    t_c = min(t_c1, t_c2)
+    c_best_warps = 1 if t_c1 <= t_c2 else 2
+    print(f"    C best: {t_c:.3f} ms (num_warps={c_best_warps})")
+
+    # ---------------------------------------------------------------
+    # Approach D: torch.compile on Noeris-fused path
+    # ---------------------------------------------------------------
+
+    t_d = None
+    d_error = None
+    try:
+        # Use the best T4 configs from approach C
+        best_rn = t4_rn_cfg_1 if c_best_warps == 1 else t4_rn_cfg_2
+        best_qknr = t4_qknr_cfg_1 if c_best_warps == 1 else t4_qknr_cfg_2
+        best_geglu = t4_geglu_cfg_1 if c_best_warps == 1 else t4_geglu_cfg_2
+
+        @torch.compile(mode="reduce-overhead")
+        def compiled_noeris_layer(x_in):
+            return noeris_t4_layer(x_in, best_rn, best_qknr, best_geglu)
+
+        print("\n  Timing Approach D: torch.compile + Noeris (warmup=20 for compilation)...")
+        t_d = cuda_event_timer(compiled_noeris_layer, warmup=20, trials=20)
+        print(f"    D (torch.compile + Noeris): {t_d:.3f} ms")
+    except Exception as e:
+        d_error = str(e)[:200]
+        print(f"    D (torch.compile + Noeris): FAILED - {d_error}")
+
+    # ---------------------------------------------------------------
+    # Comparison table
+    # ---------------------------------------------------------------
+
+    print(f"\n  {'Approach':<36s} {'Time (ms)':>10s} {'vs Baseline':>12s}")
+    print(f"  {'-' * 60}")
+
+    approaches = [
+        ("A: PyTorch separated", t_a, None),
+        ("B: torch.compile fused", t_b, b_error),
+        ("C: Noeris T4-tuned (warps={})".format(c_best_warps), t_c, None),
+        ("D: torch.compile + Noeris", t_d, d_error),
+    ]
+
+    for label, t_ms, err in approaches:
+        if err is not None:
+            print(f"  {label:<36s} {'FAILED':>10s} {'N/A':>12s}")
+        else:
+            ratio = t_a / t_ms if t_ms > 0 else 0.0
+            print(f"  {label:<36s} {t_ms:>8.3f} ms {ratio:>10.2f}x")
+
+    # Find winner
+    valid = [(label, t_ms) for label, t_ms, err in approaches if err is None and t_ms is not None]
+    if valid:
+        winner_label, winner_ms = min(valid, key=lambda x: x[1])
+        print(f"\n  WINNER: {winner_label} at {winner_ms:.3f} ms ({t_a / winner_ms:.2f}x vs baseline)")
+
+    result = {
+        "shape": f"B{B}_S{S}_D{D}_H{H}_Hkv{H_kv}_Dh{Dh}_Dff{Dff}_W{W}",
+        "A_pytorch_separated_ms": round(t_a, 4),
+        "B_torch_compile_ms": round(t_b, 4) if t_b is not None else None,
+        "B_error": b_error,
+        "C_noeris_t4_tuned_ms": round(t_c, 4),
+        "C_best_num_warps": c_best_warps,
+        "C_warps1_ms": round(t_c1, 4),
+        "C_warps2_ms": round(t_c2, 4),
+        "D_torch_compile_noeris_ms": round(t_d, 4) if t_d is not None else None,
+        "D_error": d_error,
+    }
+
+    # Add speedup ratios for all valid approaches
+    if t_b is not None:
+        result["B_speedup_vs_A"] = round(t_a / t_b, 4)
+    result["C_speedup_vs_A"] = round(t_a / t_c, 4)
+    if t_d is not None:
+        result["D_speedup_vs_A"] = round(t_a / t_d, 4)
+
+    return result
+
+
+# ============================================================================
 # Main
 # ============================================================================
 
@@ -721,6 +1009,7 @@ def main():
         ("layer_speedup", phase3_layer_benchmark),
         ("prologue_forward_backward", phase4_prologue_fwd_bwd),
         ("attention_bandit_improvement", phase5_bandit_search),
+        ("t4_shootout", phase6_t4_shootout),
     ]
 
     for name, fn in phases:
@@ -770,6 +1059,23 @@ def main():
     bandit = results.get("attention_bandit_improvement", {})
     if "error" not in bandit:
         print(f"  Bandit improvement:       {bandit.get('improvement_pct', '?')}%")
+
+    shootout = results.get("t4_shootout", {})
+    if "error" not in shootout:
+        print(f"  T4 Shootout:")
+        print(f"    A (PyTorch separated):  {shootout.get('A_pytorch_separated_ms', '?')} ms")
+        if shootout.get("B_torch_compile_ms") is not None:
+            print(f"    B (torch.compile):      {shootout.get('B_torch_compile_ms')} ms "
+                  f"({shootout.get('B_speedup_vs_A', '?')}x)")
+        elif shootout.get("B_error"):
+            print(f"    B (torch.compile):      FAILED")
+        print(f"    C (Noeris T4-tuned):    {shootout.get('C_noeris_t4_tuned_ms', '?')} ms "
+              f"({shootout.get('C_speedup_vs_A', '?')}x, warps={shootout.get('C_best_num_warps', '?')})")
+        if shootout.get("D_torch_compile_noeris_ms") is not None:
+            print(f"    D (compile+Noeris):     {shootout.get('D_torch_compile_noeris_ms')} ms "
+                  f"({shootout.get('D_speedup_vs_A', '?')}x)")
+        elif shootout.get("D_error"):
+            print(f"    D (compile+Noeris):     FAILED")
 
     print(f"\n  Total time: {elapsed:.0f}s")
 

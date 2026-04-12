@@ -38,6 +38,11 @@ subprocess.run([sys.executable, "/tmp/noeris/scripts/colab_iterate.py",
                 "--configs-per-iter", "8", "--shapes", "full"])
 
 print("\n" + "=" * 60)
+print("PHASE 4: Bombshell benchmark (full layer + T4 shootout)")
+print("=" * 60)
+subprocess.run([sys.executable, "/tmp/noeris/scripts/colab_bombshell.py"])
+
+print("\n" + "=" * 60)
 print("DONE — Results in /tmp/noeris/.noeris/colab-configs.json")
 print("=" * 60)
 
@@ -48,3 +53,6 @@ if os.path.exists("/tmp/noeris/.noeris/colab-configs.json"):
     print("Config DB saved to /kaggle/working/colab-configs.json")
 if os.path.exists("/tmp/noeris/colab_validation_results.json"):
     shutil.copy("/tmp/noeris/colab_validation_results.json", "/kaggle/working/validation_results.json")
+if os.path.exists("/tmp/noeris/bombshell_results.json"):
+    shutil.copy("/tmp/noeris/bombshell_results.json", "/kaggle/working/bombshell_results.json")
+    print("Bombshell results saved to /kaggle/working/bombshell_results.json")

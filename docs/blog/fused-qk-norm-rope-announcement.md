@@ -108,6 +108,7 @@ The missing factor is kernel launch overhead. Each individual kernel at these ti
 - **It's not measured end-to-end on a real Gemma 4 model.** Random weights, synthetic cos/sin tables, isolated benchmarks. Wiring this into an actual forward pass would add model-loading and cache-management code I haven't done yet.
 - **It's not a "we're 10× faster than vLLM" claim.** vLLM's end-to-end inference is 100+ layers of optimization; this is one specific kernel on one specific path. The claim is precisely "vLLM does not fuse these four ops, and here's what you get if you do."
 - **It's not production-ready.** It's correct, it's fast, and it's reproducible — but it has not been integrated into any inference server. That's the next step and I'm not making that claim.
+- **It's not uniformly fast across all GPU architectures.** The 10-13x headline numbers are on A100 and H100, where Triton generates excellent PTX. On T4 (Turing, SM 7.5), Triton's codegen incurs a 3-5x per-operator overhead vs. PyTorch native CUDA kernels. The fusion benefit is real (6.64x fused vs. separated Triton), but not enough to overcome the per-op penalty — net layer result is 0.59x (slower). All 15 operators pass correctness on T4; the issue is purely Triton codegen quality on older architectures, not the fusion algorithm. This is an honest and informative negative result: Triton-based fusion should not be assumed to transfer across GPU architectures without benchmarking. Full analysis in the [paper draft](../paper/noeris.md), section 4.15.
 
 ## Reproduce it
 
@@ -150,6 +151,8 @@ We ran the bandit search across 9 operators in 43 shape buckets, accumulating **
 - **geglu** hit **249.58 GB/s** (also 83% of T4 peak), and **layernorm** improved +53% on `gpt_neox`.
 
 The key insight: T4 strongly prefers `num_warps=1` and small block sizes — configurations that were **not in the curated starter list at all**. The bandit discovered these hardware-specific preferences autonomously. If you only use hand-tuned configs designed on A100/H100, you leave 22–167% of T4 performance on the table.
+
+**Important caveat on T4 absolute performance**: while the bandit search finds large improvements within Triton's config space on T4 (+235% on attention configs), a full layer benchmark shows that Triton-generated code on T4 (Turing, SM 7.5) is 3-5x slower per-op than PyTorch's native CUDA kernels. The fusion speedup (6.64x fused vs. separated Triton) is real, but the net layer result is 0.59x vs. PyTorch native. The A100/H100 headline numbers (10-13x) are unaffected — Triton codegen quality is architecture-dependent, and it is excellent on Ampere/Hopper. See the [paper](../paper/noeris.md) section 4.15 for the full analysis.
 
 Reproduction: upload `scripts/colab_validate_all.py` to a Kaggle T4 notebook (primary) or Colab T4 runtime and run. Zero cost.
 
