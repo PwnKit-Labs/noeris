@@ -1,5 +1,5 @@
 {
-  "id": "PwnKit-Labs/noeris-gpu-benchmark",
+  "id": "peaktwilight/noeris-gpu-benchmark",
   "title": "noeris-gpu-benchmark",
   "code_file": "noeris-benchmark.py",
   "language": "python",
@@ -8,6 +8,9 @@
   "enable_gpu": true,
   "enable_internet": true,
   "competition_sources": [],
-  "dataset_sources": ["peaktwilight/noeris-source-code"],
-  "kernel_sources": []
+  "dataset_sources": [
+    "peaktwilight/noeris-source-code"
+  ],
+  "kernel_sources": [],
+  "accelerator": "nvidiaTeslaT4"
 }
