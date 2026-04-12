@@ -98,8 +98,7 @@ class TestShapeBuckets(unittest.TestCase):
     def test_all_shape_buckets_are_reachable(self) -> None:
         """Every defined shape bucket name must be hit by the classifier."""
         bucket_names = {b["name"] for b in GEGLU_SHAPE_BUCKETS}
-        hit = {geglu_shape_bucket_key({"n_rows": b["n_rows"], "ffn_dim": b["ffn_dim"]})
-               for b in GEGLU_SHAPE_BUCKETS}
+        hit = {geglu_shape_bucket_key(b) for b in GEGLU_SHAPE_BUCKETS}
         self.assertEqual(bucket_names, hit)
 
 

@@ -105,18 +105,24 @@ def qk_norm_rope_config_id(config: dict[str, int]) -> str:
 def qk_norm_rope_shape_bucket_key(shape: dict[str, int]) -> str:
     """Classify a QK-RMSNorm+RoPE shape into a named bucket.
 
-    Discriminators:
+    Exact name match is checked first — this handles all non-Gemma
+    architectures and any shape dict that carries a ``name`` field
+    matching a known bucket.  For unnamed shapes the function falls
+    through to dimensional heuristics.
+
+    Discriminators (fallback path):
     - head_dim: 96 = Phi-3, 128 = LLaMA/Mistral, 256 = Gemma local, 512 = Gemma global
     - heads: 8 / 16 / 32 / 64
     - num_kv_heads: picks the per-variant GQA ratio
     """
+    _ALL_BUCKET_NAMES = {b["name"] for b in QK_NORM_ROPE_SHAPE_BUCKETS}
     hd = shape.get("head_dim", 0)
     h = shape.get("heads", 0)
     h_kv = shape.get("num_kv_heads", 0)
     name = shape.get("name", "")
 
-    # Exact name match for non-Gemma buckets
-    if name in ("llama3_8b", "llama3_70b", "mistral_7b", "phi3_mini"):
+    # Exact name match for any known bucket
+    if name in _ALL_BUCKET_NAMES:
         return name
 
     # Phi-3 mini: head_dim=96, MHA

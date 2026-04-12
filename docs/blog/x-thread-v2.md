@@ -1,6 +1,6 @@
 # X/Twitter Thread v2 — Fused QK-RMSNorm+RoPE
 
-_Draft 2026-04-12. 10 tweets. Tone: honest, technical, inviting scrutiny._
+_Draft 2026-04-12. 11 tweets. Tone: honest, technical, inviting scrutiny._
 
 ---
 
@@ -95,6 +95,22 @@ This is a known limitation, not a bug. Inductor is optimizing for the general ca
 
 **8/**
 
+"Cool kernel, but does it only work on Gemma?"
+
+19 models. 13 families. Zero failures. ALL show 6.5-8.9x fusion speedup on T4.
+
+Best result: Qwen 3 32B at 8.9x (120 GB/s). Qwen uses QK-norm natively — exactly our prime target.
+
+Tested on: Gemma 4, LLaMA 3/4, Qwen 3, Mistral, Mixtral, Phi-3/4, Falcon 3, DBRX, OLMo 2, InternLM 3.
+
+head_dim=128 models hit 8.3-8.9x. head_dim=256 models hit 6.5-7.9x — the extra dimension means fewer blocks, so launch overhead amortizes less aggressively. Still a massive win.
+
+This is not a one-off hack for one architecture. One parameterized Triton kernel, one autotuner, every model that does QK-norm + RoPE.
+
+---
+
+**9/**
+
 What this is NOT:
 
 - Not "10x faster than vLLM end-to-end." This is prologue-only. Full model inference has 100+ layers of optimization beyond this kernel.
@@ -103,7 +119,7 @@ What this is NOT:
 
 ---
 
-**9/**
+**10/**
 
 This kernel came out of Noeris, an autonomous kernel search system I've been building:
 
@@ -118,7 +134,7 @@ The fused QK-RMSNorm+RoPE kernel is the system's headline result. But the real c
 
 ---
 
-**10/**
+**11/**
 
 Open source, MIT license.
 

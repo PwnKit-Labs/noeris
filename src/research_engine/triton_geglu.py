@@ -109,14 +109,15 @@ def geglu_config_id(config: dict[str, int]) -> str:
 def geglu_shape_bucket_key(shape: dict[str, int]) -> str:
     """Classify a GeGLU shape into the nearest bucket.
 
-    Exact name match is checked first for non-Gemma architectures.
-    Ordering matters: the 26B-A4B expert bucket (ffn=2112) sits between
-    the test_small bucket (ffn<=1024) and the E2B bucket (ffn=6144), so
-    we check it explicitly before the ascending ffn_dim bands.
+    Exact name match is checked first — this handles all non-Gemma
+    architectures and any shape dict that carries a ``name`` field
+    matching a known bucket.  For unnamed shapes the function falls
+    through to ascending ffn_dim bands.
     """
+    _ALL_BUCKET_NAMES = {b["name"] for b in GEGLU_SHAPE_BUCKETS}
     name = shape.get("name", "")
-    # Exact name match for non-Gemma buckets
-    if name in ("llama3_8b", "llama3_70b", "mistral_7b", "phi3_mini"):
+    # Exact name match for any known bucket
+    if name in _ALL_BUCKET_NAMES:
         return name
 
     fd = shape.get("ffn_dim", 0)
@@ -134,7 +135,8 @@ def geglu_shape_bucket_key(shape: dict[str, int]) -> str:
         return "llama3_8b"
     if fd <= 21504:
         return "gemma4_31b"
-    return "llama3_70b"
+    # Anything wider than 21504 falls to the widest dense bucket.
+    return "gemma4_31b"
 
 
 def geglu_shared_memory_check(config: dict[str, int]) -> bool:

@@ -36,9 +36,9 @@ class TestRegistration(unittest.TestCase):
         spec = REGISTRY.get("qk_norm_rope")
         self.assertGreaterEqual(len(spec.curated_configs), 5)
 
-    def test_spec_has_all_six_gemma_buckets(self) -> None:
+    def test_spec_has_all_shape_buckets(self) -> None:
         spec = REGISTRY.get("qk_norm_rope")
-        self.assertEqual(len(spec.shape_buckets), 6)
+        self.assertEqual(len(spec.shape_buckets), len(QK_NORM_ROPE_SHAPE_BUCKETS))
 
 
 class TestConfigId(unittest.TestCase):
