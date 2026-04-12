@@ -393,10 +393,10 @@ def torch_paged_attention_decode(q, k_cache, v_cache, page_table, context_lens,
                 v_h = v_h[start:]
 
             scores = (q_h.float() @ k_h.float().T) * sm_scale  # [ctx_len] or [window]
-            weights = torch.softmax(scores, dim=-1).half()
-            out[b, h, 0, :] = weights @ v_h.float()
+            weights = torch.softmax(scores, dim=-1)  # keep float32
+            out[b, h, 0, :] = (weights @ v_h.float()).half()
 
-    return out.half()
+    return out
 
 
 def benchmark_one(batch, num_heads, num_kv_heads, head_dim, context_len,

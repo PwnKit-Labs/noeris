@@ -135,14 +135,17 @@ def ple_gather_kernel(
     pid = tl.program_id(0)
 
     # Load the token id for this (b, s) position.
-    tok = tl.load(token_ids_ptr + pid)
+    # Cast to int64 to avoid int32 overflow: tok (up to 262143) * ple_layer_stride
+    # (up to 8960) = 2.35B which exceeds INT32_MAX (2.15B).
+    tok = tl.load(token_ids_ptr + pid).to(tl.int64)
 
     res_base = residual_ptr + pid * residual_row_stride
     out_base = out_ptr + pid * out_row_stride
 
     # PLE table offset: ple_table[tok, layer_idx, :]
     # Layout: (vocab_size, num_layers, ple_dim), row-major
-    ple_base = ple_table_ptr + tok * ple_layer_stride * num_layers + layer_idx * ple_dim_stride
+    # ple_layer_stride = num_layers * ple_dim (vocab-dim stride, already includes num_layers)
+    ple_base = ple_table_ptr + tok * tl.cast(ple_layer_stride, tl.int64) + layer_idx * ple_dim_stride
 
     # Process the ple_dim region: gather + add
     offs = tl.arange(0, BLOCK_SIZE)
