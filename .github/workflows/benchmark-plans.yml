@@ -10,6 +10,10 @@ on:
   schedule:
     - cron: "0 7 * * 1"
 
+concurrency:
+  group: noeris-benchmark-plans-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
