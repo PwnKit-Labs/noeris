@@ -213,10 +213,15 @@ class TestBenchmarkScript(unittest.TestCase):
 
 class TestCuratedConfigs(unittest.TestCase):
     def test_curated_configs_have_all_required_keys(self) -> None:
-        required = {"BLOCK_SIZE_M", "BLOCK_SIZE_N", "BLOCK_SIZE_K",
-                    "SPLIT_K", "GROUP_SIZE_M", "num_warps", "num_stages"}
+        base_required = {"BLOCK_SIZE_M", "BLOCK_SIZE_N", "BLOCK_SIZE_K",
+                         "SPLIT_K", "GROUP_SIZE_M", "num_warps", "num_stages"}
+        persistent_required = base_required | {"PERSISTENT"}
         for c in MATMUL_SPLITK_CURATED_CONFIGS:
-            self.assertEqual(set(c.keys()), required, f"config {c} has wrong keys")
+            keys = set(c.keys())
+            self.assertTrue(
+                keys == base_required or keys == persistent_required,
+                f"config {c} has wrong keys: {keys}",
+            )
 
     def test_curated_configs_pass_smem_check(self) -> None:
         for c in MATMUL_SPLITK_CURATED_CONFIGS:
@@ -228,6 +233,124 @@ class TestCuratedConfigs(unittest.TestCase):
     def test_curated_has_multiple_splitk_values(self) -> None:
         sk_values = {c["SPLIT_K"] for c in MATMUL_SPLITK_CURATED_CONFIGS}
         self.assertTrue(len(sk_values) >= 3, f"only {sk_values} split-K values in curated")
+
+
+class TestPersistentMode(unittest.TestCase):
+    """Tests for the persistent kernel scheduling mode."""
+
+    def test_persistent_in_param_space(self) -> None:
+        self.assertIn("PERSISTENT", MATMUL_SPLITK_PARAM_SPACE)
+        self.assertEqual(MATMUL_SPLITK_PARAM_SPACE["PERSISTENT"], [True, False])
+
+    def test_persistent_curated_configs_exist(self) -> None:
+        """At least one curated config has PERSISTENT=True."""
+        persistent_configs = [
+            c for c in MATMUL_SPLITK_CURATED_CONFIGS if c.get("PERSISTENT")
+        ]
+        self.assertGreater(len(persistent_configs), 0)
+
+    def test_persistent_config_id_differs_from_standard(self) -> None:
+        """PERSISTENT=True and PERSISTENT=False must produce different IDs."""
+        base = {
+            "BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 128, "BLOCK_SIZE_K": 64,
+            "SPLIT_K": 1, "GROUP_SIZE_M": 8, "num_warps": 4, "num_stages": 3,
+        }
+        persistent = {**base, "PERSISTENT": True}
+        self.assertNotEqual(splitk_config_id(base), splitk_config_id(persistent))
+
+    def test_persistent_config_id_has_P_suffix(self) -> None:
+        config = {
+            "BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 128, "BLOCK_SIZE_K": 64,
+            "SPLIT_K": 1, "PERSISTENT": True, "GROUP_SIZE_M": 8,
+            "num_warps": 4, "num_stages": 3,
+        }
+        cid = splitk_config_id(config)
+        self.assertTrue(cid.endswith("_P"), f"expected _P suffix, got {cid}")
+
+    def test_non_persistent_config_id_no_P_suffix(self) -> None:
+        config = {
+            "BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 128, "BLOCK_SIZE_K": 64,
+            "SPLIT_K": 1, "GROUP_SIZE_M": 8, "num_warps": 4, "num_stages": 3,
+        }
+        cid = splitk_config_id(config)
+        self.assertFalse(cid.endswith("_P"), f"unexpected _P suffix in {cid}")
+
+    def test_persistent_kernel_source_present(self) -> None:
+        """The persistent kernel function must be in the kernel source."""
+        src = mod.TRITON_MATMUL_SPLITK_KERNEL_SOURCE
+        self.assertIn("matmul_persistent_splitk_kernel", src)
+
+    def test_persistent_kernel_has_num_sms_param(self) -> None:
+        src = mod.TRITON_MATMUL_SPLITK_KERNEL_SOURCE
+        self.assertIn("NUM_SMS: tl.constexpr", src)
+
+    def test_persistent_kernel_has_tile_loop(self) -> None:
+        """Persistent kernel must loop over tiles with NUM_SMS stride."""
+        src = mod.TRITON_MATMUL_SPLITK_KERNEL_SOURCE
+        self.assertIn("for tile_id in range(start_pid, num_tiles, NUM_SMS)", src)
+
+    def test_persistent_kernel_has_grouped_ordering(self) -> None:
+        """Persistent kernel must use grouped tile ordering for L2 reuse."""
+        src = mod.TRITON_MATMUL_SPLITK_KERNEL_SOURCE
+        self.assertIn("group_id = tile_id // num_pid_in_group", src)
+        self.assertIn("first_pid_m = group_id * GROUP_SIZE_M", src)
+
+    def test_persistent_benchmark_script_has_both_kernels(self) -> None:
+        """Benchmark script must contain both standard and persistent kernels."""
+        script = generate_splitk_benchmark_script(
+            configs=[MATMUL_SPLITK_CURATED_CONFIGS[0]],
+            shapes=[MATMUL_SPLITK_SHAPE_BUCKETS[0]],
+        )
+        self.assertIn("matmul_splitk_kernel", script)
+        self.assertIn("matmul_persistent_splitk_kernel", script)
+
+    def test_persistent_benchmark_script_compiles(self) -> None:
+        """Benchmark script with persistent config must be valid Python."""
+        persistent_config = next(
+            c for c in MATMUL_SPLITK_CURATED_CONFIGS if c.get("PERSISTENT")
+        )
+        script = generate_splitk_benchmark_script(
+            configs=[persistent_config],
+            shapes=[MATMUL_SPLITK_SHAPE_BUCKETS[0]],
+        )
+        try:
+            compile(script, "<bench_persistent>", "exec")
+        except SyntaxError as exc:
+            self.fail(f"Persistent benchmark script has a syntax error: {exc}")
+
+    def test_persistent_benchmark_script_selects_kernel(self) -> None:
+        """Benchmark launch function must check PERSISTENT flag."""
+        script = generate_splitk_benchmark_script(
+            configs=[MATMUL_SPLITK_CURATED_CONFIGS[0]],
+            shapes=[MATMUL_SPLITK_SHAPE_BUCKETS[0]],
+        )
+        self.assertIn("PERSISTENT", script)
+        self.assertIn("multi_processor_count", script)
+
+    def test_persistent_grid_includes_persistent_configs(self) -> None:
+        """Generated grid must contain at least one persistent config."""
+        grid = generate_splitk_grid(include_curated=True, max_configs=200)
+        persistent = [c for c in grid if c.get("PERSISTENT")]
+        self.assertGreater(len(persistent), 0)
+
+    def test_persistent_configs_pass_smem_check(self) -> None:
+        for c in MATMUL_SPLITK_CURATED_CONFIGS:
+            if c.get("PERSISTENT"):
+                self.assertTrue(
+                    splitk_shared_memory_check(c),
+                    f"persistent config {splitk_config_id(c)} fails smem check",
+                )
+
+    def test_persistent_splitk_combination(self) -> None:
+        """At least one curated config has both PERSISTENT=True and SPLIT_K > 1."""
+        combined = [
+            c for c in MATMUL_SPLITK_CURATED_CONFIGS
+            if c.get("PERSISTENT") and c["SPLIT_K"] > 1
+        ]
+        self.assertGreater(
+            len(combined), 0,
+            "No curated config combines persistent + split-K > 1",
+        )
 
 
 if __name__ == "__main__":
