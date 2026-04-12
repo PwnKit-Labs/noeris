@@ -104,6 +104,9 @@ _ENCODERS: dict[str, Any] = {
     "matmul": _encode_matmul,
 }
 
+# Stable ordering for operator one-hot encoding
+_OPERATOR_LIST: list[str] = sorted(_ENCODERS.keys())
+
 
 def encode_features(operator: str, config: dict, shape: dict) -> list[float]:
     """Encode (operator, config, shape) into a feature vector.
@@ -113,6 +116,320 @@ def encode_features(operator: str, config: dict, shape: dict) -> list[float]:
     """
     encoder = _ENCODERS.get(operator, _encode_matmul)
     return encoder(config, shape)
+
+
+# ---------------------------------------------------------------------------
+# Cross-operator feature encoding (fixed-width)
+# ---------------------------------------------------------------------------
+
+# Maximum feature count across all per-operator encoders.  Vectors shorter
+# than this are zero-padded so that a single model can consume any operator.
+_MAX_OPERATOR_FEATURES = max(
+    6,   # rmsnorm
+    10,  # attention
+    7,   # qk_norm_rope
+    9,   # matmul
+)
+
+
+def _encode_cross_operator(operator: str, config: dict, shape: dict) -> list[float]:
+    """Fixed-width feature vector that works across ALL operators.
+
+    Layout: [operator one-hot | config params (log2 block sizes, warps,
+    stages) | shape params (log2 dims)] — zero-padded to a common width so
+    the same GBR model handles every operator.
+    """
+    # Operator one-hot
+    one_hot = [0.0] * len(_OPERATOR_LIST)
+    if operator in _OPERATOR_LIST:
+        one_hot[_OPERATOR_LIST.index(operator)] = 1.0
+
+    # Per-operator features, zero-padded
+    raw = encode_features(operator, config, shape)
+    padded = raw + [0.0] * (_MAX_OPERATOR_FEATURES - len(raw))
+
+    return one_hot + padded
+
+
+# ---------------------------------------------------------------------------
+# Ranking Surrogate (cross-operator GBR)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class RankingSurrogate:
+    """Cross-operator ranking surrogate using GradientBoostingRegressor.
+
+    Instead of predicting absolute throughput per-operator (which fails at
+    R² < 0 due to low intra-operator variance), this model pools data across
+    ALL operators and predicts *relative* performance.  A single GBR is
+    trained on (operator_onehot, config_features, shape_features) -> metric,
+    and at inference time we rank candidate configs by predicted score.
+
+    The key insight: within one operator on one GPU, configs differ by ±20%,
+    but across operators variance spans 22-250 GB/s.  A cross-operator model
+    learns transferable patterns ("larger BLOCK_SIZE helps bandwidth-bound
+    ops") that a per-operator GP cannot.
+    """
+
+    model: Any = None
+    scaler_X: Any = None
+    _is_fitted: bool = False
+    _n_features: int = 0
+    _known_operators: list[str] = field(default_factory=list)
+
+    def fit(
+        self,
+        database: Any,
+        hardware: str,
+        *,
+        operators: list[str] | None = None,
+    ) -> dict:
+        """Train the GBR on ALL operators for the given hardware.
+
+        Args:
+            database: ConfigDatabase instance.
+            hardware: Hardware identifier to filter on.
+            operators: Optional whitelist; defaults to all operators found.
+
+        Returns:
+            Dict with fit stats: n_samples, r_squared, status.
+        """
+        X_raw: list[list[float]] = []
+        y_raw: list[float] = []
+
+        for key, record in database.records.items():
+            parts = key.split(":")
+            if len(parts) == 3:
+                rec_op, _, rec_hw = parts
+            elif len(parts) == 2:
+                rec_op, rec_hw = "matmul", parts[1]
+            else:
+                continue
+            if hardware and rec_hw != hardware:
+                continue
+            if operators and rec_op not in operators:
+                continue
+
+            shape = record.shape if isinstance(record.shape, dict) else record.get("shape", {})
+            results = record.results if isinstance(record.results, list) else record.get("results", [])
+
+            for result in results:
+                if not result.get("correct"):
+                    continue
+                metric = result.get("tflops") or result.get("gb_per_s") or 0.0
+                if metric <= 0:
+                    continue
+                config = result.get("config", {})
+                features = _encode_cross_operator(rec_op, config, shape)
+                X_raw.append(features)
+                y_raw.append(float(metric))
+
+        n_samples = len(X_raw)
+        if n_samples < 10:
+            self._is_fitted = False
+            return {"status": "insufficient_data", "n_samples": n_samples, "r_squared": 0.0}
+
+        try:
+            from sklearn.ensemble import GradientBoostingRegressor
+            from sklearn.preprocessing import StandardScaler
+        except ImportError:
+            self._is_fitted = False
+            return {"status": "sklearn_unavailable", "n_samples": n_samples, "r_squared": 0.0}
+
+        X = np.array(X_raw, dtype=np.float64)
+        y = np.array(y_raw, dtype=np.float64)
+
+        self.scaler_X = StandardScaler()
+        X_scaled = self.scaler_X.fit_transform(X)
+
+        self.model = GradientBoostingRegressor(
+            n_estimators=200,
+            max_depth=5,
+            learning_rate=0.1,
+            subsample=0.8,
+            random_state=42,
+        )
+        self.model.fit(X_scaled, y)
+        self._is_fitted = True
+        self._n_features = X.shape[1]
+
+        # Collect known operators
+        seen_ops: set[str] = set()
+        for key in database.records:
+            parts = key.split(":")
+            if len(parts) == 3:
+                seen_ops.add(parts[0])
+            elif len(parts) == 2:
+                seen_ops.add("matmul")
+        self._known_operators = sorted(seen_ops)
+
+        # R² on training data
+        y_pred = self.model.predict(X_scaled)
+        ss_res = np.sum((y - y_pred) ** 2)
+        ss_tot = np.sum((y - np.mean(y)) ** 2)
+        r_squared = 1.0 - ss_res / max(ss_tot, 1e-10)
+
+        return {
+            "status": "trained",
+            "n_samples": n_samples,
+            "r_squared": round(float(r_squared), 4),
+            "n_operators": len(self._known_operators),
+        }
+
+    def predict_score(self, operator: str, config: dict, shape: dict) -> float:
+        """Predict a relative performance score for one (operator, config, shape).
+
+        The score is on the same scale as the training metric (tflops or GB/s)
+        but should only be used for *ranking*, not as an absolute estimate.
+        """
+        if not self._is_fitted or self.model is None:
+            return 0.0
+        features = _encode_cross_operator(operator, config, shape)
+        x = np.array([features], dtype=np.float64)
+        x_scaled = self.scaler_X.transform(x)
+        return float(self.model.predict(x_scaled)[0])
+
+    def recommend_configs_by_ranking(
+        self,
+        operator: str,
+        shape: dict,
+        candidates: list[dict],
+        top_k: int = 5,
+    ) -> list[dict]:
+        """Score all candidate configs and return the top-k by predicted rank.
+
+        Each returned dict includes the original config keys plus a
+        ``predicted_score`` field.  Results are in descending score order.
+        """
+        if not candidates:
+            return []
+
+        scored: list[tuple[float, dict]] = []
+        for config in candidates:
+            score = self.predict_score(operator, config, shape)
+            scored.append((score, config))
+
+        scored.sort(key=lambda t: -t[0])
+
+        results: list[dict] = []
+        for score, config in scored[:top_k]:
+            results.append({**config, "predicted_score": round(score, 4)})
+        return results
+
+    def evaluate_ranking(
+        self,
+        database: Any,
+        hardware: str,
+        *,
+        n_splits: int = 5,
+    ) -> dict:
+        """K-fold cross-validated ranking evaluation.
+
+        Splits the dataset into *n_splits* folds, trains on k-1, and
+        measures Spearman rho between predicted and actual ordering on the
+        held-out fold.
+
+        Returns dict with per-fold rho and mean_spearman_rho.
+        """
+        from scipy.stats import spearmanr
+
+        # Collect all data points
+        X_raw: list[list[float]] = []
+        y_raw: list[float] = []
+
+        for key, record in database.records.items():
+            parts = key.split(":")
+            if len(parts) == 3:
+                rec_op, _, rec_hw = parts
+            elif len(parts) == 2:
+                rec_op, rec_hw = "matmul", parts[1]
+            else:
+                continue
+            if hardware and rec_hw != hardware:
+                continue
+
+            shape = record.shape if isinstance(record.shape, dict) else record.get("shape", {})
+            results = record.results if isinstance(record.results, list) else record.get("results", [])
+
+            for result in results:
+                if not result.get("correct"):
+                    continue
+                metric = result.get("tflops") or result.get("gb_per_s") or 0.0
+                if metric <= 0:
+                    continue
+                config = result.get("config", {})
+                features = _encode_cross_operator(
+                    rec_op if len(key.split(":")) == 3 else "matmul",
+                    config, shape,
+                )
+                X_raw.append(features)
+                y_raw.append(float(metric))
+
+        n = len(X_raw)
+        if n < n_splits * 2:
+            return {"status": "insufficient_data", "n_samples": n, "mean_spearman_rho": 0.0, "folds": []}
+
+        try:
+            from sklearn.ensemble import GradientBoostingRegressor
+            from sklearn.preprocessing import StandardScaler
+        except ImportError:
+            return {"status": "sklearn_unavailable", "n_samples": n, "mean_spearman_rho": 0.0, "folds": []}
+
+        X = np.array(X_raw, dtype=np.float64)
+        y = np.array(y_raw, dtype=np.float64)
+
+        rng = np.random.default_rng(42)
+        indices = rng.permutation(n)
+        fold_size = n // n_splits
+
+        fold_results: list[dict] = []
+        for fold_i in range(n_splits):
+            start = fold_i * fold_size
+            end = start + fold_size if fold_i < n_splits - 1 else n
+            test_idx = indices[start:end]
+            train_idx = np.concatenate([indices[:start], indices[end:]])
+
+            scaler = StandardScaler()
+            X_train = scaler.fit_transform(X[train_idx])
+            X_test = scaler.transform(X[test_idx])
+            y_train = y[train_idx]
+            y_test = y[test_idx]
+
+            gbr = GradientBoostingRegressor(
+                n_estimators=200, max_depth=5, learning_rate=0.1,
+                subsample=0.8, random_state=42,
+            )
+            gbr.fit(X_train, y_train)
+            y_pred = gbr.predict(X_test)
+
+            if len(y_test) >= 2:
+                rho, _ = spearmanr(y_test, y_pred)
+                rho = float(rho) if not np.isnan(rho) else 0.0
+            else:
+                rho = 0.0
+
+            ss_res = np.sum((y_test - y_pred) ** 2)
+            ss_tot = np.sum((y_test - np.mean(y_test)) ** 2)
+            r2 = 1.0 - ss_res / max(ss_tot, 1e-10)
+
+            fold_results.append({
+                "fold": fold_i,
+                "n_test": len(test_idx),
+                "spearman_rho": round(rho, 4),
+                "r_squared": round(float(r2), 4),
+            })
+
+        mean_rho = float(np.mean([f["spearman_rho"] for f in fold_results]))
+        mean_r2 = float(np.mean([f["r_squared"] for f in fold_results]))
+
+        return {
+            "status": "evaluated",
+            "n_samples": n,
+            "n_splits": n_splits,
+            "mean_spearman_rho": round(mean_rho, 4),
+            "mean_r_squared": round(mean_r2, 4),
+            "folds": fold_results,
+        }
 
 
 # ---------------------------------------------------------------------------

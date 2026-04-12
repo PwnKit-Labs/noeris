@@ -15,6 +15,7 @@ from research_engine.triton_kernels import ConfigDatabase, ShapeRecord
 from research_engine.gp_surrogate import (
     GPSurrogate,
     GPGuidedSelector,
+    RankingSurrogate,
     encode_features,
     _encode_rmsnorm,
     _encode_attention,
@@ -389,6 +390,148 @@ class TestGPGuidedSelector(unittest.TestCase):
                                 "num_warps": 4, "num_stages": 3}],
         )
         self.assertEqual(len(proposals), 0)
+
+
+def _synthetic_cross_operator_database(
+    n_shapes_per_op: int = 3,
+    configs_per_shape: int = 8,
+) -> ConfigDatabase:
+    """Generate a multi-operator database for RankingSurrogate tests.
+
+    Includes matmul and rmsnorm records so the cross-operator model has
+    inter-operator variance to learn from.
+    """
+    rng = np.random.default_rng(99)
+    records: dict[str, dict] = {}
+
+    # --- matmul shapes (high throughput range: 50-250 tflops) ---
+    for si in range(n_shapes_per_op):
+        M = 2 ** (9 + si)
+        shape = {"M": M, "N": M, "K": 512, "bucket": f"mat_{si}"}
+        key = f"matmul:mat_{si}:A100"
+        results = []
+        for ci in range(configs_per_shape):
+            bm = [32, 64, 128, 256][ci % 4]
+            bn = [32, 64, 128, 256][(ci + 1) % 4]
+            config = {
+                "BLOCK_SIZE_M": bm, "BLOCK_SIZE_N": bn, "BLOCK_SIZE_K": 32,
+                "GROUP_SIZE_M": 8, "num_warps": [2, 4, 8][ci % 3],
+                "num_stages": [2, 3, 4][ci % 3],
+            }
+            base = (np.log2(bm) + np.log2(bn)) * np.log2(M) * 1.5
+            tflops = max(float(base + rng.normal(0, 3)), 1.0)
+            results.append({
+                "config_id": f"m_c{ci}", "config": config,
+                "tflops": round(tflops, 3), "ms": 1.0, "correct": True,
+                "hardware": "A100", "operator": "matmul",
+            })
+        records[key] = {
+            "shape_key": key, "shape": shape,
+            "best_config_id": max(results, key=lambda r: r["tflops"])["config_id"],
+            "best_tflops": max(r["tflops"] for r in results),
+            "results": results,
+        }
+
+    # --- rmsnorm shapes (lower throughput range: 22-80 GB/s) ---
+    for si in range(n_shapes_per_op):
+        hd = 2 ** (9 + si)
+        shape = {"hidden_dim": hd, "n_rows": 2048, "affine": 1, "bucket": f"rms_{si}"}
+        key = f"rmsnorm:rms_{si}:A100"
+        results = []
+        for ci in range(configs_per_shape):
+            bs = [32, 64, 128, 256][ci % 4]
+            config = {
+                "BLOCK_SIZE": bs,
+                "num_warps": [2, 4, 8][ci % 3],
+                "num_stages": [2, 3, 4][ci % 3],
+            }
+            base = np.log2(bs) * np.log2(hd) * 0.3
+            gb_per_s = max(float(base + rng.normal(0, 1)), 0.5)
+            results.append({
+                "config_id": f"r_c{ci}", "config": config,
+                "tflops": round(gb_per_s, 3), "ms": 1.0, "correct": True,
+                "hardware": "A100", "operator": "rmsnorm",
+            })
+        records[key] = {
+            "shape_key": key, "shape": shape,
+            "best_config_id": max(results, key=lambda r: r["tflops"])["config_id"],
+            "best_tflops": max(r["tflops"] for r in results),
+            "results": results,
+        }
+
+    return _make_database(records)
+
+
+class TestRankingSurrogate(unittest.TestCase):
+    """Tests for the cross-operator RankingSurrogate."""
+
+    def test_ranking_surrogate_fits(self) -> None:
+        """RankingSurrogate trains on synthetic cross-operator data."""
+        db = _synthetic_cross_operator_database()
+        surrogate = RankingSurrogate()
+        stats = surrogate.fit(db, hardware="A100")
+
+        self.assertEqual(stats["status"], "trained")
+        self.assertGreater(stats["n_samples"], 0)
+        self.assertGreater(stats["r_squared"], 0.5)
+        self.assertGreaterEqual(stats["n_operators"], 2)
+
+    def test_ranking_surrogate_spearman_positive(self) -> None:
+        """Predicted ranking should positively correlate with actual."""
+        from scipy.stats import spearmanr
+
+        db = _synthetic_cross_operator_database(n_shapes_per_op=4, configs_per_shape=12)
+        surrogate = RankingSurrogate()
+        surrogate.fit(db, hardware="A100")
+
+        # Collect actual metrics and predicted scores for all data points
+        actuals: list[float] = []
+        predicted: list[float] = []
+
+        for key, record in db.records.items():
+            parts = key.split(":")
+            rec_op = parts[0] if len(parts) == 3 else "matmul"
+            shape = record.shape if isinstance(record.shape, dict) else {}
+            results = record.results if isinstance(record.results, list) else []
+            for r in results:
+                if not r.get("correct"):
+                    continue
+                metric = r.get("tflops") or r.get("gb_per_s") or 0.0
+                if metric <= 0:
+                    continue
+                config = r.get("config", {})
+                actuals.append(metric)
+                predicted.append(surrogate.predict_score(rec_op, config, shape))
+
+        rho, _ = spearmanr(actuals, predicted)
+        self.assertGreater(rho, 0.0, f"Spearman rho should be positive, got {rho}")
+
+    def test_recommend_configs_returns_ordered(self) -> None:
+        """recommend_configs_by_ranking returns top-k in descending score."""
+        db = _synthetic_cross_operator_database()
+        surrogate = RankingSurrogate()
+        surrogate.fit(db, hardware="A100")
+
+        candidates = [
+            {"BLOCK_SIZE_M": bm, "BLOCK_SIZE_N": bn, "BLOCK_SIZE_K": 32,
+             "GROUP_SIZE_M": 8, "num_warps": 4, "num_stages": 3}
+            for bm in [32, 64, 128, 256]
+            for bn in [32, 64, 128, 256]
+        ]
+
+        shape = {"M": 2048, "N": 2048, "K": 512}
+        top_k = 5
+        recommended = surrogate.recommend_configs_by_ranking(
+            "matmul", shape, candidates, top_k=top_k,
+        )
+
+        self.assertEqual(len(recommended), top_k)
+        scores = [r["predicted_score"] for r in recommended]
+        self.assertEqual(scores, sorted(scores, reverse=True),
+                         "Results must be in descending predicted_score order")
+        for r in recommended:
+            self.assertIn("predicted_score", r)
+            self.assertIn("BLOCK_SIZE_M", r)
 
 
 if __name__ == "__main__":
