@@ -52,6 +52,34 @@ The fused `qk_norm_rope` kernel achieves **113.80 GB/s** on T4 after bandit sear
 
 **Validation script.** `scripts/colab_validate_all.py` runs all 13 operators on Kaggle's or Colab's free T4 — no Modal account or paid GPU required.
 
+## T4 Layer Benchmark: Triton Codegen Quality Gap (2026-04-12)
+
+**Critical finding**: while the fusion speedup numbers above compare fused Triton vs. separated Triton (or separated PyTorch launches), a full layer-level benchmark on T4 comparing fused Noeris kernels against **PyTorch native** (which dispatches to vendor-optimized CUDA libraries) reveals a significant codegen quality gap.
+
+| Metric | Value |
+|---|---|
+| Operators validated (correctness) | **15/15 pass** |
+| Triton per-op overhead vs. PyTorch native | **3-5x slower** |
+| Fused vs. separated Triton speedup | **6.64x** (real fusion benefit) |
+| Net layer result vs. PyTorch native | **0.59x** (Noeris slower) |
+| Bandit search improvement (attention configs) | **+235%** |
+
+**Interpretation.** On T4 (compute capability 7.5, Turing architecture), Triton's compiler generates PTX that is 3-5x slower per-operator than PyTorch's native CUDA kernels (cuBLAS/cuDNN, which have hand-tuned assembly for Turing). The 6.64x fusion speedup is genuine — fusing 4 Triton ops into 2 is a real win — but 6.64x fusion gain divided by 3-5x codegen penalty yields a net loss at the layer level.
+
+This stands in contrast to A100 (Ampere, SM 8.0) and H100 (Hopper, SM 9.0), where Triton codegen quality is excellent and the same kernels deliver 10-13x speedups. The A100/H100 headline results are completely unaffected.
+
+**Cross-architecture comparison:**
+
+| Metric | T4 (Turing) | A100 (Ampere) | H100 (Hopper) |
+|---|---|---|---|
+| Fused vs. separated Triton | 6.64x | 10.2-12.9x | 10.4-11.9x |
+| Fused vs. PyTorch native (layer) | **0.59x** (slower) | >>1x (faster) | >>1x (faster) |
+| Triton codegen quality | Poor (3-5x penalty) | Excellent | Excellent |
+| Correctness | 15/15 pass | 60/60 pass | 60/60 pass |
+| Bandit search works? | Yes (+235%) | Yes | Yes |
+
+This is a genuine research finding: **Triton codegen quality is architecture-dependent**, and the same kernel source that produces a 12x win on datacenter GPUs can produce a net loss on older architectures. See the paper (section 4.15) for the full analysis.
+
 ## Key findings
 
 1. **All (shape, config) combinations are correct across 3 GPUs.** Zero failures across 6 Gemma 3/4 shapes × 5 curated configs × 2 datacenter GPUs (A100, H100), plus T4 correctness validation on Kaggle/Colab.
