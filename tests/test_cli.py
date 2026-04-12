@@ -138,6 +138,26 @@ class CliTests(unittest.TestCase):
         self.assertIn("# History Brief", output)
         self.assertIn("Benchmark", output)
 
+    def test_export_history_command_writes_files(self) -> None:
+        with _temp_workspace() as temp_dir:
+            _run_cli_json("benchmark-run", "tool-use-reliability")
+            _run_cli_json("benchmark-run", "tool-use-reliability")
+            output_dir = Path(temp_dir) / "history"
+            exit_code, payload = _run_cli_json(
+                "export-history",
+                "--benchmark-id",
+                "tool-use-reliability",
+                "--output-dir",
+                str(output_dir),
+            )
+            summary_text = (output_dir / "history-summary.json").read_text(encoding="utf-8")
+            brief_text = (output_dir / "history-brief.md").read_text(encoding="utf-8")
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(payload["output_dir"].endswith("history"))
+        self.assertIn("tool-use-reliability", summary_text)
+        self.assertIn("# History Brief", brief_text)
+
     def test_export_run_command_writes_bundle(self) -> None:
         with _temp_workspace() as temp_dir:
             exit_code, payload = _run_cli_json("run", "--topic", "memory routing")

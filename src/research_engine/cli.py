@@ -174,6 +174,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="max runs to compare",
     )
 
+    export_history_parser = subparsers.add_parser(
+        "export-history",
+        help="export cross-run history summary as json and markdown",
+    )
+    export_history_parser.add_argument(
+        "--benchmark-id",
+        default="",
+        help="optional benchmark id filter",
+    )
+    export_history_parser.add_argument(
+        "--topic",
+        default="",
+        help="optional topic filter",
+    )
+    export_history_parser.add_argument(
+        "--limit",
+        type=int,
+        default=5,
+        help="max runs to compare",
+    )
+    export_history_parser.add_argument(
+        "--output-dir",
+        default=".noeris/history",
+        help="directory for exported history artifacts",
+    )
+
     show_run_parser = subparsers.add_parser("show-run", help="show a persisted research run")
     show_run_parser.add_argument("run_id", help="identifier of the run to show")
 
@@ -505,6 +531,41 @@ def main(argv: list[str] | None = None) -> int:
                 benchmark_id=args.benchmark_id or None,
                 topic=args.topic or None,
                 limit=args.limit,
+            )
+        )
+        return 0
+    if args.command == "export-history":
+        store = JsonFileRunStore()
+        summary = store.summarize_history(
+            benchmark_id=args.benchmark_id or None,
+            topic=args.topic or None,
+            limit=args.limit,
+        )
+        brief = store.render_history_brief(
+            benchmark_id=args.benchmark_id or None,
+            topic=args.topic or None,
+            limit=args.limit,
+        )
+        output_dir = _Path(args.output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "history-summary.json").write_text(
+            json.dumps(summary, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        (output_dir / "history-brief.md").write_text(
+            brief,
+            encoding="utf-8",
+        )
+        print(
+            json.dumps(
+                {
+                    "output_dir": str(output_dir),
+                    "files": [
+                        str(output_dir / "history-summary.json"),
+                        str(output_dir / "history-brief.md"),
+                    ],
+                },
+                indent=2,
             )
         )
         return 0
