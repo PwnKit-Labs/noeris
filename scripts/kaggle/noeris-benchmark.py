@@ -43,6 +43,11 @@ print("=" * 60)
 subprocess.run([sys.executable, "/tmp/noeris/scripts/colab_bombshell.py"])
 
 print("\n" + "=" * 60)
+print("PHASE 5: Compiler failure analysis (torch.compile vs Noeris)")
+print("=" * 60)
+subprocess.run([sys.executable, "/tmp/noeris/scripts/compiler_analysis.py"])
+
+print("\n" + "=" * 60)
 print("DONE — Results in /tmp/noeris/.noeris/colab-configs.json")
 print("=" * 60)
 
@@ -56,3 +61,6 @@ if os.path.exists("/tmp/noeris/colab_validation_results.json"):
 if os.path.exists("/tmp/noeris/bombshell_results.json"):
     shutil.copy("/tmp/noeris/bombshell_results.json", "/kaggle/working/bombshell_results.json")
     print("Bombshell results saved to /kaggle/working/bombshell_results.json")
+if os.path.exists("/tmp/noeris/compiler_analysis_results.json"):
+    shutil.copy("/tmp/noeris/compiler_analysis_results.json", "/kaggle/working/compiler_analysis_results.json")
+    print("Compiler analysis saved to /kaggle/working/compiler_analysis_results.json")

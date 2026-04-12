@@ -67,6 +67,12 @@ QK_NORM_ROPE_SHAPE_BUCKETS = [
     {"name": "gemma4_26b_a4b_global", "batch": 1, "heads": 16, "num_kv_heads": 2, "seq": 4096, "head_dim": 512},
     {"name": "gemma4_31b_local", "batch": 1, "heads": 32, "num_kv_heads": 16, "seq": 4096, "head_dim": 256},
     {"name": "gemma4_31b_global", "batch": 1, "heads": 32, "num_kv_heads": 4, "seq": 4096, "head_dim": 512},
+    # Non-Gemma architectures — kernel generalizes via affine_mode=0 (standard RMSNorm)
+    # for models without QK-norm, and affine_mode=1 for Phi-3 which has QK-norm.
+    {"name": "llama3_8b", "batch": 1, "heads": 32, "num_kv_heads": 8, "seq": 4096, "head_dim": 128},
+    {"name": "llama3_70b", "batch": 1, "heads": 64, "num_kv_heads": 8, "seq": 4096, "head_dim": 128},
+    {"name": "mistral_7b", "batch": 1, "heads": 32, "num_kv_heads": 8, "seq": 4096, "head_dim": 128},
+    {"name": "phi3_mini", "batch": 1, "heads": 32, "num_kv_heads": 32, "seq": 4096, "head_dim": 96},
 ]
 
 
@@ -75,16 +81,33 @@ def qk_norm_rope_config_id(config: dict[str, int]) -> str:
 
 
 def qk_norm_rope_shape_bucket_key(shape: dict[str, int]) -> str:
-    """Classify a QK-RMSNorm+RoPE shape into a Gemma 3/4 bucket.
+    """Classify a QK-RMSNorm+RoPE shape into a named bucket.
 
     Discriminators:
-    - head_dim: 256 = local attention, 512 = global attention (Gemma 4 26B/31B)
-    - heads: 8 / 16 / 32
+    - head_dim: 96 = Phi-3, 128 = LLaMA/Mistral, 256 = Gemma local, 512 = Gemma global
+    - heads: 8 / 16 / 32 / 64
     - num_kv_heads: picks the per-variant GQA ratio
     """
     hd = shape.get("head_dim", 0)
     h = shape.get("heads", 0)
     h_kv = shape.get("num_kv_heads", 0)
+    name = shape.get("name", "")
+
+    # Exact name match for non-Gemma buckets
+    if name in ("llama3_8b", "llama3_70b", "mistral_7b", "phi3_mini"):
+        return name
+
+    # Phi-3 mini: head_dim=96, MHA
+    if hd == 96:
+        return "phi3_mini"
+
+    # LLaMA 3 / Mistral family: head_dim=128
+    if hd == 128:
+        if h >= 64:
+            return "llama3_70b"
+        # Both LLaMA 3 8B and Mistral 7B have heads=32, kv_heads=8, head_dim=128.
+        # Disambiguate by name if available; default to llama3_8b.
+        return "llama3_8b"
 
     if hd >= 512:
         # Gemma 4 global attention layers
@@ -92,7 +115,7 @@ def qk_norm_rope_shape_bucket_key(shape: dict[str, int]) -> str:
             return "gemma4_31b_global"
         return "gemma4_26b_a4b_global"
 
-    # head_dim == 256 branch (local attention family)
+    # head_dim == 256 branch (Gemma local attention family)
     if h >= 32:
         return "gemma4_31b_local"
     if h >= 16:

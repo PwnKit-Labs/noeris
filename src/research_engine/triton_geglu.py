@@ -73,6 +73,11 @@ GEGLU_SHAPE_BUCKETS = [
     {"name": "gemma4_e4b",              "n_rows": 2048, "ffn_dim": 10240},
     {"name": "gemma4_26b_a4b_expert",   "n_rows": 2048, "ffn_dim": 2112},
     {"name": "gemma4_31b",              "n_rows": 2048, "ffn_dim": 21504},
+    # Non-Gemma architectures — SwiGLU uses the same fused kernel structure
+    {"name": "llama3_8b",               "n_rows": 2048, "ffn_dim": 14336},
+    {"name": "llama3_70b",              "n_rows": 2048, "ffn_dim": 28672},
+    {"name": "mistral_7b",              "n_rows": 2048, "ffn_dim": 14336},
+    {"name": "phi3_mini",               "n_rows": 2048, "ffn_dim": 8192},
 ]
 
 
@@ -81,12 +86,18 @@ def geglu_config_id(config: dict[str, int]) -> str:
 
 
 def geglu_shape_bucket_key(shape: dict[str, int]) -> str:
-    """Classify a GeGLU shape into the nearest Gemma 4 bucket.
+    """Classify a GeGLU shape into the nearest bucket.
 
+    Exact name match is checked first for non-Gemma architectures.
     Ordering matters: the 26B-A4B expert bucket (ffn=2112) sits between
     the test_small bucket (ffn<=1024) and the E2B bucket (ffn=6144), so
     we check it explicitly before the ascending ffn_dim bands.
     """
+    name = shape.get("name", "")
+    # Exact name match for non-Gemma buckets
+    if name in ("llama3_8b", "llama3_70b", "mistral_7b", "phi3_mini"):
+        return name
+
     fd = shape.get("ffn_dim", 0)
     if fd <= 1024:
         return "test_small"
@@ -94,9 +105,15 @@ def geglu_shape_bucket_key(shape: dict[str, int]) -> str:
         return "gemma4_26b_a4b_expert"
     if fd <= 6144:
         return "gemma4_e2b"
+    if fd <= 8192:
+        return "phi3_mini"
     if fd <= 10240:
         return "gemma4_e4b"
-    return "gemma4_31b"
+    if fd <= 14336:
+        return "llama3_8b"
+    if fd <= 21504:
+        return "gemma4_31b"
+    return "llama3_70b"
 
 
 def geglu_shared_memory_check(config: dict[str, int]) -> bool:

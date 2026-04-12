@@ -65,6 +65,11 @@ RMSNORM_SHAPE_BUCKETS = [
     {"name": "gemma4_e4b", "n_rows": 2048, "hidden_dim": 2560, "affine_mode": 1},
     {"name": "gemma4_26b", "n_rows": 4096, "hidden_dim": 2816, "affine_mode": 1},
     {"name": "gemma4_31b", "n_rows": 4096, "hidden_dim": 5376, "affine_mode": 1},
+    # Non-Gemma architectures — standard affine (affine_mode=0)
+    {"name": "llama3_8b", "n_rows": 4096, "hidden_dim": 4096, "affine_mode": 0},
+    {"name": "llama3_70b", "n_rows": 4096, "hidden_dim": 8192, "affine_mode": 0},
+    {"name": "mistral_7b", "n_rows": 4096, "hidden_dim": 4096, "affine_mode": 0},
+    {"name": "phi3_mini", "n_rows": 4096, "hidden_dim": 3072, "affine_mode": 0},
 ]
 
 
@@ -75,14 +80,21 @@ def rmsnorm_config_id(config: dict[str, int]) -> str:
 def rmsnorm_shape_bucket_key(shape: dict[str, int]) -> str:
     """Classify an RMSNorm shape into a bucket.
 
+    Exact name match is checked first for non-Gemma architectures, then
     Gemma 4 family shapes are detected by their exact hidden_dim values:
     - 1536 → gemma4_e2b  (HF config.json, issue #45)
     - 2048 → gemma4_e2b  (legacy alias; preserved for backward compat)
     - 2560 → gemma4_e4b  (unique to Gemma; LLaMA does not use this width)
     - 2816 → gemma4_26b  (HF config.json for gemma-4-26B-A4B, issue #45)
+    - 3072 → phi3_mini   (Phi-3 mini hidden size)
     - 4096 with n_rows >= 4096 → gemma4_26b  (disambiguated from llama_7b by row count)
     - 5376 → gemma4_31b  (unique to Gemma; sits between llama_13b and llama_70b)
     """
+    name = shape.get("name", "")
+    # Exact name match for non-Gemma buckets
+    if name in ("llama3_8b", "llama3_70b", "mistral_7b", "phi3_mini"):
+        return name
+
     h = shape.get("hidden_dim", 0)
     n = shape.get("n_rows", 0)
     if h <= 768:
@@ -99,6 +111,8 @@ def rmsnorm_shape_bucket_key(shape: dict[str, int]) -> str:
         return "gemma4_e4b"
     if h == 2816:
         return "gemma4_26b"
+    if h == 3072:
+        return "phi3_mini"
     if h <= 4096:
         if n > 4096:
             return "mixtral"
