@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -33,12 +34,236 @@ sys.path.insert(0, str(REPO / "src"))
 import torch
 
 
+# ---------------------------------------------------------------------------
+# LLM proposer prompt template
+# ---------------------------------------------------------------------------
+PROPOSER_PROMPT = """You are a Triton GPU kernel tuning expert. Given the following benchmark results \
+for the {operator} operator on {hardware}, propose {n_configs} novel configurations that might \
+perform better than the current best.
+
+Current database insights:
+{insights_json}
+
+Best configs found so far:
+{best_configs}
+
+The config parameters are: {param_space}
+
+Propose {n_configs} new configs as JSON. Each must have all required keys. \
+Think about: tile sizes that amortize memory access, warp counts that match \
+the GPU's SM count, pipeline stages that hide latency.
+
+Return ONLY a JSON array of config dicts, no explanation."""
+
+
+def _detect_api_key() -> tuple[str, str] | None:
+    """Return (provider, api_key) or None if nothing is available."""
+    for env_var, provider in [
+        ("ANTHROPIC_API_KEY", "anthropic"),
+        ("AZURE_OPENAI_API_KEY", "azure"),
+        ("OPENAI_API_KEY", "openai"),
+    ]:
+        key = os.environ.get(env_var)
+        if key:
+            return (provider, key)
+    return None
+
+
+def _propose_configs_anthropic(
+    *,
+    api_key: str,
+    operator: str,
+    hardware: str,
+    insights: list[dict],
+    best_configs: list[dict],
+    param_space: dict,
+    n_configs: int = 4,
+) -> list[dict]:
+    """Call the Anthropic Messages API to propose novel configs."""
+    from urllib.request import Request, urlopen
+
+    prompt = PROPOSER_PROMPT.format(
+        operator=operator,
+        hardware=hardware,
+        n_configs=n_configs,
+        insights_json=json.dumps(insights, indent=2),
+        best_configs=json.dumps(best_configs, indent=2),
+        param_space=json.dumps(param_space, indent=2),
+    )
+    payload = {
+        "model": os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-20250514"),
+        "max_tokens": 1024,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    request = Request(
+        "https://api.anthropic.com/v1/messages",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+        },
+        method="POST",
+    )
+    with urlopen(request, timeout=60) as response:
+        body = json.loads(response.read().decode("utf-8"))
+
+    text = ""
+    for block in body.get("content", []):
+        if block.get("type") == "text":
+            text += block.get("text", "")
+
+    # Extract JSON array from the response text
+    start = text.find("[")
+    end = text.rfind("]")
+    if start < 0 or end < 0:
+        return []
+    return json.loads(text[start : end + 1])
+
+
+def _propose_configs_responses_api(
+    *,
+    operator: str,
+    hardware: str,
+    insights: list[dict],
+    best_configs: list[dict],
+    param_space: dict,
+    n_configs: int = 4,
+) -> list[dict]:
+    """Use the existing Noeris ResponsesApiClient (OpenAI / Azure)."""
+    from research_engine.llm import ResponsesApiClient
+
+    client = ResponsesApiClient.from_environment()
+    prompt = PROPOSER_PROMPT.format(
+        operator=operator,
+        hardware=hardware,
+        n_configs=n_configs,
+        insights_json=json.dumps(insights, indent=2),
+        best_configs=json.dumps(best_configs, indent=2),
+        param_space=json.dumps(param_space, indent=2),
+    )
+    # Use a minimal schema — just an array of config dicts
+    param_props = {pname: {"type": "integer"} for pname in param_space.keys()}
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "configs": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": param_props,
+                    "required": list(param_props.keys()),
+                },
+            },
+        },
+        "required": ["configs"],
+    }
+    payload = client.generate_json(
+        schema_name="colab_config_proposals",
+        schema=schema,
+        instructions="You propose Triton kernel configs. Return only valid configs.",
+        prompt=prompt,
+        max_output_tokens=1024,
+        reasoning_effort="low",
+        text_verbosity="low",
+    )
+    return [c for c in payload.get("configs", []) if isinstance(c, dict)]
+
+
+def get_llm_proposed_configs(
+    *,
+    operator: str,
+    hardware: str,
+    db,
+    spec,
+    n_configs: int = 4,
+    prefer_anthropic: bool = False,
+) -> tuple[list[dict], str]:
+    """Get LLM-proposed configs. Returns (configs, source_label).
+
+    Falls back gracefully — never raises on missing keys.
+    """
+    cred = _detect_api_key()
+    if cred is None:
+        print("  WARNING: --llm requested but no API key found "
+              "(ANTHROPIC_API_KEY, AZURE_OPENAI_API_KEY, OPENAI_API_KEY). "
+              "Falling back to grid-only.")
+        return [], "no_api_key"
+
+    provider, api_key = cred
+
+    # If --anthropic flag was passed, force Anthropic even if other keys exist
+    if prefer_anthropic:
+        anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
+        if anthropic_key:
+            provider, api_key = "anthropic", anthropic_key
+        else:
+            print("  WARNING: --anthropic requested but ANTHROPIC_API_KEY not set. "
+                  f"Using {provider} instead.")
+
+    insights = db.get_insights(hardware=hardware, operator=operator) if hasattr(db, "get_insights") else []
+    best_configs = []
+    if insights:
+        for ins in insights[:5]:
+            bc = ins.get("best_config")
+            if bc:
+                best_configs.append(bc)
+
+    param_space = spec.param_space if hasattr(spec, "param_space") else {}
+
+    try:
+        if provider == "anthropic":
+            configs = _propose_configs_anthropic(
+                api_key=api_key,
+                operator=operator,
+                hardware=hardware,
+                insights=insights,
+                best_configs=best_configs,
+                param_space=param_space,
+                n_configs=n_configs,
+            )
+        else:
+            configs = _propose_configs_responses_api(
+                operator=operator,
+                hardware=hardware,
+                insights=insights,
+                best_configs=best_configs,
+                param_space=param_space,
+                n_configs=n_configs,
+            )
+        # Validate configs against param_space
+        valid = []
+        for cfg in configs:
+            if not isinstance(cfg, dict):
+                continue
+            ok = True
+            clean = {}
+            for pname, allowed in param_space.items():
+                val = cfg.get(pname)
+                if not isinstance(val, int) or val not in allowed:
+                    ok = False
+                    break
+                clean[pname] = val
+            if ok:
+                valid.append(clean)
+        print(f"  LLM proposer ({provider}): {len(valid)} valid configs from {len(configs)} proposals")
+        return valid[:n_configs], provider
+    except Exception as exc:
+        print(f"  WARNING: LLM proposer failed ({type(exc).__name__}: {str(exc)[:120]}). "
+              "Falling back to grid-only.")
+        return [], f"error_{provider}"
+
+
 def run_iteration(
     operator: str,
     configs_per_iter: int,
     db_path: str,
     use_bandit: bool = True,
     shapes_mode: str = "standard",
+    use_llm: bool = False,
+    prefer_anthropic: bool = False,
 ) -> dict:
     """Run one iteration of the Noeris search loop on the local GPU."""
     from research_engine.triton_operators import REGISTRY
@@ -60,6 +285,19 @@ def run_iteration(
     else:
         shapes = spec.shape_buckets[:6]
 
+    # LLM proposer — generate novel configs outside the grid
+    proposed_configs: list[dict] = []
+    llm_source = "none"
+    if use_llm:
+        proposed_configs, llm_source = get_llm_proposed_configs(
+            operator=operator,
+            hardware=hardware,
+            db=db,
+            spec=spec,
+            n_configs=max(2, configs_per_iter // 2),
+            prefer_anthropic=prefer_anthropic,
+        )
+
     # Select configs — use bandit if available, else grid sample
     if use_bandit:
         try:
@@ -68,16 +306,18 @@ def run_iteration(
             configs = bandit.select_configs(
                 spec=spec, database=db, hardware=hardware,
                 shapes=shapes, max_configs=configs_per_iter,
-                proposed_configs=[],
+                proposed_configs=proposed_configs,
             )
             selector = "bandit"
         except Exception as e:
             print(f"  Bandit failed ({e}), falling back to grid sample")
-            configs = spec.grid_generator_fn(max_configs=configs_per_iter)[:configs_per_iter]
-            selector = "grid"
+            configs = proposed_configs + spec.grid_generator_fn(max_configs=configs_per_iter)[:configs_per_iter]
+            configs = configs[:configs_per_iter]
+            selector = "grid+llm" if proposed_configs else "grid"
     else:
-        configs = spec.grid_generator_fn(max_configs=configs_per_iter)[:configs_per_iter]
-        selector = "grid"
+        configs = proposed_configs + spec.grid_generator_fn(max_configs=configs_per_iter)[:configs_per_iter]
+        configs = configs[:configs_per_iter]
+        selector = "grid+llm" if proposed_configs else "grid"
 
     print(f"  Selector: {selector}, {len(configs)} configs, {len(shapes)} shapes")
 
@@ -186,6 +426,10 @@ def main():
                        help="Shape set (default: standard)")
     parser.add_argument("--no-bandit", action="store_true",
                        help="Use grid sampling instead of bandit")
+    parser.add_argument("--llm", action="store_true",
+                       help="Use LLM proposer to generate novel configs outside the grid")
+    parser.add_argument("--anthropic", action="store_true",
+                       help="Prefer Anthropic Claude API for the LLM proposer (requires ANTHROPIC_API_KEY)")
     parser.add_argument("--all-operators", action="store_true",
                        help="Run on ALL operators (1 iteration each)")
     args = parser.parse_args()
@@ -214,6 +458,8 @@ def main():
                 db_path=args.db_path,
                 use_bandit=not args.no_bandit,
                 shapes_mode=args.shapes,
+                use_llm=args.llm or args.anthropic,
+                prefer_anthropic=args.anthropic,
             )
 
             if "error" in result:
