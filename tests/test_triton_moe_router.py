@@ -141,6 +141,46 @@ class TestBenchmarkScript(unittest.TestCase):
         self.assertIn("fusion_speedup", script)
         self.assertIn("separated_ms", script)
 
+    def test_benchmark_script_has_skip_topk_constexpr(self) -> None:
+        """Kernel must declare SKIP_TOPK as a tl.constexpr parameter."""
+        script = self._make_script()
+        self.assertIn("SKIP_TOPK: tl.constexpr", script)
+
+    def test_benchmark_script_reports_both_fusion_speedups(self) -> None:
+        """Both fusion_speedup_full and fusion_speedup_matmul_softmax must
+        appear in the generated benchmark script."""
+        script = self._make_script()
+        self.assertIn("fusion_speedup_full", script)
+        self.assertIn("fusion_speedup_matmul_softmax", script)
+
+
+class TestSkipTopk(unittest.TestCase):
+    def test_skip_topk_bucket_present(self) -> None:
+        """The _notopk shape buckets must exist."""
+        names = [b["name"] for b in MOE_ROUTER_SHAPE_BUCKETS]
+        self.assertIn("gemma4_26b_a4b_router_small_notopk", names)
+        self.assertIn("gemma4_26b_a4b_router_med_notopk", names)
+
+    def test_skip_topk_routes_correctly(self) -> None:
+        """skip_topk=True shapes must route to _notopk bucket keys,
+        while skip_topk=False shapes route to the original keys."""
+        shape_with = {"num_tokens": 1024, "hidden_dim": 2816, "num_experts": 128, "top_k": 8, "skip_topk": True}
+        shape_without = {"num_tokens": 1024, "hidden_dim": 2816, "num_experts": 128, "top_k": 8}
+        self.assertEqual(
+            moe_router_shape_bucket_key(shape_with),
+            "gemma4_26b_a4b_router_small_notopk",
+        )
+        self.assertEqual(
+            moe_router_shape_bucket_key(shape_without),
+            "gemma4_26b_a4b_router_small",
+        )
+        # Medium bucket too
+        shape_med = {"num_tokens": 4096, "hidden_dim": 2816, "num_experts": 128, "top_k": 8, "skip_topk": True}
+        self.assertEqual(
+            moe_router_shape_bucket_key(shape_med),
+            "gemma4_26b_a4b_router_med_notopk",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

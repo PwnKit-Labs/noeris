@@ -59,12 +59,11 @@ MOE_ROUTER_CURATED_CONFIGS = [
 # smaller GPUs where the matmul portion is fast. torch.topk uses a radix-select
 # that is much faster for k=8 over 128 experts.
 #
-# Future work: add a SKIP_TOPK constexpr mode that only fuses matmul+softmax
-# (2 kernel launches -> 1) and returns full probabilities, letting the caller
-# do torch.topk externally. This would give a positive fusion_speedup on T4
-# while still saving one launch on A100/H100. The kernel change is small:
-# guard the iterative top-k loop + renorm with `if not SKIP_TOPK:` and
-# store the full probs row instead.
+# RESOLVED: SKIP_TOPK constexpr mode fuses only matmul+softmax (2 kernel
+# launches -> 1) and returns full probabilities, letting the caller do
+# torch.topk externally. This gives a positive fusion_speedup on T4/A100
+# while still saving one launch. The kernel guards the iterative top-k loop
+# + renorm with `if not SKIP_TOPK:` and stores the full probs row instead.
 
 
 # Real Gemma 4 26B-A4B router shapes at several prefill / decode token counts.
@@ -73,6 +72,8 @@ MOE_ROUTER_SHAPE_BUCKETS = [
     {"name": "gemma4_26b_a4b_router_med", "num_tokens": 4096, "hidden_dim": 2816, "num_experts": 128, "top_k": 8},
     {"name": "gemma4_26b_a4b_router_long", "num_tokens": 8192, "hidden_dim": 2816, "num_experts": 128, "top_k": 8},
     {"name": "gemma4_26b_a4b_router_xlong", "num_tokens": 16384, "hidden_dim": 2816, "num_experts": 128, "top_k": 8},
+    {"name": "gemma4_26b_a4b_router_small_notopk", "num_tokens": 1024, "hidden_dim": 2816, "num_experts": 128, "top_k": 8, "skip_topk": True},
+    {"name": "gemma4_26b_a4b_router_med_notopk", "num_tokens": 4096, "hidden_dim": 2816, "num_experts": 128, "top_k": 8, "skip_topk": True},
 ]
 
 
@@ -83,13 +84,15 @@ def moe_router_config_id(config: dict[str, int]) -> str:
 def moe_router_shape_bucket_key(shape: dict[str, int]) -> str:
     """Classify a router shape into a Gemma 4 26B-A4B token-count bucket."""
     num_tokens = int(shape.get("num_tokens", 0))
+    skip_topk = bool(shape.get("skip_topk", False))
+    suffix = "_notopk" if skip_topk else ""
     if num_tokens <= 2048:
-        return "gemma4_26b_a4b_router_small"
+        return f"gemma4_26b_a4b_router_small{suffix}"
     if num_tokens <= 6144:
-        return "gemma4_26b_a4b_router_med"
+        return f"gemma4_26b_a4b_router_med{suffix}"
     if num_tokens <= 12288:
-        return "gemma4_26b_a4b_router_long"
-    return "gemma4_26b_a4b_router_xlong"
+        return f"gemma4_26b_a4b_router_long{suffix}"
+    return f"gemma4_26b_a4b_router_xlong{suffix}"
 
 
 def moe_router_shared_memory_check(config: dict[str, int]) -> bool:
@@ -165,12 +168,17 @@ def moe_router_kernel(
     HIDDEN_DIM: tl.constexpr,
     BLOCK_M: tl.constexpr,
     BLOCK_K: tl.constexpr,
+    SKIP_TOPK: tl.constexpr,
 ):
     """Fused router: logits = hidden @ W; softmax; top-k; renormalize.
 
     One program handles BLOCK_M tokens. The router weight is streamed in
     BLOCK_K-sized K-tiles; NUM_EXPERTS is the full expert dimension (we
     materialize the full logit row in registers since 128 is small).
+
+    When SKIP_TOPK is True, only matmul+softmax are fused (2->1 launch)
+    and the full probability vector is written out. The caller does
+    torch.topk externally.
 
     The shared expert is a SEPARATE dense MLP in Gemma 4; this kernel only
     computes the routed top-k gate weights and indices.
@@ -225,50 +233,68 @@ def moe_router_kernel(
     denom = tl.sum(exp_x, axis=1)
     probs = exp_x / denom[:, None]
 
-    # Iterative top-k: k passes of argmax+mask. k=8, NUM_EXPERTS=128 ->
-    # 1024 scalar ops per token, negligible vs. the matmul.
-    cur = probs
-    running_sum = tl.zeros((BLOCK_M,), dtype=tl.float32)
-    for i in tl.static_range(0, TOP_K):
-        idx = tl.argmax(cur, axis=1).to(tl.int32)
-        # Gather the max value per row.
-        max_val = tl.max(cur, axis=1)
-        running_sum += max_val
+    if SKIP_TOPK:
+        # Store full softmax probabilities: [BLOCK_M, NUM_EXPERTS].
+        out_ptrs = (
+            topk_weights_ptr
+            + offs_m[:, None] * NUM_EXPERTS
+            + offs_n[None, :]
+        )
+        out_mask = token_mask[:, None] & (offs_n[None, :] < num_experts)
+        tl.store(out_ptrs, probs, mask=out_mask)
+    else:
+        # Iterative top-k: k passes of argmax+mask. k=8, NUM_EXPERTS=128 ->
+        # 1024 scalar ops per token, negligible vs. the matmul.
+        cur = probs
+        running_sum = tl.zeros((BLOCK_M,), dtype=tl.float32)
+        for i in tl.static_range(0, TOP_K):
+            idx = tl.argmax(cur, axis=1).to(tl.int32)
+            # Gather the max value per row.
+            max_val = tl.max(cur, axis=1)
+            running_sum += max_val
 
-        # Store raw top-k weight + index at column i.
-        out_w_ptr = topk_weights_ptr + offs_m * TOP_K + i
-        out_i_ptr = topk_indices_ptr + offs_m * TOP_K + i
-        tl.store(out_w_ptr, max_val, mask=token_mask)
-        tl.store(out_i_ptr, idx, mask=token_mask)
+            # Store raw top-k weight + index at column i.
+            out_w_ptr = topk_weights_ptr + offs_m * TOP_K + i
+            out_i_ptr = topk_indices_ptr + offs_m * TOP_K + i
+            tl.store(out_w_ptr, max_val, mask=token_mask)
+            tl.store(out_i_ptr, idx, mask=token_mask)
 
-        # Mask the winning column for the next pass.
-        one_hot = (offs_n[None, :] == idx[:, None])
-        cur = tl.where(one_hot, float("-inf"), cur)
+            # Mask the winning column for the next pass.
+            one_hot = (offs_n[None, :] == idx[:, None])
+            cur = tl.where(one_hot, float("-inf"), cur)
 
-    # Renormalize the stored top-k weights so each row sums to 1.
-    inv_sum = 1.0 / running_sum
-    for i in tl.static_range(0, TOP_K):
-        w_ptr = topk_weights_ptr + offs_m * TOP_K + i
-        w = tl.load(w_ptr, mask=token_mask, other=0.0)
-        w = w * inv_sum
-        tl.store(w_ptr, w, mask=token_mask)
+        # Renormalize the stored top-k weights so each row sums to 1.
+        inv_sum = 1.0 / running_sum
+        for i in tl.static_range(0, TOP_K):
+            w_ptr = topk_weights_ptr + offs_m * TOP_K + i
+            w = tl.load(w_ptr, mask=token_mask, other=0.0)
+            w = w * inv_sum
+            tl.store(w_ptr, w, mask=token_mask)
 
 
-def moe_router(hidden, router_weight, top_k, config):
+def moe_router(hidden, router_weight, top_k, config, skip_topk=False):
     """Launch the fused MoE router kernel.
 
     hidden:        [num_tokens, hidden_dim] fp16
     router_weight: [hidden_dim, num_experts] fp16
     top_k:         int
+    skip_topk:     bool — when True, fuse only matmul+softmax (2->1 launch)
+                   and return (full_probs [T, E], None).
     Returns: (topk_weights [T, k] fp32, topk_indices [T, k] int32)
+             or (full_probs [T, E] fp32, None) when skip_topk=True.
     """
     num_tokens, hidden_dim = hidden.shape
     _, num_experts = router_weight.shape
 
-    topk_weights = torch.empty((num_tokens, top_k), device=hidden.device, dtype=torch.float32)
-    topk_indices = torch.empty((num_tokens, top_k), device=hidden.device, dtype=torch.int32)
-
     NUM_EXPERTS = triton.next_power_of_2(num_experts)
+
+    if skip_topk:
+        topk_weights = torch.empty((num_tokens, num_experts), device=hidden.device, dtype=torch.float32)
+        topk_indices = None
+    else:
+        topk_weights = torch.empty((num_tokens, top_k), device=hidden.device, dtype=torch.float32)
+        topk_indices = torch.empty((num_tokens, top_k), device=hidden.device, dtype=torch.int32)
+
     HIDDEN_DIM = hidden_dim
     BLOCK_M = config["BLOCK_M"]
     BLOCK_K = 64
@@ -276,7 +302,7 @@ def moe_router(hidden, router_weight, top_k, config):
     grid = (triton.cdiv(num_tokens, BLOCK_M),)
     moe_router_kernel[grid](
         hidden, router_weight,
-        topk_weights, topk_indices,
+        topk_weights, topk_indices if topk_indices is not None else topk_weights,
         num_tokens, hidden_dim, num_experts,
         hidden.stride(0), hidden.stride(1),
         router_weight.stride(0), router_weight.stride(1),
@@ -285,6 +311,7 @@ def moe_router(hidden, router_weight, top_k, config):
         HIDDEN_DIM=HIDDEN_DIM,
         BLOCK_M=BLOCK_M,
         BLOCK_K=BLOCK_K,
+        SKIP_TOPK=skip_topk,
         num_warps=config["num_warps"],
         num_stages=config["num_stages"],
     )
@@ -318,12 +345,64 @@ def separated_moe_router(hidden, router_weight, top_k):
     return topk_weights, topk_indices
 
 
-def benchmark_one(num_tokens, hidden_dim, num_experts, top_k, config):
+def separated_matmul_softmax(hidden, router_weight):
+    """Separated matmul+softmax baseline (2 launches) for SKIP_TOPK mode."""
+    logits = hidden @ router_weight                                  # 1: matmul
+    probs = torch.softmax(logits, dim=-1)                            # 2: softmax
+    return probs
+
+
+def benchmark_one(num_tokens, hidden_dim, num_experts, top_k, config, skip_topk=False):
     try:
         torch.manual_seed(0)
         hidden = torch.randn((num_tokens, hidden_dim), device="cuda", dtype=torch.float16) * 0.1
         router_weight = torch.randn((hidden_dim, num_experts), device="cuda", dtype=torch.float16) * 0.1
 
+        if skip_topk:
+            # SKIP_TOPK mode: fuse matmul+softmax only (2->1 launch).
+            ref_probs = separated_matmul_softmax(hidden, router_weight)
+            out_probs, out_idx = moe_router(hidden, router_weight, top_k, config, skip_topk=True)
+            assert out_idx is None
+
+            w_err = (out_probs.float() - ref_probs.float()).abs().max().item()
+            if w_err > 0.05:
+                return {{
+                    "correct": False,
+                    "max_err": round(w_err, 6),
+                    "ms": None, "gb_per_s": None, "tflops": None,
+                }}
+
+            ms = triton.testing.do_bench(
+                lambda: moe_router(hidden, router_weight, top_k, config, skip_topk=True),
+                warmup=25, rep=100,
+            )
+            sep_ms = triton.testing.do_bench(
+                lambda: separated_matmul_softmax(hidden, router_weight),
+                warmup=25, rep=100,
+            )
+
+            flops = 2.0 * num_tokens * hidden_dim * num_experts
+            tflops = flops / (ms * 1e-3) / 1e12
+
+            hidden_bytes = num_tokens * hidden_dim * 2
+            weight_bytes = hidden_dim * num_experts * 2
+            out_bytes = num_tokens * num_experts * 4
+            bytes_moved = hidden_bytes + weight_bytes + out_bytes
+            gb_per_s = bytes_moved / (ms * 1e-3) / 1e9
+
+            fusion_speedup_matmul_softmax = sep_ms / ms if ms > 0 else 0.0
+            return {{
+                "correct": True,
+                "max_err": round(w_err, 6),
+                "ms": round(ms, 4),
+                "separated_ms": round(sep_ms, 4),
+                "fusion_speedup_matmul_softmax": round(fusion_speedup_matmul_softmax, 3),
+                "gb_per_s": round(gb_per_s, 2),
+                "tflops": round(tflops, 2),
+                "skip_topk": True,
+            }}
+
+        # Full fused path (matmul+softmax+topk+renorm).
         ref_w, ref_i = torch_moe_router(hidden, router_weight, top_k)
         out_w, out_i = moe_router(hidden, router_weight, top_k, config)
 
@@ -364,16 +443,17 @@ def benchmark_one(num_tokens, hidden_dim, num_experts, top_k, config):
         bytes_moved = hidden_bytes + weight_bytes + out_bytes
         gb_per_s = bytes_moved / (ms * 1e-3) / 1e9
 
-        fusion_speedup = sep_ms / ms if ms > 0 else 0.0
+        fusion_speedup_full = sep_ms / ms if ms > 0 else 0.0
         return {{
             "correct": True,
             "max_err": round(w_err, 6),
             "idx_match": round(idx_match, 4),
             "ms": round(ms, 4),
             "separated_ms": round(sep_ms, 4),
-            "fusion_speedup": round(fusion_speedup, 3),
+            "fusion_speedup_full": round(fusion_speedup_full, 3),
             "gb_per_s": round(gb_per_s, 2),
             "tflops": round(tflops, 2),
+            "skip_topk": False,
         }}
     except Exception as exc:
         return {{"correct": False, "error": str(exc)[:200], "ms": None, "gb_per_s": None, "tflops": None}}
@@ -395,7 +475,8 @@ def main():
             hidden_dim = shape["hidden_dim"]
             num_experts = shape["num_experts"]
             top_k = shape["top_k"]
-            result = benchmark_one(num_tokens, hidden_dim, num_experts, top_k, config)
+            skip_topk = shape.get("skip_topk", False)
+            result = benchmark_one(num_tokens, hidden_dim, num_experts, top_k, config, skip_topk=skip_topk)
             result["shape"] = f"{{num_tokens}}x{{hidden_dim}}x{{num_experts}}x{{top_k}}"
             result["shape_name"] = shape.get("name", "")
             shape_results.append(result)
