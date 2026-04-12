@@ -78,7 +78,7 @@ def phase1_attention_vs_sdpa():
     print("PHASE 1: Attention sliding-window vs SDPA")
     print("=" * 70)
 
-    from research_engine.triton_attention import flash_attn
+    from research_engine.triton_attention_v2 import flash_attn_v2 as flash_attn
 
     # Gemma 3/4 sliding-window shape: W=1024, S=4096, head_dim=256
     # Use smaller batch/heads for T4 memory

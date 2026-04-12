@@ -106,7 +106,7 @@ import torch.nn.functional as F
 from research_engine.triton_rmsnorm import rmsnorm as _noeris_rmsnorm_raw
 from research_engine.triton_qk_norm_rope import apply_qk_norm_rope as _noeris_qk_norm_rope_raw
 from research_engine.triton_geglu import geglu as _noeris_geglu_raw
-from research_engine.triton_attention import flash_attn as _noeris_flash_attn_raw
+from research_engine.triton_attention_v2 import flash_attn_v2 as _noeris_flash_attn_raw
 
 
 LAYER_CONFIGS = json.loads({configs_json!r})
