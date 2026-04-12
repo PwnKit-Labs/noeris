@@ -361,6 +361,8 @@ class JsonFileRunStore:
         ranked_sources = _rank_sources_for_history(
             sources=latest.memo.sources if latest else [],
             assessments=latest.memo.source_assessments if latest else [],
+            claims=latest.memo.claims if latest else [],
+            contradictions=latest.memo.contradictions if latest else [],
         )
 
         return {
@@ -484,7 +486,8 @@ class JsonFileRunStore:
             for item in summary["ranked_sources"]:
                 lines.append(
                     f"- `{item['source_id']}` | score=`{item['score']:.3f}` | "
-                    f"confidence=`{item['confidence']}` | updated_at=`{item['updated_at'] or 'unknown'}` | "
+                    f"confidence=`{item['confidence']}` | contradictions=`{item['contradiction_count']}` | "
+                    f"updated_at=`{item['updated_at'] or 'unknown'}` | "
                     f"title={item['title']}"
                 )
             lines.append("")
@@ -602,11 +605,21 @@ def _rank_sources_for_history(
     *,
     sources: list[ResearchSource],
     assessments: list[SourceAssessment],
+    claims: list[Claim],
+    contradictions: list[Contradiction],
 ) -> list[dict[str, object]]:
     assessment_map = {
         assessment.source_id: assessment
         for assessment in assessments
     }
+    claim_to_source = {claim.title: claim.source for claim in claims}
+    contradiction_counts: dict[str, int] = {}
+    for contradiction in contradictions:
+        for claim_title in contradiction.claim_titles:
+            source_id = claim_to_source.get(claim_title)
+            if not source_id:
+                continue
+            contradiction_counts[source_id] = contradiction_counts.get(source_id, 0) + 1
     scores = []
     newest_ts = max((source.updated_at for source in sources if source.updated_at), default=None)
     for source in sources:
@@ -620,13 +633,15 @@ def _rank_sources_for_history(
         freshness_bonus = 0.0
         if source.updated_at and newest_ts:
             freshness_bonus = 0.2 if source.updated_at == newest_ts else 0.1
+        contradiction_penalty = min(0.15 * contradiction_counts.get(source.identifier, 0), 0.3)
         scores.append(
             {
                 "source_id": source.identifier,
                 "title": source.title,
                 "confidence": confidence,
                 "updated_at": source.updated_at,
-                "score": round(confidence_weight + freshness_bonus, 3),
+                "contradiction_count": contradiction_counts.get(source.identifier, 0),
+                "score": round(confidence_weight + freshness_bonus - contradiction_penalty, 3),
             }
         )
     return sorted(scores, key=lambda item: (-item["score"], item["source_id"]))

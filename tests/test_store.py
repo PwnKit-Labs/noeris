@@ -148,6 +148,73 @@ class RunStoreTests(unittest.TestCase):
         self.assertIn("## Ranked Sources", brief)
         self.assertIn("2026-04-10T12:00:00Z", brief)
 
+    def test_ranked_sources_penalize_contradicted_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = JsonFileRunStore(Path(temp_dir))
+            record = ResearchPipeline().run_record_for(
+                topic=ResearchTopic(
+                    name="long-context reasoning",
+                    objective="improve benchmark performance",
+                    benchmark_id="long-context-reasoning",
+                    constraints=["benchmark_id:long-context-reasoning"],
+                ),
+                benchmark_id="long-context-reasoning",
+            )
+            record.memo.sources = [
+                record.memo.sources[0],
+                type(record.memo.sources[0])(
+                    identifier="source-2",
+                    kind="paper",
+                    title="Fresh supporting paper",
+                    locator="https://example.com/source-2",
+                    excerpt="supporting evidence",
+                    updated_at="2026-04-11T12:00:00Z",
+                ),
+            ]
+            record.memo.source_assessments = [
+                type(record.memo.source_assessments[0])(
+                    source_id="seed://bootstrap",
+                    confidence="high",
+                    rationale="good but disputed",
+                ),
+                type(record.memo.source_assessments[0])(
+                    source_id="source-2",
+                    confidence="high",
+                    rationale="good and clean",
+                ),
+            ]
+            record.memo.claims = [
+                type(record.memo.claims[0])(
+                    title="Disputed claim",
+                    source="seed://bootstrap",
+                    summary="summary",
+                    evidence_refs=["seed://bootstrap"],
+                    evidence_kind="source-derived",
+                ),
+                type(record.memo.claims[0])(
+                    title="Clean claim",
+                    source="source-2",
+                    summary="summary",
+                    evidence_refs=["source-2"],
+                    evidence_kind="source-derived",
+                ),
+            ]
+            record.memo.contradictions = [
+                Contradiction(
+                    title="Disagreement",
+                    summary="disputed",
+                    claim_titles=["Disputed claim"],
+                    severity="medium",
+                )
+            ]
+            store.save(record)
+
+            summary = store.summarize_history(benchmark_id="long-context-reasoning")
+
+        self.assertEqual(summary["ranked_sources"][0]["source_id"], "source-2")
+        self.assertEqual(summary["ranked_sources"][1]["source_id"], "seed://bootstrap")
+        self.assertEqual(summary["ranked_sources"][1]["contradiction_count"], 1)
+
     def test_summarize_history_reports_contradiction_deltas(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             store = JsonFileRunStore(Path(temp_dir))
