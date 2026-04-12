@@ -216,6 +216,10 @@ class JsonFileRunStore:
             for source in (latest.memo.sources if latest else [])
             if source.updated_at
         }
+        latest_source_titles = {
+            source.identifier: source.title
+            for source in (latest.memo.sources if latest else [])
+        }
 
         confidence_changes = []
         for source_id in sorted(set(latest_assessments) & set(previous_assessments)):
@@ -354,6 +358,10 @@ class JsonFileRunStore:
                                     )
 
         source_freshness = _summarize_source_freshness(latest.memo.sources if latest else [])
+        ranked_sources = _rank_sources_for_history(
+            sources=latest.memo.sources if latest else [],
+            assessments=latest.memo.source_assessments if latest else [],
+        )
 
         return {
             "benchmark_id": benchmark_id or (latest.benchmark_id if latest else ""),
@@ -362,7 +370,9 @@ class JsonFileRunStore:
             "latest_run_id": latest.run_id if latest else "",
             "previous_run_id": previous.run_id if previous else "",
             "latest_source_updates": latest_source_updates,
+            "latest_source_titles": latest_source_titles,
             "source_freshness": source_freshness,
+            "ranked_sources": ranked_sources,
             "new_source_ids": sorted(latest_source_ids - previous_source_ids),
             "dropped_source_ids": sorted(previous_source_ids - latest_source_ids),
             "shared_source_ids": sorted(latest_source_ids & previous_source_ids),
@@ -467,6 +477,15 @@ class JsonFileRunStore:
             if freshness.get("oldest_source_id"):
                 lines.append(
                     f"- Oldest source: `{freshness['oldest_source_id']}` at `{freshness['oldest_updated_at']}`"
+                )
+            lines.append("")
+        if summary.get("ranked_sources"):
+            lines.extend(["## Ranked Sources", ""])
+            for item in summary["ranked_sources"]:
+                lines.append(
+                    f"- `{item['source_id']}` | score=`{item['score']:.3f}` | "
+                    f"confidence=`{item['confidence']}` | updated_at=`{item['updated_at'] or 'unknown'}` | "
+                    f"title={item['title']}"
                 )
             lines.append("")
         if summary.get("confidence_changes"):
@@ -577,3 +596,37 @@ def _summarize_source_freshness(sources: list[ResearchSource]) -> dict[str, obje
         "oldest_source_id": oldest_source_id,
         "oldest_updated_at": oldest_updated_at,
     }
+
+
+def _rank_sources_for_history(
+    *,
+    sources: list[ResearchSource],
+    assessments: list[SourceAssessment],
+) -> list[dict[str, object]]:
+    assessment_map = {
+        assessment.source_id: assessment
+        for assessment in assessments
+    }
+    scores = []
+    newest_ts = max((source.updated_at for source in sources if source.updated_at), default=None)
+    for source in sources:
+        assessment = assessment_map.get(source.identifier)
+        confidence = assessment.confidence if assessment else "medium"
+        confidence_weight = {
+            "low": 0.2,
+            "medium": 0.5,
+            "high": 0.8,
+        }.get(confidence, 0.4)
+        freshness_bonus = 0.0
+        if source.updated_at and newest_ts:
+            freshness_bonus = 0.2 if source.updated_at == newest_ts else 0.1
+        scores.append(
+            {
+                "source_id": source.identifier,
+                "title": source.title,
+                "confidence": confidence,
+                "updated_at": source.updated_at,
+                "score": round(confidence_weight + freshness_bonus, 3),
+            }
+        )
+    return sorted(scores, key=lambda item: (-item["score"], item["source_id"]))

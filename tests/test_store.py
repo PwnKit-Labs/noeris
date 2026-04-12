@@ -143,7 +143,9 @@ class RunStoreTests(unittest.TestCase):
 
         self.assertEqual(summary["source_freshness"]["source_count_with_timestamps"], 1)
         self.assertEqual(summary["source_freshness"]["newest_source_id"], "seed://bootstrap")
+        self.assertEqual(summary["ranked_sources"][0]["source_id"], "seed://bootstrap")
         self.assertIn("## Source Freshness", brief)
+        self.assertIn("## Ranked Sources", brief)
         self.assertIn("2026-04-10T12:00:00Z", brief)
 
     def test_summarize_history_reports_contradiction_deltas(self) -> None:
