@@ -790,5 +790,98 @@ class LauncherAssertionsTests(unittest.TestCase):
             flash_attn(q, k, v, cfg, num_kv_heads=4)  # 6 % 4 != 0
 
 
+# ---------------------------------------------------------------------------
+# YOCO KV-shared attention (Gemma 4 shared KV cache)
+# ---------------------------------------------------------------------------
+
+
+class YOCOShapeBucketTests(unittest.TestCase):
+    """YOCO KV-shared shapes must route to dedicated yoco buckets."""
+
+    def test_yoco_31b_local_bucket_present(self):
+        names = {s["name"] for s in ATTENTION_SHAPE_BUCKETS}
+        self.assertIn("gemma4_31b_yoco_local", names)
+
+    def test_yoco_31b_global_bucket_present(self):
+        names = {s["name"] for s in ATTENTION_SHAPE_BUCKETS}
+        self.assertIn("gemma4_31b_yoco_global", names)
+
+    def test_yoco_routes_before_gqa(self):
+        """shared_kv=True shapes must NOT fall through to non-YOCO GQA buckets."""
+        # Local YOCO shape (same dims as gemma4_31b_local but with shared_kv)
+        shape_local = {
+            "seq_len": 4096, "head_dim": 256, "heads": 32, "num_kv_heads": 16,
+            "window_size": 1024, "use_qk_norm": True, "shared_kv": True,
+        }
+        self.assertEqual(attention_shape_bucket_key(shape_local), "gemma4_31b_yoco_local")
+        # Without shared_kv, same shape routes to non-YOCO GQA bucket
+        shape_local_no_yoco = dict(shape_local, shared_kv=False)
+        self.assertEqual(attention_shape_bucket_key(shape_local_no_yoco), "gemma4_31b_local")
+
+        # Global YOCO shape
+        shape_global = {
+            "seq_len": 4096, "head_dim": 512, "heads": 32, "num_kv_heads": 4,
+            "window_size": -1, "use_qk_norm": True, "shared_kv": True,
+        }
+        self.assertEqual(attention_shape_bucket_key(shape_global), "gemma4_31b_yoco_global")
+        # Without shared_kv, same shape routes to non-YOCO GQA bucket
+        shape_global_no_yoco = dict(shape_global, shared_kv=False)
+        self.assertEqual(attention_shape_bucket_key(shape_global_no_yoco), "gemma4_31b_global")
+
+    def test_yoco_buckets_have_shared_kv_flag(self):
+        for s in ATTENTION_SHAPE_BUCKETS:
+            if "yoco" in s.get("name", ""):
+                self.assertTrue(s.get("shared_kv", False),
+                                f"YOCO bucket {s['name']} missing shared_kv=True")
+
+    def test_yoco_buckets_have_qk_norm(self):
+        for s in ATTENTION_SHAPE_BUCKETS:
+            if "yoco" in s.get("name", ""):
+                self.assertTrue(s.get("use_qk_norm", False),
+                                f"YOCO bucket {s['name']} should have use_qk_norm=True")
+
+
+class YOCOBenchmarkScriptTests(unittest.TestCase):
+
+    def _make_script(self, shapes):
+        configs = [{"BLOCK_M": 64, "BLOCK_N": 64, "num_warps": 4, "num_stages": 3}]
+        return generate_attention_benchmark_script(configs, shapes)
+
+    def test_benchmark_script_handles_shared_kv(self):
+        """The generated benchmark script must contain shared_kv handling."""
+        shapes = [{
+            "name": "gemma4_31b_yoco_local", "batch": 1, "heads": 32,
+            "num_kv_heads": 16, "seq_len": 4096, "head_dim": 256,
+            "is_causal": True, "window_size": 1024, "use_qk_norm": True,
+            "shared_kv": True,
+        }]
+        script = self._make_script(shapes)
+        self.assertIn("shared_kv", script)
+        compile(script, "<benchmark_yoco>", "exec")
+
+    def test_benchmark_script_yoco_global_valid_python(self):
+        shapes = [{
+            "name": "gemma4_31b_yoco_global", "batch": 1, "heads": 32,
+            "num_kv_heads": 4, "seq_len": 4096, "head_dim": 512,
+            "is_causal": True, "window_size": -1, "use_qk_norm": True,
+            "shared_kv": True,
+        }]
+        script = self._make_script(shapes)
+        compile(script, "<benchmark_yoco_global>", "exec")
+
+    def test_benchmark_script_yoco_skips_k_norm_in_reference(self):
+        """YOCO reference path should skip K-norm (not shared_kv)."""
+        shapes = [{
+            "name": "gemma4_31b_yoco_local", "batch": 1, "heads": 32,
+            "num_kv_heads": 16, "seq_len": 4096, "head_dim": 256,
+            "is_causal": True, "window_size": 1024, "use_qk_norm": True,
+            "shared_kv": True,
+        }]
+        script = self._make_script(shapes)
+        # The script should contain the shared_kv conditional for K-norm skip
+        self.assertIn("shared_kv", script)
+        self.assertIn("not shared_kv", script)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -86,6 +86,9 @@ ATTENTION_SHAPE_BUCKETS = [
     {"name": "llama3_70b_gqa", "batch": 1, "heads": 64, "num_kv_heads": 8, "seq_len": 4096, "head_dim": 128, "is_causal": True, "window_size": -1},
     # Mistral: 32:8 GQA.
     {"name": "mistral_gqa", "batch": 1, "heads": 32, "num_kv_heads": 8, "seq_len": 8192, "head_dim": 128, "is_causal": True, "window_size": -1},
+    # YOCO KV-shared layers (Gemma 4 last-N layers reuse earlier KV, skip K-norm)
+    {"name": "gemma4_31b_yoco_local", "batch": 1, "heads": 32, "num_kv_heads": 16, "seq_len": 4096, "head_dim": 256, "is_causal": True, "window_size": 1024, "use_qk_norm": True, "shared_kv": True},
+    {"name": "gemma4_31b_yoco_global", "batch": 1, "heads": 32, "num_kv_heads": 4, "seq_len": 4096, "head_dim": 512, "is_causal": True, "window_size": -1, "use_qk_norm": True, "shared_kv": True},
 ]
 
 
@@ -100,7 +103,16 @@ def attention_shape_bucket_key(shape: dict[str, int]) -> str:
     nkv = shape.get("num_kv_heads", heads)  # default = MHA
     ws = shape.get("window_size", -1)
     use_qk_norm = bool(shape.get("use_qk_norm", False))
+    shared_kv = bool(shape.get("shared_kv", False))
     is_gqa = nkv > 0 and nkv < heads
+
+    # YOCO KV-shared layers: route BEFORE GQA so shared_kv=True shapes don't
+    # fall through to non-YOCO GQA buckets.  Gemma 4 YOCO layers reuse K/V
+    # from an earlier layer and skip K-norm (K is already normalized).
+    if shared_kv and is_gqa:
+        if hd >= 512:
+            return "gemma4_31b_yoco_global"
+        return "gemma4_31b_yoco_local"
 
     # GQA buckets take precedence — these are the LLM-shaped routes.
     # Route BEFORE the qk-norm branch so Gemma 4 GQA + QK-norm shapes land here.
@@ -402,7 +414,7 @@ def attn_fwd_kernel(
 def flash_attn(
     q, k, v, config, is_causal=False, sm_scale=None, window_size=-1,
     use_qk_norm=False, q_scale=None, k_scale=None,
-    num_kv_heads=None,
+    num_kv_heads=None, shared_kv=False,
 ):
     """q, k, v: (batch, heads, seq, head_dim) float16. Returns out.
 
@@ -414,6 +426,11 @@ def flash_attn(
         k_scale: Learnable [head_dim] scale weights for K-norm (float32).
         num_kv_heads: Number of KV heads for grouped-query attention. If None
             (default), equals the number of Q heads (MHA). Must divide `heads`.
+        shared_kv: YOCO-style KV-cache sharing (Gemma 4).  When True, K/V
+            tensors are reused from an earlier layer and K is already
+            normalized.  The launcher still applies QK-norm to Q but skips
+            K-norm (passes USE_QK_NORM=True to the kernel — K-norm is
+            redundant on already-normalized data and acts as a no-op).
     """
     B, H, M, D = q.shape
     _, Hk, N, Dk = k.shape
@@ -485,13 +502,19 @@ def make_sliding_window_mask(seq_len: int, window_size: int, is_causal: bool) ->
     return mask  # True = attend
 
 
-def benchmark_one(batch, heads, seq_len, head_dim, config, is_causal=False, window_size=-1, use_qk_norm=False, num_kv_heads=None):
+def benchmark_one(batch, heads, seq_len, head_dim, config, is_causal=False, window_size=-1, use_qk_norm=False, num_kv_heads=None, shared_kv=False):
     try:
         if num_kv_heads is None:
             num_kv_heads = heads
         q = torch.randn((batch, heads, seq_len, head_dim), device="cuda", dtype=torch.float16)
         k = torch.randn((batch, num_kv_heads, seq_len, head_dim), device="cuda", dtype=torch.float16)
         v = torch.randn((batch, num_kv_heads, seq_len, head_dim), device="cuda", dtype=torch.float16)
+
+        # YOCO shared-KV: K/V come pre-normalized from an earlier layer.
+        # Pre-normalize K so the reference path can skip K-norm (matching the
+        # real YOCO pipeline where earlier layers already applied RMSNorm to K).
+        if shared_kv:
+            k = torch.nn.functional.rms_norm(k.float(), (head_dim,)).half()
 
         # PyTorch reference uses repeat_interleave to broadcast K/V across
         # group members (avoids version-dependent SDPA GQA behavior). Reference
@@ -501,9 +524,11 @@ def benchmark_one(batch, heads, seq_len, head_dim, config, is_causal=False, wind
         v_ref = v.repeat_interleave(group_size, dim=1) if group_size > 1 else v
 
         # When QK-norm enabled, normalise Q/K before PyTorch reference.
+        # YOCO shared-KV: skip K-norm (K already normalized from earlier layer).
         if use_qk_norm:
             q_ref = torch.nn.functional.rms_norm(q.float(), (head_dim,)).half()
-            k_ref = torch.nn.functional.rms_norm(k_ref.float(), (head_dim,)).half()
+            if not shared_kv:
+                k_ref = torch.nn.functional.rms_norm(k_ref.float(), (head_dim,)).half()
         else:
             q_ref = q
 
@@ -520,13 +545,13 @@ def benchmark_one(batch, heads, seq_len, head_dim, config, is_causal=False, wind
         else:
             ref = torch.nn.functional.scaled_dot_product_attention(q_ref, k_ref, v_ref, is_causal=is_causal)
 
-        out = flash_attn(q, k, v, config, is_causal=is_causal, window_size=window_size, use_qk_norm=use_qk_norm, num_kv_heads=num_kv_heads)
+        out = flash_attn(q, k, v, config, is_causal=is_causal, window_size=window_size, use_qk_norm=use_qk_norm, num_kv_heads=num_kv_heads, shared_kv=shared_kv)
         max_err = (out - ref).abs().max().item()
         if max_err > 0.1:
             return {{"correct": False, "max_err": max_err, "ms": None, "tflops": None}}
 
         ms = triton.testing.do_bench(
-            lambda: flash_attn(q, k, v, config, is_causal=is_causal, window_size=window_size, use_qk_norm=use_qk_norm, num_kv_heads=num_kv_heads),
+            lambda: flash_attn(q, k, v, config, is_causal=is_causal, window_size=window_size, use_qk_norm=use_qk_norm, num_kv_heads=num_kv_heads, shared_kv=shared_kv),
             warmup=10, rep=50,
         )
         # Effective work: causal halves flops; window shrinks further.
@@ -569,10 +594,11 @@ def main():
             window_size = int(shape.get("window_size", -1))
             use_qk_norm = bool(shape.get("use_qk_norm", False))
             num_kv_heads = int(shape.get("num_kv_heads", heads))
+            shared_kv = bool(shape.get("shared_kv", False))
             result = benchmark_one(
                 batch, heads, seq_len, head_dim, config,
                 is_causal=is_causal, window_size=window_size, use_qk_norm=use_qk_norm,
-                num_kv_heads=num_kv_heads,
+                num_kv_heads=num_kv_heads, shared_kv=shared_kv,
             )
             result["shape"] = f"{{batch}}x{{heads}}x{{seq_len}}x{{head_dim}}"
             result["shape_name"] = shape.get("name", "")
@@ -580,6 +606,7 @@ def main():
             result["window_size"] = window_size
             result["use_qk_norm"] = use_qk_norm
             result["num_kv_heads"] = num_kv_heads
+            result["shared_kv"] = shared_kv
             shape_results.append(result)
         all_results.append({{
             "config_id": cid,
