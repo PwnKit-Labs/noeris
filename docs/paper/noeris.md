@@ -8,7 +8,7 @@
 
 We present Noeris, an autonomous GPU kernel optimization system with three distinguishing properties relative to existing LLM-driven approaches: **(1)** parameterized kernel templates (no free-form source rewriting), **(2)** a shape-indexed cross-run configuration database keyed by `(operator, shape_bucket, hardware)` that persists winning configurations across sessions, and **(3)** complementary selectors — a gradient-boosted cost model and a multi-armed bandit — that rank LLM-proposed configurations before GPU evaluation.
 
-**Headline result.** We used this system to build a **fused kernel** for the Gemma 3/4 attention prologue (`Q-RMSNorm → K-RMSNorm → Q-RoPE → K-RoPE`). We are not the first to attempt this fusion: vLLM has an experimental `enable_qk_norm_rope_fusion` pass (a `torch.compile` pass with a CUDA kernel), SGLang has `fused_qknorm_rope`, Modular has fused RoPE+RMSNorm kernels, and Liao et al. describe algebraic optimizations for QK-normalization with RoPE in "Flash Normalization" (arXiv:2407.09577). However, vLLM's fusion is **disabled by default** due to performance regression on H100 ([issue #34391](https://github.com/vllm-project/vllm/issues/34391)), and the reported benefit is 2-3% end-to-end. Our parameterized Triton kernel with bandit-tuned configurations makes this fusion practical: across all six Gemma 3/4 shape buckets and two GPUs (60 correct configurations, 0 failures), the fused forward kernel beats the separated baseline by **10.2× – 12.9× on A100** and **10.4× – 11.9× on H100**, reaching **1627.7 GB/s** peak throughput on H100 `gemma4_31b_global` (≈49% of HBM3 theoretical peak). A purely HBM-accounting cost model predicts ~2× — the measured 5–6× excess is launch-overhead amortization, which dominates Triton fusion value at these tile sizes. The corresponding **backward pass** kernel achieves **4.9–7.5× fusion speedup on T4** (GPU-validated on Colab), making the fused prologue usable for training — not just inference. To our knowledge, no existing framework fuses the Gemma prologue backward pass. A cross-architecture validation on T4 (Turing, SM 7.5) reveals that **Triton codegen quality is architecture-dependent**: the same kernel that achieves 12x fusion speedup on A100 yields only 0.59x vs. PyTorch native at the layer level on T4, due to a 3-5x per-operator Triton PTX overhead on older architectures (§4.15). All 15 operators pass correctness on T4; the issue is purely codegen quality, not algorithmic. A **compiler comparison** on T4 (§4.16) shows that `torch.compile(mode="reduce-overhead")` achieves 1.25× over separated PyTorch, but Noeris achieves 1.39× — an 11% gap the compiler cannot close because it cannot fuse across the RMSNorm reduction boundary.
+**Headline result.** We used this system to build a **fused kernel** for the Gemma 3/4 attention prologue (`Q-RMSNorm → K-RMSNorm → Q-RoPE → K-RoPE`). We are not the first to attempt this fusion: vLLM has an experimental `enable_qk_norm_rope_fusion` pass (a `torch.compile` pass with a CUDA kernel), SGLang has `fused_qknorm_rope`, Modular has fused RoPE+RMSNorm kernels, and Liao et al. describe algebraic optimizations for QK-normalization with RoPE in "Flash Normalization" (arXiv:2407.09577). However, vLLM's fusion is **disabled by default** due to performance regression on H100 ([issue #34391](https://github.com/vllm-project/vllm/issues/34391)), and the reported benefit is 2-3% end-to-end. Our parameterized Triton kernel with bandit-tuned configurations makes this fusion practical: across all six Gemma 3/4 shape buckets and two GPUs (60 correct configurations, 0 failures), the fused forward kernel beats the separated baseline by **10.2× – 12.9× on A100** and **10.4× – 11.9× on H100**, reaching **1627.7 GB/s** peak throughput on H100 `gemma4_31b_global` (≈49% of HBM3 theoretical peak). A purely HBM-accounting cost model predicts ~2× — the measured 5–6× excess is launch-overhead amortization, which dominates Triton fusion value at these tile sizes. The corresponding **backward pass** kernel achieves **4.9–7.5× fusion speedup on T4** (GPU-validated on Colab), making the fused prologue usable for training — not just inference. To our knowledge, no existing framework fuses the Gemma prologue backward pass. A cross-architecture validation on T4 (Turing, SM 7.5) reveals that **Triton codegen quality is architecture-dependent**: the same kernel that achieves 12x fusion speedup on A100 yields only 0.59x vs. PyTorch native at the layer level on T4, due to a 3-5x per-operator Triton PTX overhead on older architectures (§4.15). All 15 operators pass correctness on T4; the issue is purely codegen quality, not algorithmic. A **compiler comparison** on T4 (§4.16) shows that `torch.compile` reduces kernel launches from 40 to 9 (prologue: 3.45ms → 0.92ms, 3.75×) but still generates 4 separate Triton kernels — splitting at the RMSNorm reduction boundary. Noeris fuses to **1 kernel, 1 launch** (0.57ms, 6.08× vs eager, 1.62× vs compiled). At the full-layer level, Noeris achieves 1.54× over separated PyTorch vs. the compiler's 1.23× — a 25% gap the compiler cannot close.
 
 The system covers thirteen additional operators beyond the fused forward prologue: matmul, rmsnorm (with Gemma-mode `(1+w)` affine), softmax (with softcap variant), layernorm, cross_entropy, attention (GQA + sliding-window + QK-norm + YOCO KV-share), rotary (dual-base θ=10k/1M with p-RoPE), fused GeGLU, MoE router (fused matmul+softmax+top-k for 128-expert dispatch), grouped GEMM (sort-free MoE expert FFN), PLE gather (Gemma E2B/E4B per-layer embeddings), and **paged-KV decode attention** (from-scratch Triton; vLLM's equivalent is CUDA-only). 14 operators total (including the backward pass kernel), 110 shape buckets, 606 unit tests. The system is evaluated across 53 shape-parameterized internal problems on NVIDIA A100 and H100. Using only curated starter configs, Noeris achieves **fast₁.₀ = 56.6% vs PyTorch eager** on our internal LLM-shape benchmark. Side-by-side apples-to-apples comparison against the upstream KernelBench harness (`cuda_event` timing + L2 flush matching the upstream methodology, fp32 `nn.Module` problems) is reported separately for transparency.
 
@@ -631,13 +631,47 @@ This stands in stark contrast to A100 and H100, where Triton codegen is excellen
 
 To isolate how much of Noeris's fusion benefit a production-grade automatic compiler can capture, we ran two complementary experiments on T4 (SM 7.5, Kaggle): a **kernel launch analysis** of the QK-RMSNorm+RoPE prologue in isolation, and a **full-layer shootout** including the surrounding attention computation.
 
-**What the compiler does right.** `torch.compile`'s Inductor backend successfully fuses some elementwise and pointwise operations in the separated prologue, explaining its non-trivial 1.25× speedup. Per-step profiling confirms that Inductor compresses the GeGLU step from 6.87 ms to roughly 6.12 ms, and reduces launch overhead on the simpler elementwise ops. The compiler is not useless — it is a credible baseline.
+#### Kernel launch analysis (prologue only)
 
-**Where the compiler fails.** The compiler cannot fuse *across the RMSNorm reduction boundary*. RMSNorm requires a row-wise reduction (sum of squares → `rsqrt`), which creates a **fusion barrier**: Inductor must materialize the normalized intermediate to HBM before applying the subsequent RoPE rotation. This is visible in the per-step data — RMSNorm runs at 0.62 ms in PyTorch vs. 0.10 ms in our fused kernel (6.2×), and the combined `qk_norm_rope` step runs at 1.50 ms vs. 0.38 ms (3.9×). Our manual Triton kernel keeps everything in registers: load → reduce → normalize → rotate → store, never materializing the intermediate. This is a fundamental limitation of graph-level compilers: they reason about operator DAGs, not about register-level data flow within a fused kernel.
+We profiled the QK-RMSNorm+RoPE prologue under three execution modes:
 
-**The hybrid paradox.** Counterintuitively, approach D (`torch.compile` + Noeris, 1.22×) is *slower* than Noeris alone (1.39×). `torch.compile` treats Triton custom ops as opaque black boxes, preventing fusion of surrounding operations. The tracing overhead itself (~0.3 ms amortized) further erodes the budget. Practitioners should not wrap hand-tuned Triton kernels in `torch.compile` — the compiler cannot help and actively hurts.
+| Mode | Unique kernels | Total launches | Time (ms) | Speedup vs eager |
+|---|---|---|---|---|
+| PyTorch eager | 10 | 40 | 3.45 | 1.00× |
+| `torch.compile` (Inductor) | 5 | 9 | 0.92 | 3.75× |
+| Noeris fused Triton | 1 | 1 | 0.57 | **6.08×** |
 
-**Implication.** For cross-reduction fusions like RMSNorm+RoPE, manual kernel engineering remains necessary. Automatic compilers provide a useful baseline (1.25×) but leave significant performance on the table — an 11% gap that only expert-guided fusion can capture. This finding is consistent with Triton's design philosophy: the compiler automates *scheduling* within a single kernel, but the programmer must define the *fusion boundary*. When that boundary must span a reduction, no current graph-level compiler can close it automatically.
+The **40 → 9 → 1** launch progression tells the story: each level of fusion eliminates a class of overhead. Noeris achieves **1.62× over compiled** — a gap the compiler cannot close.
+
+**Dynamo analysis confirms the compiler sees everything.** `torch._dynamo.explain` reports 0 graph breaks, 1 graph, and 30 ops — the compiler has full visibility into the computation. Yet `fusion_found_by_compiler: false`. The compiler *chooses* not to fuse across the reduction boundary; it is not a tracing limitation.
+
+**The generated kernel names prove exactly what we predicted.** Inductor produces four Triton kernels plus five DtoD memcpy operations:
+
+1. `triton_per_fused__to_copy_mean_pow_0` — reduction kernel (RMSNorm variance for Q)
+2. `triton_poi_fused__to_copy_add_mean_mul_pow_rsqrt_slice_stack_sub_unsqueeze_1` — pointwise (normalize + RoPE for Q)
+3. `triton_per_fused__to_copy_mean_pow_2` — reduction kernel (RMSNorm variance for K)
+4. `triton_poi_fused__to_copy_add_mean_mul_pow_rsqrt_slice_stack_sub_unsqueeze_3` — pointwise (normalize + RoPE for K)
+
+The `triton_per_fused_mean_pow` names are the reduction kernels that compute row-wise sum-of-squares; the `triton_poi_fused_rsqrt_slice_stack` names are the pointwise kernels that consume the materialized variance. **The compiler splits at exactly the reduction boundary we identified**: it materializes the RMSNorm intermediate to HBM between each `per` (reduction) and `poi` (pointwise) kernel pair. The Q and K paths are handled independently (kernels 0+1 for Q, kernels 2+3 for K), doubling the number of reduction barriers.
+
+Our fused Triton kernel keeps everything in registers: load → reduce → normalize → rotate → store, never materializing the intermediate. One kernel, one launch, 0.57 ms.
+
+#### Full-layer T4 shootout
+
+When the prologue is embedded in a full attention layer, the absolute times are larger but the ranking is preserved:
+
+| Approach | Time (ms) | Speedup vs A |
+|---|---|---|
+| A: PyTorch separated | 14.96 | 1.00× |
+| B: `torch.compile` | 12.12 | 1.23× |
+| C: Noeris T4-tuned | 9.70 | **1.54×** |
+| D: `torch.compile` + Noeris | 12.45 | 1.20× |
+
+Noeris achieves **1.54×** over PyTorch separated at the layer level — a 25% gap over what `torch.compile` alone delivers (1.23×).
+
+**The hybrid paradox.** Counterintuitively, approach D (`torch.compile` + Noeris, 1.20×) is *slower* than Noeris alone (1.54×). `torch.compile` treats Triton custom ops as opaque black boxes, preventing fusion of surrounding operations. The tracing overhead further erodes the budget. Practitioners should not wrap hand-tuned Triton kernels in `torch.compile` — the compiler cannot help and actively hurts.
+
+**Implication.** The compiler sees the full graph (0 graph breaks, 30 ops) and still generates 4 separate Triton kernels because it cannot fuse across the RMSNorm row-wise reduction. This is a fundamental limitation of graph-level compilers: they reason about operator DAGs, not about register-level data flow within a fused kernel. For cross-reduction fusions like RMSNorm+RoPE, manual kernel engineering remains necessary. The 40 → 9 → 1 launch count progression — from eager to compiled to Noeris — quantifies exactly how much fusion headroom the compiler leaves on the table.
 
 ---
 
@@ -705,9 +739,21 @@ Additional systems surveyed include **Astra** (Wei et al., arXiv:2509.07506, 202
 
 ### 5.5 How Noeris is Actually Different
 
-No individual component of Noeris is new in isolation. Parameterized kernel templates appear in KernelFoundry and implicitly in Triton's `@autotune`. Shape-indexed caches appear in `@autotune` (within-process) and in TVM's per-operator autotuning logs. Learned cost models appear in Ansor (XGBoost over AST features) and in NVIDIA's nvMatmulHeuristics (analytical models). LLM proposers appear in every system surveyed.
+No individual component of Noeris is new in isolation. Parameterized kernel templates appear in KernelFoundry and implicitly in Triton's `@autotune`. Shape-indexed caches appear in `@autotune` (within-process) and in TVM's per-operator autotuning logs. Learned cost models appear in Ansor (XGBoost over AST features), NVIDIA's nvMatmulHeuristics (analytical models), Halide's auto-scheduler (neural network over schedule features), and tritonBLAS (analytical roofline). Principled exploration-exploitation appears in KernelBand (hierarchical MAB). LLM-driven evolutionary search appears in KernelEvolve. Single-hardware Bayesian tuning appears in Helion/LFBO. LLM proposers appear in every agent system surveyed.
 
 What Noeris contributes is a specific combination: **(a)** a fixed parameterized template interface that bounds the search space to a well-typed configuration grid rather than free-form source code; **(b)** a cross-process, cross-session database keyed by `(operator, shape_bucket, hardware)` that accumulates every benchmark outcome and is queryable at proposal time; **(c)** a lightweight gradient-boosted cost model trained on that database that operates at prediction time — without GPU calls — to rank candidates before evaluation; and **(d)** an adaptive router that learns per-iteration which selector (cost model or bandit) to deploy, recovering the best individual selector's performance without prior knowledge of operator structure. The adaptive router is a novel contribution not present in any cited system: it moves selector choice from a design-time hyperparameter to a runtime decision backed by observed metric trajectories. The combination is designed so that each benchmark result makes future searches slightly cheaper: the cost model gains training data, the database gains a new incumbent, and the LLM proposer sees richer cross-run context.
+
+The table below summarizes the key differentiators against the most closely related systems:
+
+| System | Search method | Cost model | Cross-run DB | Cross-HW transfer | Adaptive routing |
+|--------|--------------|------------|-------------|-------------------|-----------------|
+| KernelBand | Hierarchical MAB | None | No | No | No |
+| KernelEvolve | LLM evolutionary | None | No | No | No |
+| Helion/LFBO | Bayesian opt. | GP surrogate | No | No | No |
+| TVM/Ansor | Evolutionary + XGBoost | XGBoost (AST) | Per-operator logs | No | No |
+| tritonBLAS | Analytical roofline | Roofline | No | No | No |
+| AutoKernel | LLM agent loop | None | No | No | No |
+| **Noeris** | **Thompson sampling + LLM** | **GBR (shape+config)** | **Yes** | **Yes (ρ=0.967)** | **Yes** |
 
 The empirical comparison against AutoKernel deserves emphasis. AutoKernel is stateless: it does not store per-shape configuration outcomes across invocations, and it does not have a cost model that trains on historical runs. Our §4.4 comparison shows that Noeris's curated-starter-only baseline already exceeds AutoKernel's best-shape H100 figures on RMSNorm by 120%, cross-entropy by 228%, and softmax by 85%. These gains come from the parameterized template design (which enables hand-picked, shape-specialized starter configs) rather than from LLM-guided search iterations — a point that underscores the value of the structured template interface.
 
