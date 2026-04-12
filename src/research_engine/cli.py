@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 from dataclasses import asdict
 import json
+import os
+import shutil
 import sys
 from pathlib import Path as _Path
 
@@ -534,7 +536,18 @@ def main(argv: list[str] | None = None) -> int:
         latest = runs[0] if runs else None
         artifacts_dir = _Path(".noeris/artifacts")
         history_dir = _Path(".noeris/history")
+        try:
+            llm_provider_configured = load_codex_provider_config() is not None
+        except Exception:
+            llm_provider_configured = False
         payload = {
+            "capabilities": {
+                "gh_cli": shutil.which("gh") is not None,
+                "modal_cli": shutil.which("modal") is not None,
+                "azure_openai_key": bool(os.getenv("AZURE_OPENAI_API_KEY")),
+                "openai_key": bool(os.getenv("OPENAI_API_KEY")),
+                "llm_provider_configured": llm_provider_configured,
+            },
             "run_count": len(runs),
             "artifact_bundle_count": sum(1 for path in artifacts_dir.iterdir()) if artifacts_dir.exists() else 0,
             "history_artifacts_present": {

@@ -91,6 +91,7 @@ class CliTests(unittest.TestCase):
         with _temp_workspace():
             exit_code, payload = _run_cli_json("status")
         self.assertEqual(exit_code, 0)
+        self.assertIn("capabilities", payload)
         self.assertEqual(payload["run_count"], 0)
         self.assertEqual(payload["artifact_bundle_count"], 0)
 
@@ -191,6 +192,7 @@ class CliTests(unittest.TestCase):
             status_exit_code, status_payload = _run_cli_json("status")
         self.assertEqual(run_exit_code, 0)
         self.assertEqual(status_exit_code, 0)
+        self.assertIn("capabilities", status_payload)
         self.assertGreaterEqual(status_payload["run_count"], 1)
         self.assertGreaterEqual(status_payload["artifact_bundle_count"], 1)
         self.assertEqual(status_payload["latest_run"]["run_id"], payload["run_id"])
