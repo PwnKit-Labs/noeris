@@ -50,6 +50,12 @@ QK_NORM_ROPE_CURATED_CONFIGS = [
     {"BLOCK_SIZE": 128, "num_warps": 4, "num_stages": 2},
     {"BLOCK_SIZE": 128, "num_warps": 8, "num_stages": 1},
     {"BLOCK_SIZE": 256, "num_warps": 8, "num_stages": 2},
+    # T4-optimized: 40 SMs, fewer warps reduce register pressure;
+    # head_dim=256 -> half=128 pairs, so BLOCK_SIZE=128 covers it exactly
+    {"BLOCK_SIZE": 128, "num_warps": 2, "num_stages": 1},
+    {"BLOCK_SIZE": 64, "num_warps": 2, "num_stages": 1},
+    # head_dim=512 global layers: half=256 pairs, need BLOCK_SIZE=256
+    {"BLOCK_SIZE": 256, "num_warps": 4, "num_stages": 1},
 ]
 
 

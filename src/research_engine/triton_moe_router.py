@@ -47,7 +47,24 @@ MOE_ROUTER_CURATED_CONFIGS = [
     {"BLOCK_M": 128, "num_warps": 4, "num_stages": 2},
     {"BLOCK_M": 128, "num_warps": 8, "num_stages": 2},
     {"BLOCK_M": 256, "num_warps": 8, "num_stages": 2},
+    # T4-optimized: smaller BLOCK_M keeps occupancy high on 40 SMs
+    {"BLOCK_M": 16, "num_warps": 2, "num_stages": 2},
+    {"BLOCK_M": 64, "num_warps": 2, "num_stages": 1},
+    # Large token count (16k): maximize BLOCK_M to amortize loop overhead
+    {"BLOCK_M": 256, "num_warps": 4, "num_stages": 1},
 ]
+
+# ARCHITECTURE NOTE (negative fusion_speedup on T4/A100):
+# The iterative argmax+mask top-k loop (8 passes for top_k=8) dominates on
+# smaller GPUs where the matmul portion is fast. torch.topk uses a radix-select
+# that is much faster for k=8 over 128 experts.
+#
+# Future work: add a SKIP_TOPK constexpr mode that only fuses matmul+softmax
+# (2 kernel launches -> 1) and returns full probabilities, letting the caller
+# do torch.topk externally. This would give a positive fusion_speedup on T4
+# while still saving one launch on A100/H100. The kernel change is small:
+# guard the iterative top-k loop + renorm with `if not SKIP_TOPK:` and
+# store the full probs row instead.
 
 
 # Real Gemma 4 26B-A4B router shapes at several prefill / decode token counts.

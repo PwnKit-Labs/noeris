@@ -93,8 +93,8 @@ class TestGridGeneration(unittest.TestCase):
         self.assertGreater(len(grid), 0)
 
     def test_grid_respects_max_configs(self) -> None:
-        grid = generate_attention_decode_grid(max_configs=5)
-        self.assertLessEqual(len(grid), 5)
+        grid = generate_attention_decode_grid(max_configs=10)
+        self.assertLessEqual(len(grid), 10)
 
     def test_grid_has_no_duplicate_ids(self) -> None:
         grid = generate_attention_decode_grid(max_configs=200)

@@ -30,6 +30,11 @@ LAYERNORM_CURATED_CONFIGS = [
     {"BLOCK_SIZE": 2048, "num_warps": 4, "num_stages": 2},
     {"BLOCK_SIZE": 256, "num_warps": 1, "num_stages": 1},
     {"BLOCK_SIZE": 4096, "num_warps": 8, "num_stages": 2},
+    # T4-optimized: fewer warps suit 40 SMs; small hidden dims (768-1024)
+    {"BLOCK_SIZE": 512, "num_warps": 4, "num_stages": 1},
+    {"BLOCK_SIZE": 1024, "num_warps": 2, "num_stages": 1},
+    # Large hidden (8192+): maximize occupancy with deep pipeline
+    {"BLOCK_SIZE": 4096, "num_warps": 16, "num_stages": 2},
 ]
 
 

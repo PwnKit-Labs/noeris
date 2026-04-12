@@ -37,6 +37,11 @@ ROTARY_CURATED_CONFIGS = [
     {"BLOCK_SIZE": 64, "num_warps": 2, "num_stages": 2},
     {"BLOCK_SIZE": 32, "num_warps": 1, "num_stages": 1},
     {"BLOCK_SIZE": 128, "num_warps": 8, "num_stages": 2},
+    # T4-optimized: fewer warps for 40-SM GPU
+    {"BLOCK_SIZE": 128, "num_warps": 2, "num_stages": 1},
+    {"BLOCK_SIZE": 64, "num_warps": 1, "num_stages": 1},
+    # Gemma 4 global (head_dim=512 -> half=256 pairs): need BLOCK_SIZE=256
+    {"BLOCK_SIZE": 256, "num_warps": 4, "num_stages": 1},
 ]
 
 

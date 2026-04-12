@@ -50,6 +50,11 @@ ATTENTION_DECODE_CURATED_CONFIGS = [
     {"BLOCK_KV": 32, "num_warps": 4, "num_stages": 2},   # 2 pages per iter
     {"BLOCK_KV": 64, "num_warps": 4, "num_stages": 3},
     {"BLOCK_KV": 128, "num_warps": 8, "num_stages": 3},
+    # T4-optimized: fewer warps for 40-SM; small BLOCK_KV avoids register spill
+    {"BLOCK_KV": 32, "num_warps": 2, "num_stages": 2},
+    {"BLOCK_KV": 16, "num_warps": 4, "num_stages": 3},
+    # 256k-context decode: larger BLOCK_KV reduces loop iterations
+    {"BLOCK_KV": 128, "num_warps": 4, "num_stages": 2},
 ]
 
 

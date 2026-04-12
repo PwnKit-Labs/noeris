@@ -31,6 +31,11 @@ SOFTMAX_CURATED_CONFIGS = [
     {"BLOCK_SIZE": 8192, "num_warps": 16, "num_stages": 1},
     {"BLOCK_SIZE": 512, "num_warps": 2, "num_stages": 2},
     {"BLOCK_SIZE": 1024, "num_warps": 8, "num_stages": 2},
+    # T4-optimized: fewer warps for 40-SM GPU
+    {"BLOCK_SIZE": 2048, "num_warps": 4, "num_stages": 1},
+    {"BLOCK_SIZE": 1024, "num_warps": 2, "num_stages": 1},
+    # KernelBench L1 #23 (393k cols) and Gemma 4 262k vocab: max block + warps
+    {"BLOCK_SIZE": 16384, "num_warps": 16, "num_stages": 1},
 ]
 
 

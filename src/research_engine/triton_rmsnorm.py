@@ -36,6 +36,11 @@ RMSNORM_CURATED_CONFIGS = [
     {"BLOCK_SIZE": 2048, "num_warps": 4, "num_stages": 2},
     {"BLOCK_SIZE": 256, "num_warps": 1, "num_stages": 1},
     {"BLOCK_SIZE": 4096, "num_warps": 8, "num_stages": 2},
+    # T4-optimized: fewer warps for 40-SM GPU; Gemma 4 E2B hidden=1536
+    {"BLOCK_SIZE": 1024, "num_warps": 2, "num_stages": 1},
+    {"BLOCK_SIZE": 512, "num_warps": 4, "num_stages": 1},
+    # Large hidden (llama_70b hidden=8192): max throughput
+    {"BLOCK_SIZE": 4096, "num_warps": 16, "num_stages": 2},
 ]
 
 

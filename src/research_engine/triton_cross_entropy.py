@@ -32,6 +32,11 @@ CROSS_ENTROPY_CURATED_CONFIGS = [
     {"BLOCK_SIZE": 2048, "num_warps": 4, "num_stages": 2},
     {"BLOCK_SIZE": 4096, "num_warps": 16, "num_stages": 1},
     {"BLOCK_SIZE": 1024, "num_warps": 2, "num_stages": 2},
+    # T4-optimized: 40 SMs, lower warp count saturates better
+    {"BLOCK_SIZE": 4096, "num_warps": 4, "num_stages": 1},
+    {"BLOCK_SIZE": 2048, "num_warps": 2, "num_stages": 1},
+    # Gemma 4 256k vocab: needs very large blocks to cover n_cols in one pass
+    {"BLOCK_SIZE": 32768, "num_warps": 8, "num_stages": 2},
 ]
 
 

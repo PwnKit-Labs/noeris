@@ -49,6 +49,12 @@ ATTENTION_CURATED_CONFIGS = [
     {"BLOCK_M": 64, "BLOCK_N": 32, "num_warps": 2, "num_stages": 4},
     {"BLOCK_M": 32, "BLOCK_N": 64, "num_warps": 2, "num_stages": 4},
     {"BLOCK_M": 64, "BLOCK_N": 64, "num_warps": 4, "num_stages": 2},
+    # T4-optimized: short_64 shape (batch=4, heads=32, seq=512, head_dim=64)
+    # needs small tiles + fewer warps for 40-SM GPU to avoid underutilization
+    {"BLOCK_M": 32, "BLOCK_N": 32, "num_warps": 2, "num_stages": 3},
+    {"BLOCK_M": 64, "BLOCK_N": 64, "num_warps": 2, "num_stages": 3},
+    # Large head_dim (512, Gemma 4 global): smaller tiles reduce register pressure
+    {"BLOCK_M": 32, "BLOCK_N": 32, "num_warps": 4, "num_stages": 2},
 ]
 
 

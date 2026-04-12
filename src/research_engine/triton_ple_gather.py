@@ -36,6 +36,11 @@ PLE_GATHER_CURATED_CONFIGS = [
     {"BLOCK_SIZE": 256, "num_warps": 4, "num_stages": 2},
     {"BLOCK_SIZE": 256, "num_warps": 8, "num_stages": 1},
     {"BLOCK_SIZE": 512, "num_warps": 8, "num_stages": 2},
+    # T4-optimized: ple_dim=256 fits in BLOCK_SIZE=256, fewer warps
+    {"BLOCK_SIZE": 256, "num_warps": 2, "num_stages": 1},
+    {"BLOCK_SIZE": 128, "num_warps": 1, "num_stages": 1},
+    # Deep pipeline for bandwidth-bound gather
+    {"BLOCK_SIZE": 512, "num_warps": 4, "num_stages": 3},
 ]
 
 
