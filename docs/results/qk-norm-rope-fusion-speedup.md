@@ -1,7 +1,7 @@
 # Fused QK-RMSNorm+RoPE — Gemma 3/4 Prologue Fusion
 
-**Date**: 2026-04-11
-**Hardware**: NVIDIA A100-SXM4-40GB, NVIDIA H100-SXM5-80GB (Modal)
+**Date**: 2026-04-12
+**Hardware**: NVIDIA A100-SXM4-40GB, NVIDIA H100-SXM5-80GB (Modal), Tesla T4 (Google Colab free tier)
 **Timer**: `cuda_event` + L2 flush, 3 warmup / 10 trials, median ms
 **Correctness tol**: `max_err ≤ 0.1` against PyTorch fp32 reference
 **Baseline**: "separated" — 4 sequential PyTorch kernel launches matching vLLM's Gemma 4 prologue (Q-RMSNorm → K-RMSNorm → Q-RoPE → K-RoPE)
@@ -34,9 +34,25 @@ This kernel does not exist in vLLM. vLLM's `Gemma4Attention.forward` (file `vllm
 | `gemma4_26b_a4b_local` | Gemma 4 26B-A4B local | 16:8 | 256 | `bs32_w2_s1` | 1443.2 | 0.073 | 11.49× |
 | `gemma4_e2b_local` | Gemma 4 E2B local | 8:1 | 256 | `bs32_w2_s1` | 1213.7 | 0.035 | 10.35× |
 
+## Results — T4 (Google Colab free tier)
+
+**Hardware**: Tesla T4, SM 7.5, 16 GB GDDR6, ~300 GB/s memory bandwidth.
+
+The fused `qk_norm_rope` kernel achieves **80.55 GB/s** on T4, which is ~27% of T4's theoretical peak bandwidth (~300 GB/s). Fusion speedup: **6.06×** over the separated 4-launch baseline.
+
+| Metric | T4 | A100 | H100 |
+|---|---|---|---|
+| Best GB/s | 80.55 | 925.5 | 1627.7 |
+| Best fusion_speedup | **6.06×** | **12.85×** | **11.88×** |
+| % of HBM peak | ~27% | ~46% | ~49% |
+
+**Interpretation.** The T4 fusion_speedup (6.06×) is lower than A100 (10–13×) and H100 (10–12×), consistent with the launch-overhead hypothesis from §3.2.1. T4's lower absolute launch latency means the separated baseline wastes a smaller fraction of total time on launches, so fusion saves proportionally less. However, 6× is still far above the ~2× predicted by HBM traffic accounting alone, confirming that launch overhead dominates fusion value across all three GPU tiers.
+
+**Validation script.** `scripts/colab_validate_all.py` runs all 13 operators on Colab's free T4 — no Modal account or paid GPU required.
+
 ## Key findings
 
-1. **All 60 (shape, config) combinations are correct.** Zero failures across 6 Gemma 3/4 shapes × 5 curated configs × 2 GPUs.
+1. **All (shape, config) combinations are correct across 3 GPUs.** Zero failures across 6 Gemma 3/4 shapes × 5 curated configs × 2 datacenter GPUs (A100, H100), plus T4 correctness validation on Colab.
 2. **Every shape beats the separated baseline by ≥5×; the best cases hit 12.85× on A100 and 11.88× on H100.** The arithmetic accounts for ~2× HBM traffic savings (read/write Q and K once vs. twice), but the *measured* speedups are much higher — indicating **launch overhead dominates** for these small-to-medium Gemma shapes. Going from 4 separate kernel launches to 1 fused kernel saves ~25-50 µs per prologue, which is a huge fraction of the total time at this scale.
 3. **H100 peak bandwidth is 1627 GB/s** (54% of theoretical 3.35 TB/s HBM3 peak) — the fused kernel is genuinely memory-bound, not launch-overhead-bound, at this tile size.
 4. **Best config regime**: `BLOCK_SIZE=64, num_warps=4, num_stages=1` is the sweet spot across both GPUs. Small enough to keep multiple blocks per SM, large enough to amortize the RMSNorm reduction.
@@ -62,7 +78,11 @@ Expected speedup from HBM traffic alone: 2×. Measured on `gemma4_e2b_local`: **
 ## Reproduction
 
 ```bash
+# A100 + H100 (Modal)
 python scripts/smoke_modal.py --full --h100 --qk-only --write-results
+
+# T4 (Google Colab, free)
+# Upload scripts/colab_validate_all.py to Colab and run with a T4 runtime
 ```
 
-Runtime: ~3 minutes per GPU (cold compile + 30 evals each). Modal cost: ~$0.10 per GPU. See [`scripts/smoke_modal.py`](../../scripts/smoke_modal.py) for the full orchestration.
+Runtime: ~3 minutes per GPU (cold compile + 30 evals each). Modal cost: ~$0.10 per GPU. T4 validation is free via Colab. See [`scripts/smoke_modal.py`](../../scripts/smoke_modal.py) for the full orchestration.
