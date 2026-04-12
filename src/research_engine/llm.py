@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import datetime
 import os
 from typing import Protocol
 from urllib.error import HTTPError, URLError
@@ -674,7 +675,25 @@ def _freshness_weight(*, updated_at: str | None, newest_updated_at: str | None) 
         return 0.0
     if updated_at == newest_updated_at:
         return 0.15
-    return 0.05
+    try:
+        updated_dt = _parse_iso_datetime(updated_at)
+        newest_dt = _parse_iso_datetime(newest_updated_at)
+    except ValueError:
+        return 0.05
+
+    delta_days = max((newest_dt - updated_dt).total_seconds() / 86400.0, 0.0)
+    if delta_days <= 1:
+        return 0.12
+    if delta_days <= 7:
+        return 0.08
+    if delta_days <= 30:
+        return 0.04
+    return 0.01
+
+
+def _parse_iso_datetime(value: str) -> datetime:
+    normalized = value.replace("Z", "+00:00")
+    return datetime.fromisoformat(normalized)
 
 
 _RESEARCH_CONTEXT_SCHEMA = {
