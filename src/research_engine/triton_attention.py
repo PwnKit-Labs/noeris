@@ -235,6 +235,191 @@ def make_sliding_window_mask(seq_len: int, window_size: int, is_causal: bool):
     return mask  # dtype=torch.bool
 
 
+def flash_attn(
+    q, k, v, config=None, is_causal=False, sm_scale=None, window_size=-1,
+    use_qk_norm=False, q_scale=None, k_scale=None,
+    num_kv_heads=None, shared_kv=False,
+):
+    """Module-level FlashAttention launcher. Requires CUDA GPU.
+
+    Args:
+        q: (B, H, S, D) fp16 tensor.
+        k: (B, H_kv, S, D) fp16 tensor.
+        v: (B, H_kv, S, D) fp16 tensor.
+        config: Triton config dict with BLOCK_M, BLOCK_N, num_warps, num_stages.
+            Defaults to the first curated config.
+        is_causal: Apply causal masking.
+        sm_scale: Softmax scale. Defaults to 1/sqrt(D).
+        window_size: Sliding-window size. -1 means full attention.
+        use_qk_norm: Fuse per-row RMSNorm into Q and K.
+        q_scale: (D,) fp32 scale weights for Q-norm.
+        k_scale: (D,) fp32 scale weights for K-norm.
+        num_kv_heads: Number of KV heads for GQA. Defaults to H (MHA).
+        shared_kv: YOCO-style KV sharing.
+
+    Returns:
+        (B, H, S, D) fp16 output tensor.
+    """
+    import torch
+    import triton
+    import triton.language as tl
+
+    if config is None:
+        config = ATTENTION_CURATED_CONFIGS[0]
+
+    @triton.jit
+    def _attn_fwd_kernel(
+        Q, K, V, Out,
+        QScale, KScale,
+        stride_qb, stride_qh, stride_qm, stride_qk,
+        stride_kb, stride_kh, stride_kn, stride_kk,
+        stride_vb, stride_vh, stride_vn, stride_vk,
+        stride_ob, stride_oh, stride_om, stride_ok,
+        B, H, M, N,
+        sm_scale,
+        HEAD_DIM: tl.constexpr,
+        NUM_KV_HEADS: tl.constexpr,
+        GROUP_SIZE: tl.constexpr,
+        BLOCK_M: tl.constexpr,
+        BLOCK_N: tl.constexpr,
+        IS_CAUSAL: tl.constexpr,
+        WINDOW_SIZE: tl.constexpr,
+        USE_QK_NORM: tl.constexpr,
+    ):
+        pid = tl.program_id(0)
+        off_bh = tl.program_id(1)
+        off_b = off_bh // H
+        off_h = off_bh % H
+        off_kvh = off_h // GROUP_SIZE
+
+        q_base = Q + off_b * stride_qb + off_h * stride_qh
+        k_base = K + off_b * stride_kb + off_kvh * stride_kh
+        v_base = V + off_b * stride_vb + off_kvh * stride_vh
+        o_base = Out + off_b * stride_ob + off_h * stride_oh
+
+        offs_m = pid * BLOCK_M + tl.arange(0, BLOCK_M)
+        offs_k = tl.arange(0, HEAD_DIM)
+        offs_n = tl.arange(0, BLOCK_N)
+
+        q_ptrs = q_base + offs_m[:, None] * stride_qm + offs_k[None, :] * stride_qk
+        q_mask = offs_m[:, None] < M
+        q = tl.load(q_ptrs, mask=q_mask, other=0.0)
+
+        if USE_QK_NORM:
+            q = q.to(tl.float32)
+            q_sq = q * q
+            q_var = tl.sum(q_sq, axis=1) / HEAD_DIM
+            q_rstd = 1.0 / tl.sqrt(q_var + 1e-6)
+            q = q * q_rstd[:, None]
+            q_scale_val = tl.load(QScale + offs_k)
+            q = q * q_scale_val[None, :]
+            q = q.to(tl.float16)
+
+        m_i = tl.zeros((BLOCK_M,), dtype=tl.float32) - 1.0e30
+        l_i = tl.zeros((BLOCK_M,), dtype=tl.float32)
+        acc = tl.zeros((BLOCK_M, HEAD_DIM), dtype=tl.float32)
+
+        qk_scale = sm_scale * 1.44269504
+
+        for start_n in range(0, N, BLOCK_N):
+            curr_n = start_n + offs_n
+            k_ptrs = k_base + curr_n[:, None] * stride_kn + offs_k[None, :] * stride_kk
+            v_ptrs = v_base + curr_n[:, None] * stride_vn + offs_k[None, :] * stride_vk
+            n_mask = curr_n[:, None] < N
+            k = tl.load(k_ptrs, mask=n_mask, other=0.0)
+            v = tl.load(v_ptrs, mask=n_mask, other=0.0)
+
+            if USE_QK_NORM:
+                k = k.to(tl.float32)
+                k_sq = k * k
+                k_var = tl.sum(k_sq, axis=1) / HEAD_DIM
+                k_rstd = 1.0 / tl.sqrt(k_var + 1e-6)
+                k = k * k_rstd[:, None]
+                k_scale_val = tl.load(KScale + offs_k)
+                k = k * k_scale_val[None, :]
+                k = k.to(tl.float16)
+
+            qk = tl.dot(q, tl.trans(k))
+            qk = qk * qk_scale
+
+            NEG_INF = -1.0e30
+            qk = tl.where(curr_n[None, :] < N, qk, NEG_INF)
+
+            if IS_CAUSAL:
+                causal_mask = offs_m[:, None] >= curr_n[None, :]
+                qk = tl.where(causal_mask, qk, NEG_INF)
+
+            if WINDOW_SIZE > 0:
+                window_floor = offs_m[:, None] - WINDOW_SIZE + 1
+                window_mask = curr_n[None, :] >= window_floor
+                qk = tl.where(window_mask, qk, NEG_INF)
+
+            m_ij = tl.max(qk, axis=1)
+            m_new = tl.maximum(m_i, m_ij)
+            alpha = tl.exp2(m_i - m_new)
+            p = tl.exp2(qk - m_new[:, None])
+            l_ij = tl.sum(p, axis=1)
+            l_i = l_i * alpha + l_ij
+
+            acc = acc * alpha[:, None]
+            acc += tl.dot(p.to(v.dtype), v)
+
+            m_i = m_new
+
+        safe_l = tl.where(l_i > 0.0, l_i, 1.0)
+        acc = acc / safe_l[:, None]
+
+        o_ptrs = o_base + offs_m[:, None] * stride_om + offs_k[None, :] * stride_ok
+        tl.store(o_ptrs, acc.to(Out.dtype.element_ty), mask=q_mask)
+
+    B, H, M, D = q.shape
+    _, Hk, N, Dk = k.shape
+    _, Hv, Nv, Dv = v.shape
+    if num_kv_heads is None:
+        num_kv_heads = H
+    assert num_kv_heads > 0, "num_kv_heads must be positive"
+    assert H % num_kv_heads == 0, f"H={H} not divisible by num_kv_heads={num_kv_heads}"
+    assert Hk == num_kv_heads and Hv == num_kv_heads, (
+        f"K/V must have shape[1] == num_kv_heads; got Hk={Hk} Hv={Hv} num_kv_heads={num_kv_heads}"
+    )
+    assert Dk == D and Dv == D, "head_dim must match across Q/K/V"
+    assert Nv == N, "K/V seq_len must match"
+    group_size = H // num_kv_heads
+    if sm_scale is None:
+        sm_scale = 1.0 / (D ** 0.5)
+    out = torch.empty_like(q)
+    BLOCK_M = config["BLOCK_M"]
+    BLOCK_N = config["BLOCK_N"]
+
+    if q_scale is None:
+        q_scale = torch.ones(D, device=q.device, dtype=torch.float32)
+    if k_scale is None:
+        k_scale = torch.ones(D, device=k.device, dtype=torch.float32)
+
+    grid = (triton.cdiv(M, BLOCK_M), B * H, 1)
+    _attn_fwd_kernel[grid](
+        q, k, v, out,
+        q_scale, k_scale,
+        q.stride(0), q.stride(1), q.stride(2), q.stride(3),
+        k.stride(0), k.stride(1), k.stride(2), k.stride(3),
+        v.stride(0), v.stride(1), v.stride(2), v.stride(3),
+        out.stride(0), out.stride(1), out.stride(2), out.stride(3),
+        B, H, M, N,
+        sm_scale,
+        HEAD_DIM=D,
+        NUM_KV_HEADS=num_kv_heads,
+        GROUP_SIZE=group_size,
+        BLOCK_M=BLOCK_M,
+        BLOCK_N=BLOCK_N,
+        IS_CAUSAL=is_causal,
+        WINDOW_SIZE=window_size,
+        USE_QK_NORM=use_qk_norm,
+        num_warps=config["num_warps"],
+        num_stages=config["num_stages"],
+    )
+    return out
+
+
 def generate_attention_benchmark_script(
     configs: list[dict[str, int]],
     shapes: list[dict[str, Any]],

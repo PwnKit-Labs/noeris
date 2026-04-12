@@ -141,6 +141,61 @@ def generate_geglu_grid(
     return configs
 
 
+def geglu(gate, up, config=None):
+    """Module-level fused GeGLU launcher. Requires CUDA GPU.
+
+    Computes: out = gate * GELU_tanh(up)
+
+    Args:
+        gate: (n_rows, ffn_dim) fp16 tensor.
+        up: (n_rows, ffn_dim) fp16 tensor.
+        config: Triton config dict with BLOCK_SIZE, num_warps, num_stages.
+            Defaults to the first curated config.
+
+    Returns:
+        (n_rows, ffn_dim) fp16 output tensor.
+    """
+    import torch
+    import triton
+    import triton.language as tl
+
+    if config is None:
+        config = GEGLU_CURATED_CONFIGS[0]
+
+    @triton.jit
+    def _geglu_kernel(
+        gate_ptr, up_ptr, out_ptr,
+        n_cols,
+        BLOCK_SIZE: tl.constexpr,
+    ):
+        row_idx = tl.program_id(0)
+        gate_ptr = gate_ptr + row_idx * n_cols
+        up_ptr = up_ptr + row_idx * n_cols
+        out_ptr = out_ptr + row_idx * n_cols
+        offs = tl.arange(0, BLOCK_SIZE)
+        mask = offs < n_cols
+        gate = tl.load(gate_ptr + offs, mask=mask, other=0.0).to(tl.float32)
+        up = tl.load(up_ptr + offs, mask=mask, other=0.0).to(tl.float32)
+        sqrt_2_over_pi = 0.7978845608028654
+        coeff = 0.044715
+        inner = sqrt_2_over_pi * (up + coeff * up * up * up)
+        gelu_up = 0.5 * up * (1.0 + tl.extra.libdevice.tanh(inner))
+        out = gate * gelu_up
+        tl.store(out_ptr + offs, out.to(tl.float16), mask=mask)
+
+    n_rows, n_cols = gate.shape
+    out = torch.empty_like(gate)
+    BLOCK_SIZE = max(config["BLOCK_SIZE"], triton.next_power_of_2(n_cols))
+    _geglu_kernel[(n_rows,)](
+        gate, up, out,
+        n_cols,
+        BLOCK_SIZE=BLOCK_SIZE,
+        num_warps=config["num_warps"],
+        num_stages=config["num_stages"],
+    )
+    return out
+
+
 def generate_geglu_benchmark_script(
     configs: list[dict[str, int]],
     shapes: list[dict[str, Any]],

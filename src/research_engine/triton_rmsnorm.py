@@ -154,6 +154,69 @@ def generate_rmsnorm_grid(
     return configs
 
 
+def rmsnorm(x, w, config=None, eps=1e-6, affine_mode=0):
+    """Module-level RMSNorm launcher. Requires CUDA GPU.
+
+    Args:
+        x: (n_rows, hidden_dim) fp16 tensor.
+        w: (hidden_dim,) fp16 weight tensor.
+        config: Triton config dict with BLOCK_SIZE, num_warps, num_stages.
+            Defaults to the first curated config.
+        eps: Epsilon for numerical stability.
+        affine_mode: 0 = standard (y = x * rstd * w),
+                     1 = Gemma (y = x * rstd * (1 + w)).
+
+    Returns:
+        (n_rows, hidden_dim) fp16 output tensor.
+    """
+    import torch
+    import triton
+    import triton.language as tl
+
+    if config is None:
+        config = RMSNORM_CURATED_CONFIGS[0]
+
+    # Define kernel inline (lazy, so module imports on CPU)
+    @triton.jit
+    def _rmsnorm_kernel(
+        x_ptr, w_ptr, y_ptr,
+        x_row_stride,
+        y_row_stride,
+        n_cols,
+        eps,
+        BLOCK_SIZE: tl.constexpr,
+        AFFINE_MODE: tl.constexpr,
+    ):
+        row_idx = tl.program_id(0)
+        x_ptr += row_idx * x_row_stride
+        y_ptr += row_idx * y_row_stride
+        offs = tl.arange(0, BLOCK_SIZE)
+        mask = offs < n_cols
+        x = tl.load(x_ptr + offs, mask=mask, other=0.0).to(tl.float32)
+        mean_sq = tl.sum(x * x, axis=0) / n_cols
+        rstd = 1.0 / tl.sqrt(mean_sq + eps)
+        w = tl.load(w_ptr + offs, mask=mask, other=0.0).to(tl.float32)
+        if AFFINE_MODE == 0:
+            y = x * rstd * w
+        else:
+            y = x * rstd * (1.0 + w)
+        tl.store(y_ptr + offs, y.to(tl.float16), mask=mask)
+
+    n_rows, n_cols = x.shape
+    y = torch.empty_like(x)
+    BLOCK_SIZE = max(config["BLOCK_SIZE"], triton.next_power_of_2(n_cols))
+    _rmsnorm_kernel[(n_rows,)](
+        x, w, y,
+        x.stride(0), y.stride(0),
+        n_cols, eps,
+        BLOCK_SIZE=BLOCK_SIZE,
+        AFFINE_MODE=affine_mode,
+        num_warps=config["num_warps"],
+        num_stages=config["num_stages"],
+    )
+    return y
+
+
 def generate_rmsnorm_benchmark_script(
     configs: list[dict[str, int]],
     shapes: list[dict[str, Any]],

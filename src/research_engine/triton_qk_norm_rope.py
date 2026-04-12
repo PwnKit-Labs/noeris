@@ -137,6 +137,100 @@ def generate_qk_norm_rope_grid(
     return configs
 
 
+def apply_qk_norm_rope(q, k, cos, sin, q_scale, k_scale, config=None, eps=1e-6):
+    """Module-level fused QK-RMSNorm+RoPE launcher. Requires CUDA GPU.
+
+    Args:
+        q: (B, H, S, D) fp16 tensor.
+        k: (B, H_kv, S, D) fp16 tensor.
+        cos: (S, D/2) fp32 tensor.
+        sin: (S, D/2) fp32 tensor.
+        q_scale: (D,) fp32 learnable scale for Q.
+        k_scale: (D,) fp32 learnable scale for K.
+        config: Triton config dict with BLOCK_SIZE, num_warps, num_stages.
+            Defaults to the first curated config.
+        eps: Epsilon for RMSNorm.
+
+    Returns:
+        (q_out, k_out) tuple of fp16 tensors with same shapes as inputs.
+    """
+    import torch
+    import triton
+    import triton.language as tl
+
+    if config is None:
+        config = QK_NORM_ROPE_CURATED_CONFIGS[0]
+
+    @triton.jit
+    def _qk_norm_rope_kernel(
+        x_ptr, scale_ptr, cos_ptr, sin_ptr, out_ptr,
+        row_stride,
+        heads, seq_len, head_dim,
+        eps,
+        BLOCK_SIZE: tl.constexpr,
+    ):
+        pid = tl.program_id(0)
+        s_idx = pid % seq_len
+        x_base = x_ptr + pid * row_stride
+        out_base = out_ptr + pid * row_stride
+        half = head_dim // 2
+        offs = tl.arange(0, BLOCK_SIZE)
+        mask = offs < half
+        x_even = tl.load(x_base + 2 * offs, mask=mask, other=0.0).to(tl.float32)
+        x_odd = tl.load(x_base + 2 * offs + 1, mask=mask, other=0.0).to(tl.float32)
+        sum_sq = tl.sum(x_even * x_even, axis=0) + tl.sum(x_odd * x_odd, axis=0)
+        mean_sq = sum_sq / head_dim
+        rstd = 1.0 / tl.sqrt(mean_sq + eps)
+        s_even = tl.load(scale_ptr + 2 * offs, mask=mask, other=0.0).to(tl.float32)
+        s_odd = tl.load(scale_ptr + 2 * offs + 1, mask=mask, other=0.0).to(tl.float32)
+        n_even = x_even * rstd * (1.0 + s_even)
+        n_odd = x_odd * rstd * (1.0 + s_odd)
+        cos_row = cos_ptr + s_idx * half
+        sin_row = sin_ptr + s_idx * half
+        c = tl.load(cos_row + offs, mask=mask, other=1.0).to(tl.float32)
+        sn = tl.load(sin_row + offs, mask=mask, other=0.0).to(tl.float32)
+        out_even = n_even * c - n_odd * sn
+        out_odd = n_even * sn + n_odd * c
+        tl.store(out_base + 2 * offs, out_even.to(tl.float16), mask=mask)
+        tl.store(out_base + 2 * offs + 1, out_odd.to(tl.float16), mask=mask)
+
+    B, H, S, D = q.shape
+    _, H_kv, _, _ = k.shape
+
+    q_out = torch.empty_like(q)
+    k_out = torch.empty_like(k)
+
+    q_flat = q.reshape(B * H * S, D).contiguous()
+    q_out_flat = q_out.reshape(B * H * S, D)
+    k_flat = k.reshape(B * H_kv * S, D).contiguous()
+    k_out_flat = k_out.reshape(B * H_kv * S, D)
+
+    half = D // 2
+    BLOCK_SIZE = max(config["BLOCK_SIZE"], triton.next_power_of_2(half))
+    cos_c = cos.contiguous()
+    sin_c = sin.contiguous()
+
+    # Q launch
+    _qk_norm_rope_kernel[(B * H * S,)](
+        q_flat, q_scale, cos_c, sin_c, q_out_flat,
+        D, H, S, D, eps,
+        BLOCK_SIZE=BLOCK_SIZE,
+        num_warps=config["num_warps"],
+        num_stages=config["num_stages"],
+    )
+
+    # K launch
+    _qk_norm_rope_kernel[(B * H_kv * S,)](
+        k_flat, k_scale, cos_c, sin_c, k_out_flat,
+        D, H_kv, S, D, eps,
+        BLOCK_SIZE=BLOCK_SIZE,
+        num_warps=config["num_warps"],
+        num_stages=config["num_stages"],
+    )
+
+    return q_out, k_out
+
+
 def generate_qk_norm_rope_benchmark_script(
     configs: list[dict[str, int]],
     shapes: list[dict[str, Any]],
