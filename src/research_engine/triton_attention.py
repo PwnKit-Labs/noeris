@@ -12,8 +12,11 @@ Sliding-window attention (WINDOW_SIZE > 0):
   Each query position q_i only attends to key positions in
   [q_i - WINDOW_SIZE + 1, q_i] (causal) or
   [q_i - WINDOW_SIZE + 1, q_i + WINDOW_SIZE - 1] (non-causal, not implemented here).
-  Tile pruning skips K-tiles that are entirely outside the window, giving
-  true O(N * WINDOW_SIZE) complexity instead of O(N^2).
+  Tile pruning guards the K-tile loop body with a runtime predicate that
+  skips loads and matmuls for tiles entirely outside the window, giving
+  effective O(N * WINDOW_SIZE) work instead of O(N^2).  The `for` loop
+  still iterates all tiles (Triton does not support `break`/`continue` on
+  runtime conditions), but skipped iterations are cheap (branch-only).
 
 References:
 - FlashAttention-2 (Dao 2023): https://arxiv.org/abs/2307.08691
@@ -55,6 +58,12 @@ ATTENTION_CURATED_CONFIGS = [
     {"BLOCK_M": 64, "BLOCK_N": 64, "num_warps": 2, "num_stages": 3},
     # Large head_dim (512, Gemma 4 global): smaller tiles reduce register pressure
     {"BLOCK_M": 32, "BLOCK_N": 32, "num_warps": 4, "num_stages": 2},
+    # Sliding-window optimized: small BLOCK_N aligns with pruned tile range,
+    # reducing wasted work on boundary tiles.  Fewer warps suit the smaller
+    # effective iteration count after tile pruning.
+    {"BLOCK_M": 64, "BLOCK_N": 32, "num_warps": 4, "num_stages": 2},
+    {"BLOCK_M": 32, "BLOCK_N": 64, "num_warps": 4, "num_stages": 2},
+    {"BLOCK_M": 64, "BLOCK_N": 64, "num_warps": 2, "num_stages": 2},
 ]
 
 
@@ -322,49 +331,75 @@ def flash_attn(
         qk_scale = sm_scale * 1.44269504
 
         for start_n in range(0, N, BLOCK_N):
-            curr_n = start_n + offs_n
-            k_ptrs = k_base + curr_n[:, None] * stride_kn + offs_k[None, :] * stride_kk
-            v_ptrs = v_base + curr_n[:, None] * stride_vn + offs_k[None, :] * stride_vk
-            n_mask = curr_n[:, None] < N
-            k = tl.load(k_ptrs, mask=n_mask, other=0.0)
-            v = tl.load(v_ptrs, mask=n_mask, other=0.0)
-
-            if USE_QK_NORM:
-                k = k.to(tl.float32)
-                k_sq = k * k
-                k_var = tl.sum(k_sq, axis=1) / HEAD_DIM
-                k_rstd = 1.0 / tl.sqrt(k_var + 1e-6)
-                k = k * k_rstd[:, None]
-                k_scale_val = tl.load(KScale + offs_k)
-                k = k * k_scale_val[None, :]
-                k = k.to(tl.float16)
-
-            qk = tl.dot(q, tl.trans(k))
-            qk = qk * qk_scale
-
-            NEG_INF = -1.0e30
-            qk = tl.where(curr_n[None, :] < N, qk, NEG_INF)
-
-            if IS_CAUSAL:
-                causal_mask = offs_m[:, None] >= curr_n[None, :]
-                qk = tl.where(causal_mask, qk, NEG_INF)
-
+            # -- Tile pruning: skip K-tiles entirely outside the window ------
+            # WINDOW_SIZE is tl.constexpr so the outer branch compiles away
+            # for non-window shapes.  The inner runtime check on start_n lets
+            # Triton emit a predicated branch that skips loads + matmul for
+            # tiles that cannot contribute any attended keys.
+            #
+            # For Q-block [pid*BM, (pid+1)*BM):
+            #   Earliest needed key: pid*BM - WINDOW_SIZE + 1
+            #   Latest needed key (causal): (pid+1)*BM - 1
+            # A K-tile [start_n, start_n+BN) is entirely before the window
+            # when start_n + BN <= pid*BM - WINDOW_SIZE + 1, i.e.
+            # start_n + BN - 1 < pid*BM - WINDOW_SIZE + 1.
+            # A K-tile is entirely after the causal diagonal when
+            # start_n >= (pid+1)*BM (causal only).
+            tile_in_range = True  # Python-level default; Triton sees constexpr path
             if WINDOW_SIZE > 0:
-                window_floor = offs_m[:, None] - WINDOW_SIZE + 1
-                window_mask = curr_n[None, :] >= window_floor
-                qk = tl.where(window_mask, qk, NEG_INF)
+                # Entire K-tile is before the window for all queries in this Q-block?
+                tile_k_last = start_n + BLOCK_N - 1
+                q_window_floor = pid * BLOCK_M - WINDOW_SIZE + 1
+                tile_in_range = tile_k_last >= q_window_floor
+            if IS_CAUSAL:
+                # Entire K-tile is after the last query in this Q-block?
+                if tile_in_range:
+                    tile_in_range = start_n < (pid + 1) * BLOCK_M
 
-            m_ij = tl.max(qk, axis=1)
-            m_new = tl.maximum(m_i, m_ij)
-            alpha = tl.exp2(m_i - m_new)
-            p = tl.exp2(qk - m_new[:, None])
-            l_ij = tl.sum(p, axis=1)
-            l_i = l_i * alpha + l_ij
+            if tile_in_range:
+                curr_n = start_n + offs_n
+                k_ptrs = k_base + curr_n[:, None] * stride_kn + offs_k[None, :] * stride_kk
+                v_ptrs = v_base + curr_n[:, None] * stride_vn + offs_k[None, :] * stride_vk
+                n_mask = curr_n[:, None] < N
+                k = tl.load(k_ptrs, mask=n_mask, other=0.0)
+                v = tl.load(v_ptrs, mask=n_mask, other=0.0)
 
-            acc = acc * alpha[:, None]
-            acc += tl.dot(p.to(v.dtype), v)
+                if USE_QK_NORM:
+                    k = k.to(tl.float32)
+                    k_sq = k * k
+                    k_var = tl.sum(k_sq, axis=1) / HEAD_DIM
+                    k_rstd = 1.0 / tl.sqrt(k_var + 1e-6)
+                    k = k * k_rstd[:, None]
+                    k_scale_val = tl.load(KScale + offs_k)
+                    k = k * k_scale_val[None, :]
+                    k = k.to(tl.float16)
 
-            m_i = m_new
+                qk = tl.dot(q, tl.trans(k))
+                qk = qk * qk_scale
+
+                NEG_INF = -1.0e30
+                qk = tl.where(curr_n[None, :] < N, qk, NEG_INF)
+
+                if IS_CAUSAL:
+                    causal_mask = offs_m[:, None] >= curr_n[None, :]
+                    qk = tl.where(causal_mask, qk, NEG_INF)
+
+                if WINDOW_SIZE > 0:
+                    window_floor = offs_m[:, None] - WINDOW_SIZE + 1
+                    window_mask = curr_n[None, :] >= window_floor
+                    qk = tl.where(window_mask, qk, NEG_INF)
+
+                m_ij = tl.max(qk, axis=1)
+                m_new = tl.maximum(m_i, m_ij)
+                alpha = tl.exp2(m_i - m_new)
+                p = tl.exp2(qk - m_new[:, None])
+                l_ij = tl.sum(p, axis=1)
+                l_i = l_i * alpha + l_ij
+
+                acc = acc * alpha[:, None]
+                acc += tl.dot(p.to(v.dtype), v)
+
+                m_i = m_new
 
         safe_l = tl.where(l_i > 0.0, l_i, 1.0)
         acc = acc / safe_l[:, None]
@@ -535,63 +570,76 @@ def attn_fwd_kernel(
 
     qk_scale = sm_scale * 1.44269504  # log2(e) for tl.exp2
 
-    # --- Loop over all K tiles with mask-based window/causal enforcement ---
-    # We iterate the full `range(0, N, BLOCK_N)` and enforce causal + window
-    # constraints via `tl.where` masks on the raw QK scores.  This pattern
-    # compiles reliably under Triton's JIT (no `break`/`continue` on runtime
-    # predicates, no tensor-typed `range` bounds).  Cost: sliding-window
-    # runs O(N^2) instead of O(N*W).  Correct-first; tile pruning is a
-    # follow-up optimization.
+    # --- Tile-pruned K-tile loop with window/causal enforcement -------------
+    # For sliding-window attention, each Q-block only needs K-tiles that
+    # overlap the window [pid*BM - W + 1, (pid+1)*BM).  We guard the loop
+    # body with a runtime `if` that checks whether the current K-tile is
+    # within range.  Triton compiles this to a predicated branch — the loop
+    # still iterates all tiles, but skipped tiles avoid memory loads and
+    # matmuls, giving effective O(N * W / N) = O(W) work per Q-block.
+    #
+    # For IS_CAUSAL without window, tiles past the diagonal are also skipped.
+    # For non-causal, non-window shapes, no tiles are skipped (tile_in_range
+    # is always True and the compiler eliminates the branch).
     for start_n in range(0, N, BLOCK_N):
-        curr_n = start_n + offs_n
-        k_ptrs = k_base + curr_n[:, None] * stride_kn + offs_k[None, :] * stride_kk
-        v_ptrs = v_base + curr_n[:, None] * stride_vn + offs_k[None, :] * stride_vk
-        n_mask = curr_n[:, None] < N
-        k = tl.load(k_ptrs, mask=n_mask, other=0.0)
-        v = tl.load(v_ptrs, mask=n_mask, other=0.0)
-
-        # Fused QK-norm: per-row RMSNorm on K inside tile loop.
-        if USE_QK_NORM:
-            k = k.to(tl.float32)
-            k_sq = k * k
-            k_var = tl.sum(k_sq, axis=1) / HEAD_DIM
-            k_rstd = 1.0 / tl.sqrt(k_var + 1e-6)
-            k = k * k_rstd[:, None]
-            k_scale = tl.load(KScale + offs_k)
-            k = k * k_scale[None, :]
-            k = k.to(tl.float16)
-
-        qk = tl.dot(q, tl.trans(k))
-        qk = qk * qk_scale
-
-        # Mask out-of-bounds keys (past sequence end).  Use a large finite
-        # negative instead of -inf so that tiles where every position is
-        # masked don't produce NaN in the online-softmax arithmetic.
-        NEG_INF = -1.0e30
-        qk = tl.where(curr_n[None, :] < N, qk, NEG_INF)
-
-        # Apply causal mask on this tile.
-        if IS_CAUSAL:
-            causal_mask = offs_m[:, None] >= curr_n[None, :]
-            qk = tl.where(causal_mask, qk, NEG_INF)
-
-        # Apply sliding-window mask: mask positions below the window floor.
+        # -- Tile pruning: skip K-tiles entirely outside the window ----------
+        tile_in_range = True
         if WINDOW_SIZE > 0:
-            window_floor = offs_m[:, None] - WINDOW_SIZE + 1
-            window_mask = curr_n[None, :] >= window_floor
-            qk = tl.where(window_mask, qk, NEG_INF)
+            tile_k_last = start_n + BLOCK_N - 1
+            q_window_floor = pid * BLOCK_M - WINDOW_SIZE + 1
+            tile_in_range = tile_k_last >= q_window_floor
+        if IS_CAUSAL:
+            if tile_in_range:
+                tile_in_range = start_n < (pid + 1) * BLOCK_M
 
-        m_ij = tl.max(qk, axis=1)
-        m_new = tl.maximum(m_i, m_ij)
-        alpha = tl.exp2(m_i - m_new)
-        p = tl.exp2(qk - m_new[:, None])
-        l_ij = tl.sum(p, axis=1)
-        l_i = l_i * alpha + l_ij
+        if tile_in_range:
+            curr_n = start_n + offs_n
+            k_ptrs = k_base + curr_n[:, None] * stride_kn + offs_k[None, :] * stride_kk
+            v_ptrs = v_base + curr_n[:, None] * stride_vn + offs_k[None, :] * stride_vk
+            n_mask = curr_n[:, None] < N
+            k = tl.load(k_ptrs, mask=n_mask, other=0.0)
+            v = tl.load(v_ptrs, mask=n_mask, other=0.0)
 
-        acc = acc * alpha[:, None]
-        acc += tl.dot(p.to(v.dtype), v)
+            # Fused QK-norm: per-row RMSNorm on K inside tile loop.
+            if USE_QK_NORM:
+                k = k.to(tl.float32)
+                k_sq = k * k
+                k_var = tl.sum(k_sq, axis=1) / HEAD_DIM
+                k_rstd = 1.0 / tl.sqrt(k_var + 1e-6)
+                k = k * k_rstd[:, None]
+                k_scale = tl.load(KScale + offs_k)
+                k = k * k_scale[None, :]
+                k = k.to(tl.float16)
 
-        m_i = m_new
+            qk = tl.dot(q, tl.trans(k))
+            qk = qk * qk_scale
+
+            # Mask out-of-bounds keys (past sequence end).
+            NEG_INF = -1.0e30
+            qk = tl.where(curr_n[None, :] < N, qk, NEG_INF)
+
+            # Apply causal mask on this tile.
+            if IS_CAUSAL:
+                causal_mask = offs_m[:, None] >= curr_n[None, :]
+                qk = tl.where(causal_mask, qk, NEG_INF)
+
+            # Apply sliding-window mask: mask positions below the window floor.
+            if WINDOW_SIZE > 0:
+                window_floor = offs_m[:, None] - WINDOW_SIZE + 1
+                window_mask = curr_n[None, :] >= window_floor
+                qk = tl.where(window_mask, qk, NEG_INF)
+
+            m_ij = tl.max(qk, axis=1)
+            m_new = tl.maximum(m_i, m_ij)
+            alpha = tl.exp2(m_i - m_new)
+            p = tl.exp2(qk - m_new[:, None])
+            l_ij = tl.sum(p, axis=1)
+            l_i = l_i * alpha + l_ij
+
+            acc = acc * alpha[:, None]
+            acc += tl.dot(p.to(v.dtype), v)
+
+            m_i = m_new
 
     # Handle empty row (no keys attended to) — happens in causal mode or when
     # the window excludes all keys for early query positions.

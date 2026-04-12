@@ -249,6 +249,52 @@ class TilePruningMathTests(unittest.TestCase):
             self.assertEqual(k_start, 0)
             self.assertEqual(k_end, min(N, (pid + 1) * BLOCK_M))
 
+    def _tile_in_range(self, pid, BLOCK_M, BLOCK_N, start_n, N, W, is_causal):
+        """Mirror the kernel's tile_in_range predicate."""
+        tile_in_range = True
+        if W > 0:
+            tile_k_last = start_n + BLOCK_N - 1
+            q_window_floor = pid * BLOCK_M - W + 1
+            tile_in_range = tile_k_last >= q_window_floor
+        if is_causal and tile_in_range:
+            tile_in_range = start_n < (pid + 1) * BLOCK_M
+        return tile_in_range
+
+    def test_tile_predicate_matches_k_range(self):
+        """tile_in_range predicate must accept exactly the tiles that overlap [k_start, k_end)."""
+        N, W, BLOCK_M, BLOCK_N = 4096, 1024, 64, 64
+        for pid in range(N // BLOCK_M):
+            k_start, k_end = self._k_range(pid, BLOCK_M, N, W, is_causal=True)
+            for start_n in range(0, N, BLOCK_N):
+                in_range = self._tile_in_range(pid, BLOCK_M, BLOCK_N, start_n, N, W, is_causal=True)
+                # A tile overlaps [k_start, k_end) iff start_n < k_end AND start_n + BLOCK_N > k_start
+                overlaps = (start_n < k_end) and (start_n + BLOCK_N > k_start)
+                self.assertEqual(
+                    in_range, overlaps,
+                    f"pid={pid} start_n={start_n}: tile_in_range={in_range} but overlap={overlaps} "
+                    f"(k_start={k_start}, k_end={k_end})",
+                )
+
+    def test_tile_predicate_no_window_skips_nothing_noncausal(self):
+        """Without window or causal, all tiles are in range."""
+        N, BLOCK_M, BLOCK_N = 1024, 64, 64
+        for pid in range(N // BLOCK_M):
+            for start_n in range(0, N, BLOCK_N):
+                self.assertTrue(self._tile_in_range(pid, BLOCK_M, BLOCK_N, start_n, N, -1, is_causal=False))
+
+    def test_tile_predicate_window_reduces_tiles(self):
+        """Sliding-window must visit fewer tiles than full causal."""
+        N, W, BLOCK_M, BLOCK_N = 4096, 1024, 64, 64
+        window_tiles = 0
+        causal_tiles = 0
+        for pid in range(N // BLOCK_M):
+            for start_n in range(0, N, BLOCK_N):
+                if self._tile_in_range(pid, BLOCK_M, BLOCK_N, start_n, N, W, is_causal=True):
+                    window_tiles += 1
+                if self._tile_in_range(pid, BLOCK_M, BLOCK_N, start_n, N, -1, is_causal=True):
+                    causal_tiles += 1
+        self.assertLess(window_tiles, causal_tiles)
+
 
 # ---------------------------------------------------------------------------
 # Shape bucket classifier for window shapes
@@ -421,9 +467,12 @@ class BenchmarkScriptWindowTests(unittest.TestCase):
         self.assertIn("IS_CAUSAL", script)
 
     def test_script_contains_tile_pruning_logic(self):
-        """The generated script should contain the tile-pruning k_start/k_end logic."""
+        """The generated script should contain the tile-pruning predicate."""
         shapes = [{"name": "x", "batch": 1, "heads": 8, "seq_len": 512, "head_dim": 64}]
         script = self._make_script(shapes)
+        # The kernel uses tile_in_range to skip K-tiles outside the window
+        self.assertIn("tile_in_range", script)
+        # Docstring still documents the k_start/k_end math
         self.assertIn("k_start", script)
         self.assertIn("k_end", script)
 
