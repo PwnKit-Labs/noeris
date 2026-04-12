@@ -11,18 +11,30 @@ from unittest import mock
 
 import pytest
 
-# Make sure the script is importable — mock torch if it's not installed
+# Make sure the script is importable — mock torch if it's not available,
+# but SAVE and RESTORE the original to avoid poisoning later tests.
 REPO = Path(__file__).resolve().parent.parent
 SCRIPTS = REPO / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(REPO / "src"))
 
-if "torch" not in sys.modules:
+_original_torch = sys.modules.get("torch")
+_torch_was_mocked = False
+
+if _original_torch is None:
     _torch_mock = types.ModuleType("torch")
     _torch_mock.cuda = mock.MagicMock()  # type: ignore[attr-defined]
     sys.modules["torch"] = _torch_mock
+    _torch_was_mocked = True
 
-import colab_iterate
+import colab_iterate  # noqa: E402
+
+# Restore original torch immediately after import so subsequent test
+# modules get the real torch (not our minimal mock).
+if _torch_was_mocked:
+    del sys.modules["torch"]
+elif _original_torch is not None:
+    sys.modules["torch"] = _original_torch
 
 
 # ---------------------------------------------------------------------------
