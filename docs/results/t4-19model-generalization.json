@@ -1,0 +1,271 @@
+{
+  "gpu": "Tesla T4",
+  "results": [
+    {
+      "model": "gemma4_e2b_local",
+      "shape": "B1_H8_Hkv1_S4096_D256",
+      "qk_norm": true,
+      "config": {
+        "BLOCK_SIZE": 128,
+        "num_warps": 2,
+        "num_stages": 1
+      },
+      "separated_ms": 3.4316,
+      "fused_ms": 0.5284,
+      "speedup": 6.49,
+      "bandwidth_gbps": 79.4
+    },
+    {
+      "model": "gemma4_31b_global",
+      "shape": "B1_H32_Hkv4_S4096_D512",
+      "qk_norm": true,
+      "config": {
+        "BLOCK_SIZE": 256,
+        "num_warps": 2,
+        "num_stages": 1
+      },
+      "separated_ms": 23.7896,
+      "fused_ms": 3.0126,
+      "speedup": 7.9,
+      "bandwidth_gbps": 103.0
+    },
+    {
+      "model": "llama3_8b",
+      "shape": "B1_H32_Hkv8_S4096_D128",
+      "qk_norm": false,
+      "config": {
+        "BLOCK_SIZE": 64,
+        "num_warps": 2,
+        "num_stages": 1
+      },
+      "separated_ms": 6.3726,
+      "fused_ms": 0.7323,
+      "speedup": 8.7,
+      "bandwidth_gbps": 117.4
+    },
+    {
+      "model": "llama3_70b",
+      "shape": "B1_H64_Hkv8_S4096_D128",
+      "qk_norm": false,
+      "config": {
+        "BLOCK_SIZE": 64,
+        "num_warps": 2,
+        "num_stages": 1
+      },
+      "separated_ms": 11.3299,
+      "fused_ms": 1.3178,
+      "speedup": 8.6,
+      "bandwidth_gbps": 116.2
+    },
+    {
+      "model": "llama4_scout",
+      "shape": "B1_H40_Hkv8_S4096_D128",
+      "qk_norm": false,
+      "config": {
+        "BLOCK_SIZE": 64,
+        "num_warps": 2,
+        "num_stages": 1
+      },
+      "separated_ms": 7.6134,
+      "fused_ms": 0.8659,
+      "speedup": 8.79,
+      "bandwidth_gbps": 118.7
+    },
+    {
+      "model": "qwen3_8b",
+      "shape": "B1_H32_Hkv8_S4096_D128",
+      "qk_norm": true,
+      "config": {
+        "BLOCK_SIZE": 64,
+        "num_warps": 2,
+        "num_stages": 1
+      },
+      "separated_ms": 6.3816,
+      "fused_ms": 0.7337,
+      "speedup": 8.7,
+      "bandwidth_gbps": 117.2
+    },
+    {
+      "model": "qwen3_32b",
+      "shape": "B1_H64_Hkv8_S4096_D128",
+      "qk_norm": true,
+      "config": {
+        "BLOCK_SIZE": 64,
+        "num_warps": 2,
+        "num_stages": 1
+      },
+      "separated_ms": 11.3439,
+      "fused_ms": 1.2744,
+      "speedup": 8.9,
+      "bandwidth_gbps": 120.1
+    },
+    {
+      "model": "qwen3_235b_a22b",
+      "shape": "B1_H64_Hkv4_S4096_D128",
+      "qk_norm": true,
+      "config": {
+        "BLOCK_SIZE": 64,
+        "num_warps": 2,
+        "num_stages": 1
+      },
+      "separated_ms": 10.707,
+      "fused_ms": 1.2862,
+      "speedup": 8.32,
+      "bandwidth_gbps": 112.5
+    },
+    {
+      "model": "mistral_7b",
+      "shape": "B1_H32_Hkv8_S4096_D128",
+      "qk_norm": false,
+      "config": {
+        "BLOCK_SIZE": 64,
+        "num_warps": 2,
+        "num_stages": 1
+      },
+      "separated_ms": 6.3776,
+      "fused_ms": 0.7431,
+      "speedup": 8.58,
+      "bandwidth_gbps": 115.7
+    },
+    {
+      "model": "mixtral_8x22b",
+      "shape": "B1_H48_Hkv8_S4096_D128",
+      "qk_norm": false,
+      "config": {
+        "BLOCK_SIZE": 64,
+        "num_warps": 2,
+        "num_stages": 1
+      },
+      "separated_ms": 8.8523,
+      "fused_ms": 1.0217,
+      "speedup": 8.66,
+      "bandwidth_gbps": 117.0
+    },
+    {
+      "model": "phi3_mini",
+      "shape": "B1_H32_Hkv32_S4096_D96",
+      "qk_norm": false,
+      "config": {
+        "BLOCK_SIZE": 64,
+        "num_warps": 2,
+        "num_stages": 1
+      },
+      "separated_ms": 7.6739,
+      "fused_ms": 0.9725,
+      "speedup": 7.89,
+      "bandwidth_gbps": 105.1
+    },
+    {
+      "model": "phi4_mini",
+      "shape": "B1_H24_Hkv8_S4096_D128",
+      "qk_norm": false,
+      "config": {
+        "BLOCK_SIZE": 64,
+        "num_warps": 2,
+        "num_stages": 1
+      },
+      "separated_ms": 5.1443,
+      "fused_ms": 0.605,
+      "speedup": 8.5,
+      "bandwidth_gbps": 114.4
+    },
+    {
+      "model": "phi4_14b",
+      "shape": "B1_H40_Hkv10_S4096_D128",
+      "qk_norm": false,
+      "config": {
+        "BLOCK_SIZE": 64,
+        "num_warps": 2,
+        "num_stages": 1
+      },
+      "separated_ms": 7.9237,
+      "fused_ms": 0.8992,
+      "speedup": 8.81,
+      "bandwidth_gbps": 118.9
+    },
+    {
+      "model": "falcon3_7b",
+      "shape": "B1_H12_Hkv4_S4096_D256",
+      "qk_norm": false,
+      "config": {
+        "BLOCK_SIZE": 128,
+        "num_warps": 2,
+        "num_stages": 1
+      },
+      "separated_ms": 5.321,
+      "fused_ms": 0.7043,
+      "speedup": 7.55,
+      "bandwidth_gbps": 101.2
+    },
+    {
+      "model": "falcon3_10b",
+      "shape": "B1_H12_Hkv4_S4096_D256",
+      "qk_norm": false,
+      "config": {
+        "BLOCK_SIZE": 128,
+        "num_warps": 2,
+        "num_stages": 1
+      },
+      "separated_ms": 5.3126,
+      "fused_ms": 0.7011,
+      "speedup": 7.58,
+      "bandwidth_gbps": 101.7
+    },
+    {
+      "model": "dbrx",
+      "shape": "B1_H48_Hkv8_S4096_D128",
+      "qk_norm": false,
+      "config": {
+        "BLOCK_SIZE": 64,
+        "num_warps": 2,
+        "num_stages": 1
+      },
+      "separated_ms": 8.8494,
+      "fused_ms": 1.0157,
+      "speedup": 8.71,
+      "bandwidth_gbps": 117.7
+    },
+    {
+      "model": "olmo2_7b",
+      "shape": "B1_H32_Hkv32_S4096_D128",
+      "qk_norm": true,
+      "config": {
+        "BLOCK_SIZE": 64,
+        "num_warps": 2,
+        "num_stages": 1
+      },
+      "separated_ms": 10.094,
+      "fused_ms": 1.1627,
+      "speedup": 8.68,
+      "bandwidth_gbps": 117.2
+    },
+    {
+      "model": "olmo2_32b",
+      "shape": "B1_H40_Hkv8_S4096_D128",
+      "qk_norm": true,
+      "config": {
+        "BLOCK_SIZE": 64,
+        "num_warps": 2,
+        "num_stages": 1
+      },
+      "separated_ms": 7.6104,
+      "fused_ms": 0.8684,
+      "speedup": 8.76,
+      "bandwidth_gbps": 118.3
+    },
+    {
+      "model": "internlm3_8b",
+      "shape": "B1_H32_Hkv8_S4096_D128",
+      "qk_norm": false,
+      "config": {
+        "BLOCK_SIZE": 64,
+        "num_warps": 2,
+        "num_stages": 1
+      },
+      "separated_ms": 6.3737,
+      "fused_ms": 0.7364,
+      "speedup": 8.66,
+      "bandwidth_gbps": 116.8
+    }
+  ]
+}

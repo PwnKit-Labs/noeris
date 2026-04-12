@@ -1,0 +1,85 @@
+{
+  "gpu": "Tesla T4",
+  "pytorch": "2.10.0+cu128",
+  "triton": "3.6.0",
+  "elapsed_seconds": 254.6,
+  "bombshell_results": {
+    "prologue_fusion": {
+      "separated_ms": 3.2458,
+      "fused_ms": 0.4792,
+      "speedup": 6.7729,
+      "shape": "B1_H8_Hkv1_S4096_D256"
+    },
+    "splitk_vs_cublas": {
+      "best_ratio": 0.0,
+      "shape": "",
+      "details": []
+    },
+    "layer_speedup": {
+      "baseline_total_ms": 15.1344,
+      "noeris_total_ms": 11.6073,
+      "speedup": 1.3039,
+      "per_step": {
+        "pre_attn_rmsnorm": {
+          "baseline": 0.6164,
+          "noeris": 0.1002
+        },
+        "qkv_proj": {
+          "baseline": 0.9229,
+          "noeris": 0.9229
+        },
+        "qk_norm_rope": {
+          "baseline": 1.5012,
+          "noeris": 0.3768
+        },
+        "attention_sdpa": {
+          "baseline": 2.5641,
+          "noeris": 2.1238
+        },
+        "output_proj": {
+          "baseline": 0.7961,
+          "noeris": 0.7961
+        },
+        "pre_mlp_rmsnorm": {
+          "baseline": 0.6441,
+          "noeris": 0.0983
+        },
+        "geglu_mlp": {
+          "baseline": 8.0896,
+          "noeris": 7.1892
+        }
+      },
+      "shape": "B1_S2048_D1536_H8_Hkv1_Dh256_Dff6144_W512"
+    },
+    "prologue_forward_backward": {
+      "forward": {
+        "fusion_speedup": 4.319,
+        "fused_ms": 3.1185,
+        "separated_ms": 13.4681
+      },
+      "backward": {
+        "fusion_speedup": 4.319,
+        "fused_ms": 3.1185,
+        "separated_ms": 13.4681
+      }
+    },
+    "attention_bandit_improvement": {
+      "error": ", line 2116, in _communicate\n    self._check_timeout(endtime, orig_timeout, stdout, stderr)\n  File \"/usr/lib/python3.12/subprocess.py\", line 1253, in _check_timeout\n    raise TimeoutExpired(\nsubprocess.TimeoutExpired: Command '['/usr/bin/python3', '/tmp/tmpol6bb43p.py']' timed out after 180 seconds\n"
+    },
+    "t4_shootout": {
+      "shape": "B1_S2048_D1536_H8_Hkv1_Dh256_Dff6144_W512",
+      "A_pytorch_separated_ms": 14.9635,
+      "B_torch_compile_ms": 12.121,
+      "B_error": null,
+      "C_noeris_t4_tuned_ms": 9.6968,
+      "C_best_num_warps": 2,
+      "C_warps1_ms": 13.3925,
+      "C_warps2_ms": 9.6968,
+      "D_torch_compile_noeris_ms": 12.4461,
+      "D_error": null,
+      "B_speedup_vs_A": 1.2345,
+      "C_speedup_vs_A": 1.5431,
+      "D_speedup_vs_A": 1.2023
+    }
+  }
+}
