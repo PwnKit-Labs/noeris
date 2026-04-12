@@ -2,11 +2,12 @@
   <img src="docs/brand/noeris-mark.svg" alt="Noeris mark" width="96" height="96" />
 </p>
 
-# Noeris
+<h1 align="center">Noeris</h1>
 
-> PwnKit Labs Research OS for autonomous empirical discovery.
-
-Noeris is the Research OS inside PwnKit Labs: open-source adversarial reliability infrastructure for both humans and AI agents. Its current flagship track is autonomous GPU kernel optimization.
+<p align="center">
+  <strong>PwnKit Labs Research OS for autonomous empirical discovery.</strong><br/>
+  Noeris is the Research OS inside PwnKit Labs: open-source adversarial reliability infrastructure for both humans and AI agents. Its current flagship track is autonomous GPU kernel optimization.
+</p>
 
 <p align="center">
   <img alt="Python" src="https://img.shields.io/badge/python-3.11+-111827?style=flat-square&logo=python&logoColor=F7C948">
