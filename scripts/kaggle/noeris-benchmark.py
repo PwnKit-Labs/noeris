@@ -8,12 +8,23 @@ import subprocess
 import sys
 import os
 
-# Clone and install noeris (clone first, then pip install from local)
-subprocess.run(["git", "clone", "--depth", "1",
-                "https://github.com/PwnKit-Labs/noeris.git", "/tmp/noeris"],
-               check=True)
-subprocess.check_call([sys.executable, "-m", "pip", "install",
-                       "-e", "/tmp/noeris", "numpy", "scikit-learn", "-q"])
+# Install from Kaggle dataset (no internet needed)
+import zipfile
+dataset_zip = "/kaggle/input/noeris-source-code/noeris-code.zip"
+if os.path.exists(dataset_zip):
+    print("Installing from Kaggle dataset (offline)...")
+    with zipfile.ZipFile(dataset_zip, 'r') as z:
+        z.extractall("/tmp/noeris")
+    subprocess.check_call([sys.executable, "-m", "pip", "install",
+                           "-e", "/tmp/noeris", "numpy", "scikit-learn", "-q"])
+else:
+    # Fallback: clone from GitHub (needs internet/phone verification)
+    print("Dataset not found, cloning from GitHub...")
+    subprocess.run(["git", "clone", "--depth", "1",
+                    "https://github.com/PwnKit-Labs/noeris.git", "/tmp/noeris"],
+                   check=True)
+    subprocess.check_call([sys.executable, "-m", "pip", "install",
+                           "-e", "/tmp/noeris", "numpy", "scikit-learn", "-q"])
 
 print("=" * 60)
 print("PHASE 1: Validate all 14 operators")

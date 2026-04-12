@@ -8,6 +8,6 @@
   "enable_gpu": true,
   "enable_internet": true,
   "competition_sources": [],
-  "dataset_sources": [],
+  "dataset_sources": ["peaktwilight/noeris-source-code"],
   "kernel_sources": []
 }
