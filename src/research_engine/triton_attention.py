@@ -244,6 +244,139 @@ def make_sliding_window_mask(seq_len: int, window_size: int, is_causal: bool):
     return mask  # dtype=torch.bool
 
 
+_triton_attn_available = False
+_attn_fwd_kernel_compiled = None
+
+
+def _ensure_triton_attention():
+    global _triton_attn_available, _attn_fwd_kernel_compiled
+    if _attn_fwd_kernel_compiled is not None:
+        return
+    try:
+        import triton
+        import triton.language as tl
+
+        @triton.jit
+        def _attn_fwd_kernel(
+            Q, K, V, Out,
+            QScale, KScale,
+            stride_qb, stride_qh, stride_qm, stride_qk,
+            stride_kb, stride_kh, stride_kn, stride_kk,
+            stride_vb, stride_vh, stride_vn, stride_vk,
+            stride_ob, stride_oh, stride_om, stride_ok,
+            B, H, M, N,
+            sm_scale,
+            HEAD_DIM: tl.constexpr,
+            NUM_KV_HEADS: tl.constexpr,
+            GROUP_SIZE: tl.constexpr,
+            BLOCK_M: tl.constexpr,
+            BLOCK_N: tl.constexpr,
+            IS_CAUSAL: tl.constexpr,
+            WINDOW_SIZE: tl.constexpr,
+            USE_QK_NORM: tl.constexpr,
+        ):
+            pid = tl.program_id(0)
+            off_bh = tl.program_id(1)
+            off_b = off_bh // H
+            off_h = off_bh % H
+            off_kvh = off_h // GROUP_SIZE
+
+            q_base = Q + off_b * stride_qb + off_h * stride_qh
+            k_base = K + off_b * stride_kb + off_kvh * stride_kh
+            v_base = V + off_b * stride_vb + off_kvh * stride_vh
+            o_base = Out + off_b * stride_ob + off_h * stride_oh
+
+            offs_m = pid * BLOCK_M + tl.arange(0, BLOCK_M)
+            offs_k = tl.arange(0, HEAD_DIM)
+            offs_n = tl.arange(0, BLOCK_N)
+
+            q_ptrs = q_base + offs_m[:, None] * stride_qm + offs_k[None, :] * stride_qk
+            q_mask = offs_m[:, None] < M
+            q = tl.load(q_ptrs, mask=q_mask, other=0.0)
+
+            if USE_QK_NORM:
+                q = q.to(tl.float32)
+                q_sq = q * q
+                q_var = tl.sum(q_sq, axis=1) / HEAD_DIM
+                q_rstd = 1.0 / tl.sqrt(q_var + 1e-6)
+                q = q * q_rstd[:, None]
+                q_scale_val = tl.load(QScale + offs_k)
+                q = q * q_scale_val[None, :]
+                q = q.to(tl.float16)
+
+            m_i = tl.zeros((BLOCK_M,), dtype=tl.float32) - 1.0e30
+            l_i = tl.zeros((BLOCK_M,), dtype=tl.float32)
+            acc = tl.zeros((BLOCK_M, HEAD_DIM), dtype=tl.float32)
+
+            qk_scale = sm_scale * 1.44269504
+
+            for start_n in range(0, N, BLOCK_N):
+                tile_in_range = True
+                if WINDOW_SIZE > 0:
+                    tile_k_last = start_n + BLOCK_N - 1
+                    q_window_floor = pid * BLOCK_M - WINDOW_SIZE + 1
+                    tile_in_range = tile_k_last >= q_window_floor
+                if IS_CAUSAL:
+                    if tile_in_range:
+                        tile_in_range = start_n < (pid + 1) * BLOCK_M
+
+                if tile_in_range:
+                    curr_n = start_n + offs_n
+                    k_ptrs = k_base + curr_n[:, None] * stride_kn + offs_k[None, :] * stride_kk
+                    v_ptrs = v_base + curr_n[:, None] * stride_vn + offs_k[None, :] * stride_vk
+                    n_mask = curr_n[:, None] < N
+                    k = tl.load(k_ptrs, mask=n_mask, other=0.0)
+                    v = tl.load(v_ptrs, mask=n_mask, other=0.0)
+
+                    if USE_QK_NORM:
+                        k = k.to(tl.float32)
+                        k_sq = k * k
+                        k_var = tl.sum(k_sq, axis=1) / HEAD_DIM
+                        k_rstd = 1.0 / tl.sqrt(k_var + 1e-6)
+                        k = k * k_rstd[:, None]
+                        k_scale_val = tl.load(KScale + offs_k)
+                        k = k * k_scale_val[None, :]
+                        k = k.to(tl.float16)
+
+                    qk = tl.dot(q, tl.trans(k))
+                    qk = qk * qk_scale
+
+                    NEG_INF = -1.0e30
+                    qk = tl.where(curr_n[None, :] < N, qk, NEG_INF)
+
+                    if IS_CAUSAL:
+                        causal_mask = offs_m[:, None] >= curr_n[None, :]
+                        qk = tl.where(causal_mask, qk, NEG_INF)
+
+                    if WINDOW_SIZE > 0:
+                        window_floor = offs_m[:, None] - WINDOW_SIZE + 1
+                        window_mask = curr_n[None, :] >= window_floor
+                        qk = tl.where(window_mask, qk, NEG_INF)
+
+                    m_ij = tl.max(qk, axis=1)
+                    m_new = tl.maximum(m_i, m_ij)
+                    alpha = tl.exp2(m_i - m_new)
+                    p = tl.exp2(qk - m_new[:, None])
+                    l_ij = tl.sum(p, axis=1)
+                    l_i = l_i * alpha + l_ij
+
+                    acc = acc * alpha[:, None]
+                    acc += tl.dot(p.to(v.dtype), v)
+
+                    m_i = m_new
+
+            safe_l = tl.where(l_i > 0.0, l_i, 1.0)
+            acc = acc / safe_l[:, None]
+
+            o_ptrs = o_base + offs_m[:, None] * stride_om + offs_k[None, :] * stride_ok
+            tl.store(o_ptrs, acc.to(Out.dtype.element_ty), mask=q_mask)
+
+        _attn_fwd_kernel_compiled = _attn_fwd_kernel
+        _triton_attn_available = True
+    except ImportError:
+        _triton_attn_available = False
+
+
 def flash_attn(
     q, k, v, config=None, is_causal=False, sm_scale=None, window_size=-1,
     use_qk_norm=False, q_scale=None, k_scale=None,
@@ -271,141 +404,13 @@ def flash_attn(
     """
     import torch
     import triton
-    import triton.language as tl
+
+    _ensure_triton_attention()
+    if not _triton_attn_available:
+        raise RuntimeError("Triton not available")
 
     if config is None:
         config = ATTENTION_CURATED_CONFIGS[0]
-
-    @triton.jit
-    def _attn_fwd_kernel(
-        Q, K, V, Out,
-        QScale, KScale,
-        stride_qb, stride_qh, stride_qm, stride_qk,
-        stride_kb, stride_kh, stride_kn, stride_kk,
-        stride_vb, stride_vh, stride_vn, stride_vk,
-        stride_ob, stride_oh, stride_om, stride_ok,
-        B, H, M, N,
-        sm_scale,
-        HEAD_DIM: tl.constexpr,
-        NUM_KV_HEADS: tl.constexpr,
-        GROUP_SIZE: tl.constexpr,
-        BLOCK_M: tl.constexpr,
-        BLOCK_N: tl.constexpr,
-        IS_CAUSAL: tl.constexpr,
-        WINDOW_SIZE: tl.constexpr,
-        USE_QK_NORM: tl.constexpr,
-    ):
-        pid = tl.program_id(0)
-        off_bh = tl.program_id(1)
-        off_b = off_bh // H
-        off_h = off_bh % H
-        off_kvh = off_h // GROUP_SIZE
-
-        q_base = Q + off_b * stride_qb + off_h * stride_qh
-        k_base = K + off_b * stride_kb + off_kvh * stride_kh
-        v_base = V + off_b * stride_vb + off_kvh * stride_vh
-        o_base = Out + off_b * stride_ob + off_h * stride_oh
-
-        offs_m = pid * BLOCK_M + tl.arange(0, BLOCK_M)
-        offs_k = tl.arange(0, HEAD_DIM)
-        offs_n = tl.arange(0, BLOCK_N)
-
-        q_ptrs = q_base + offs_m[:, None] * stride_qm + offs_k[None, :] * stride_qk
-        q_mask = offs_m[:, None] < M
-        q = tl.load(q_ptrs, mask=q_mask, other=0.0)
-
-        if USE_QK_NORM:
-            q = q.to(tl.float32)
-            q_sq = q * q
-            q_var = tl.sum(q_sq, axis=1) / HEAD_DIM
-            q_rstd = 1.0 / tl.sqrt(q_var + 1e-6)
-            q = q * q_rstd[:, None]
-            q_scale_val = tl.load(QScale + offs_k)
-            q = q * q_scale_val[None, :]
-            q = q.to(tl.float16)
-
-        m_i = tl.zeros((BLOCK_M,), dtype=tl.float32) - 1.0e30
-        l_i = tl.zeros((BLOCK_M,), dtype=tl.float32)
-        acc = tl.zeros((BLOCK_M, HEAD_DIM), dtype=tl.float32)
-
-        qk_scale = sm_scale * 1.44269504
-
-        for start_n in range(0, N, BLOCK_N):
-            # -- Tile pruning: skip K-tiles entirely outside the window ------
-            # WINDOW_SIZE is tl.constexpr so the outer branch compiles away
-            # for non-window shapes.  The inner runtime check on start_n lets
-            # Triton emit a predicated branch that skips loads + matmul for
-            # tiles that cannot contribute any attended keys.
-            #
-            # For Q-block [pid*BM, (pid+1)*BM):
-            #   Earliest needed key: pid*BM - WINDOW_SIZE + 1
-            #   Latest needed key (causal): (pid+1)*BM - 1
-            # A K-tile [start_n, start_n+BN) is entirely before the window
-            # when start_n + BN <= pid*BM - WINDOW_SIZE + 1, i.e.
-            # start_n + BN - 1 < pid*BM - WINDOW_SIZE + 1.
-            # A K-tile is entirely after the causal diagonal when
-            # start_n >= (pid+1)*BM (causal only).
-            tile_in_range = True  # Python-level default; Triton sees constexpr path
-            if WINDOW_SIZE > 0:
-                # Entire K-tile is before the window for all queries in this Q-block?
-                tile_k_last = start_n + BLOCK_N - 1
-                q_window_floor = pid * BLOCK_M - WINDOW_SIZE + 1
-                tile_in_range = tile_k_last >= q_window_floor
-            if IS_CAUSAL:
-                # Entire K-tile is after the last query in this Q-block?
-                if tile_in_range:
-                    tile_in_range = start_n < (pid + 1) * BLOCK_M
-
-            if tile_in_range:
-                curr_n = start_n + offs_n
-                k_ptrs = k_base + curr_n[:, None] * stride_kn + offs_k[None, :] * stride_kk
-                v_ptrs = v_base + curr_n[:, None] * stride_vn + offs_k[None, :] * stride_vk
-                n_mask = curr_n[:, None] < N
-                k = tl.load(k_ptrs, mask=n_mask, other=0.0)
-                v = tl.load(v_ptrs, mask=n_mask, other=0.0)
-
-                if USE_QK_NORM:
-                    k = k.to(tl.float32)
-                    k_sq = k * k
-                    k_var = tl.sum(k_sq, axis=1) / HEAD_DIM
-                    k_rstd = 1.0 / tl.sqrt(k_var + 1e-6)
-                    k = k * k_rstd[:, None]
-                    k_scale_val = tl.load(KScale + offs_k)
-                    k = k * k_scale_val[None, :]
-                    k = k.to(tl.float16)
-
-                qk = tl.dot(q, tl.trans(k))
-                qk = qk * qk_scale
-
-                NEG_INF = -1.0e30
-                qk = tl.where(curr_n[None, :] < N, qk, NEG_INF)
-
-                if IS_CAUSAL:
-                    causal_mask = offs_m[:, None] >= curr_n[None, :]
-                    qk = tl.where(causal_mask, qk, NEG_INF)
-
-                if WINDOW_SIZE > 0:
-                    window_floor = offs_m[:, None] - WINDOW_SIZE + 1
-                    window_mask = curr_n[None, :] >= window_floor
-                    qk = tl.where(window_mask, qk, NEG_INF)
-
-                m_ij = tl.max(qk, axis=1)
-                m_new = tl.maximum(m_i, m_ij)
-                alpha = tl.exp2(m_i - m_new)
-                p = tl.exp2(qk - m_new[:, None])
-                l_ij = tl.sum(p, axis=1)
-                l_i = l_i * alpha + l_ij
-
-                acc = acc * alpha[:, None]
-                acc += tl.dot(p.to(v.dtype), v)
-
-                m_i = m_new
-
-        safe_l = tl.where(l_i > 0.0, l_i, 1.0)
-        acc = acc / safe_l[:, None]
-
-        o_ptrs = o_base + offs_m[:, None] * stride_om + offs_k[None, :] * stride_ok
-        tl.store(o_ptrs, acc.to(Out.dtype.element_ty), mask=q_mask)
 
     B, H, M, D = q.shape
     _, Hk, N, Dk = k.shape
@@ -432,7 +437,7 @@ def flash_attn(
         k_scale = torch.ones(D, device=k.device, dtype=torch.float32)
 
     grid = (triton.cdiv(M, BLOCK_M), B * H, 1)
-    _attn_fwd_kernel[grid](
+    _attn_fwd_kernel_compiled[grid](
         q, k, v, out,
         q_scale, k_scale,
         q.stride(0), q.stride(1), q.stride(2), q.stride(3),

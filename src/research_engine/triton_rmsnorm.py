@@ -154,6 +154,49 @@ def generate_rmsnorm_grid(
     return configs
 
 
+_triton_available = False
+_rmsnorm_kernel_compiled = None
+
+
+def _ensure_triton_rmsnorm():
+    global _triton_available, _rmsnorm_kernel_compiled
+    if _rmsnorm_kernel_compiled is not None:
+        return
+    try:
+        import triton
+        import triton.language as tl
+
+        @triton.jit
+        def _rmsnorm_kernel(
+            x_ptr, w_ptr, y_ptr,
+            x_row_stride,
+            y_row_stride,
+            n_cols,
+            eps,
+            BLOCK_SIZE: tl.constexpr,
+            AFFINE_MODE: tl.constexpr,
+        ):
+            row_idx = tl.program_id(0)
+            x_ptr += row_idx * x_row_stride
+            y_ptr += row_idx * y_row_stride
+            offs = tl.arange(0, BLOCK_SIZE)
+            mask = offs < n_cols
+            x = tl.load(x_ptr + offs, mask=mask, other=0.0).to(tl.float32)
+            mean_sq = tl.sum(x * x, axis=0) / n_cols
+            rstd = 1.0 / tl.sqrt(mean_sq + eps)
+            w = tl.load(w_ptr + offs, mask=mask, other=0.0).to(tl.float32)
+            if AFFINE_MODE == 0:
+                y = x * rstd * w
+            else:
+                y = x * rstd * (1.0 + w)
+            tl.store(y_ptr + offs, y.to(tl.float16), mask=mask)
+
+        _rmsnorm_kernel_compiled = _rmsnorm_kernel
+        _triton_available = True
+    except ImportError:
+        _triton_available = False
+
+
 def rmsnorm(x, w, config=None, eps=1e-6, affine_mode=0):
     """Module-level RMSNorm launcher. Requires CUDA GPU.
 
@@ -171,41 +214,18 @@ def rmsnorm(x, w, config=None, eps=1e-6, affine_mode=0):
     """
     import torch
     import triton
-    import triton.language as tl
+
+    _ensure_triton_rmsnorm()
+    if not _triton_available:
+        raise RuntimeError("Triton not available")
 
     if config is None:
         config = RMSNORM_CURATED_CONFIGS[0]
 
-    # Define kernel inline (lazy, so module imports on CPU)
-    @triton.jit
-    def _rmsnorm_kernel(
-        x_ptr, w_ptr, y_ptr,
-        x_row_stride,
-        y_row_stride,
-        n_cols,
-        eps,
-        BLOCK_SIZE: tl.constexpr,
-        AFFINE_MODE: tl.constexpr,
-    ):
-        row_idx = tl.program_id(0)
-        x_ptr += row_idx * x_row_stride
-        y_ptr += row_idx * y_row_stride
-        offs = tl.arange(0, BLOCK_SIZE)
-        mask = offs < n_cols
-        x = tl.load(x_ptr + offs, mask=mask, other=0.0).to(tl.float32)
-        mean_sq = tl.sum(x * x, axis=0) / n_cols
-        rstd = 1.0 / tl.sqrt(mean_sq + eps)
-        w = tl.load(w_ptr + offs, mask=mask, other=0.0).to(tl.float32)
-        if AFFINE_MODE == 0:
-            y = x * rstd * w
-        else:
-            y = x * rstd * (1.0 + w)
-        tl.store(y_ptr + offs, y.to(tl.float16), mask=mask)
-
     n_rows, n_cols = x.shape
     y = torch.empty_like(x)
     BLOCK_SIZE = max(config["BLOCK_SIZE"], triton.next_power_of_2(n_cols))
-    _rmsnorm_kernel[(n_rows,)](
+    _rmsnorm_kernel_compiled[(n_rows,)](
         x, w, y,
         x.stride(0), y.stride(0),
         n_cols, eps,

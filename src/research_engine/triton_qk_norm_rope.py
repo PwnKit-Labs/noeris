@@ -137,6 +137,57 @@ def generate_qk_norm_rope_grid(
     return configs
 
 
+_triton_qk_available = False
+_qk_norm_rope_kernel_compiled = None
+
+
+def _ensure_triton_qk_norm_rope():
+    global _triton_qk_available, _qk_norm_rope_kernel_compiled
+    if _qk_norm_rope_kernel_compiled is not None:
+        return
+    try:
+        import triton
+        import triton.language as tl
+
+        @triton.jit
+        def _qk_norm_rope_kernel(
+            x_ptr, scale_ptr, cos_ptr, sin_ptr, out_ptr,
+            row_stride,
+            heads, seq_len, head_dim,
+            eps,
+            BLOCK_SIZE: tl.constexpr,
+        ):
+            pid = tl.program_id(0)
+            s_idx = pid % seq_len
+            x_base = x_ptr + pid * row_stride
+            out_base = out_ptr + pid * row_stride
+            half = head_dim // 2
+            offs = tl.arange(0, BLOCK_SIZE)
+            mask = offs < half
+            x_even = tl.load(x_base + 2 * offs, mask=mask, other=0.0).to(tl.float32)
+            x_odd = tl.load(x_base + 2 * offs + 1, mask=mask, other=0.0).to(tl.float32)
+            sum_sq = tl.sum(x_even * x_even, axis=0) + tl.sum(x_odd * x_odd, axis=0)
+            mean_sq = sum_sq / head_dim
+            rstd = 1.0 / tl.sqrt(mean_sq + eps)
+            s_even = tl.load(scale_ptr + 2 * offs, mask=mask, other=0.0).to(tl.float32)
+            s_odd = tl.load(scale_ptr + 2 * offs + 1, mask=mask, other=0.0).to(tl.float32)
+            n_even = x_even * rstd * (1.0 + s_even)
+            n_odd = x_odd * rstd * (1.0 + s_odd)
+            cos_row = cos_ptr + s_idx * half
+            sin_row = sin_ptr + s_idx * half
+            c = tl.load(cos_row + offs, mask=mask, other=1.0).to(tl.float32)
+            sn = tl.load(sin_row + offs, mask=mask, other=0.0).to(tl.float32)
+            out_even = n_even * c - n_odd * sn
+            out_odd = n_even * sn + n_odd * c
+            tl.store(out_base + 2 * offs, out_even.to(tl.float16), mask=mask)
+            tl.store(out_base + 2 * offs + 1, out_odd.to(tl.float16), mask=mask)
+
+        _qk_norm_rope_kernel_compiled = _qk_norm_rope_kernel
+        _triton_qk_available = True
+    except ImportError:
+        _triton_qk_available = False
+
+
 def apply_qk_norm_rope(q, k, cos, sin, q_scale, k_scale, config=None, eps=1e-6):
     """Module-level fused QK-RMSNorm+RoPE launcher. Requires CUDA GPU.
 
@@ -156,43 +207,13 @@ def apply_qk_norm_rope(q, k, cos, sin, q_scale, k_scale, config=None, eps=1e-6):
     """
     import torch
     import triton
-    import triton.language as tl
+
+    _ensure_triton_qk_norm_rope()
+    if not _triton_qk_available:
+        raise RuntimeError("Triton not available")
 
     if config is None:
         config = QK_NORM_ROPE_CURATED_CONFIGS[0]
-
-    @triton.jit
-    def _qk_norm_rope_kernel(
-        x_ptr, scale_ptr, cos_ptr, sin_ptr, out_ptr,
-        row_stride,
-        heads, seq_len, head_dim,
-        eps,
-        BLOCK_SIZE: tl.constexpr,
-    ):
-        pid = tl.program_id(0)
-        s_idx = pid % seq_len
-        x_base = x_ptr + pid * row_stride
-        out_base = out_ptr + pid * row_stride
-        half = head_dim // 2
-        offs = tl.arange(0, BLOCK_SIZE)
-        mask = offs < half
-        x_even = tl.load(x_base + 2 * offs, mask=mask, other=0.0).to(tl.float32)
-        x_odd = tl.load(x_base + 2 * offs + 1, mask=mask, other=0.0).to(tl.float32)
-        sum_sq = tl.sum(x_even * x_even, axis=0) + tl.sum(x_odd * x_odd, axis=0)
-        mean_sq = sum_sq / head_dim
-        rstd = 1.0 / tl.sqrt(mean_sq + eps)
-        s_even = tl.load(scale_ptr + 2 * offs, mask=mask, other=0.0).to(tl.float32)
-        s_odd = tl.load(scale_ptr + 2 * offs + 1, mask=mask, other=0.0).to(tl.float32)
-        n_even = x_even * rstd * (1.0 + s_even)
-        n_odd = x_odd * rstd * (1.0 + s_odd)
-        cos_row = cos_ptr + s_idx * half
-        sin_row = sin_ptr + s_idx * half
-        c = tl.load(cos_row + offs, mask=mask, other=1.0).to(tl.float32)
-        sn = tl.load(sin_row + offs, mask=mask, other=0.0).to(tl.float32)
-        out_even = n_even * c - n_odd * sn
-        out_odd = n_even * sn + n_odd * c
-        tl.store(out_base + 2 * offs, out_even.to(tl.float16), mask=mask)
-        tl.store(out_base + 2 * offs + 1, out_odd.to(tl.float16), mask=mask)
 
     B, H, S, D = q.shape
     _, H_kv, _, _ = k.shape
@@ -211,7 +232,7 @@ def apply_qk_norm_rope(q, k, cos, sin, q_scale, k_scale, config=None, eps=1e-6):
     sin_c = sin.contiguous()
 
     # Q launch
-    _qk_norm_rope_kernel[(B * H * S,)](
+    _qk_norm_rope_kernel_compiled[(B * H * S,)](
         q_flat, q_scale, cos_c, sin_c, q_out_flat,
         D, H, S, D, eps,
         BLOCK_SIZE=BLOCK_SIZE,
@@ -220,7 +241,7 @@ def apply_qk_norm_rope(q, k, cos, sin, q_scale, k_scale, config=None, eps=1e-6):
     )
 
     # K launch
-    _qk_norm_rope_kernel[(B * H_kv * S,)](
+    _qk_norm_rope_kernel_compiled[(B * H_kv * S,)](
         k_flat, k_scale, cos_c, sin_c, k_out_flat,
         D, H_kv, S, D, eps,
         BLOCK_SIZE=BLOCK_SIZE,
