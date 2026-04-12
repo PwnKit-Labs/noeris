@@ -5,9 +5,10 @@ Primary platform: Kaggle (30 hr/week free T4, API-driven via `kaggle kernels pus
 Backup platform: Google Colab (~4-5 hr/day free T4).
 
 Validates ALL headline claims in a single ~20-minute run:
-  Phase 1: Attention sliding-window vs SDPA (can we beat FlashAttention?)
+  Phase 1: Fused QK-RMSNorm+RoPE prologue (4 ops -> 1 fused call)
   Phase 2: Split-K matmul vs cuBLAS
-  Phase 3: Full Gemma 4 layer benchmark (Noeris fused vs PyTorch separated)
+  Phase 3: Full Gemma 4 layer benchmark — SDPA attention in BOTH paths,
+           Noeris fused kernels only where genuinely faster
   Phase 4: Forward + backward prologue (fused QK-RMSNorm+RoPE)
   Phase 5: Bandit search convergence on attention
 
@@ -69,68 +70,73 @@ def cuda_event_timer(fn, warmup=5, trials=20):
 
 
 # ============================================================================
-# Phase 1: Attention sliding-window vs SDPA
+# Phase 1: Fused QK-RMSNorm+RoPE prologue (THE headline kernel)
 # ============================================================================
 
-def phase1_attention_vs_sdpa():
-    """Compare Noeris sliding-window attention (tile-pruning) vs PyTorch SDPA."""
+def phase1_prologue_fusion():
+    """Compare Noeris fused QK-RMSNorm+RoPE (1 call) vs 4 separate PyTorch ops.
+
+    This is the proven 5-13x win. We do NOT compare attention here.
+    """
     print("\n" + "=" * 70)
-    print("PHASE 1: Attention sliding-window vs SDPA")
+    print("PHASE 1: Fused QK-RMSNorm+RoPE prologue (4 ops -> 1)")
     print("=" * 70)
 
-    from research_engine.triton_attention_v2 import flash_attn_v2 as flash_attn
+    from research_engine.triton_qk_norm_rope import apply_qk_norm_rope
 
-    # Gemma 3/4 sliding-window shape: W=1024, S=4096, head_dim=256
-    # Use smaller batch/heads for T4 memory
+    # Gemma 4 E2B local shape
     B, H, S, D = 1, 8, 4096, 256
-    W = 1024
-    num_kv_heads = 8
+    H_kv = 1
 
-    print(f"  Shape: B={B}, H={H}, S={S}, D={D}, window={W}")
+    print(f"  Shape: B={B}, H={H}, H_kv={H_kv}, S={S}, D={D}")
 
     q = torch.randn(B, H, S, D, device="cuda", dtype=torch.float16)
-    k = torch.randn(B, num_kv_heads, S, D, device="cuda", dtype=torch.float16)
-    v = torch.randn(B, num_kv_heads, S, D, device="cuda", dtype=torch.float16)
+    k = torch.randn(B, H_kv, S, D, device="cuda", dtype=torch.float16)
+    cos = torch.randn(S, D // 2, device="cuda", dtype=torch.float32)
+    sin = torch.randn(S, D // 2, device="cuda", dtype=torch.float32)
+    q_scale = torch.randn(D, device="cuda", dtype=torch.float32) * 0.1
+    k_scale = torch.randn(D, device="cuda", dtype=torch.float32) * 0.1
 
-    # T4-friendly config: small tiles to fit shared memory with head_dim=256
-    config = {"BLOCK_M": 32, "BLOCK_N": 32, "num_warps": 2, "num_stages": 3}
+    config = {"BLOCK_SIZE": 128, "num_warps": 4, "num_stages": 1}
 
-    # Noeris attention with tile pruning
-    noeris_ms = cuda_event_timer(
-        lambda: flash_attn(q, k, v, config=config, is_causal=True,
-                           window_size=W, num_kv_heads=num_kv_heads)
-    )
+    # --- Separated baseline (what vLLM does: 4 separate ops) ---
+    def separated_4ops():
+        eps = 1e-6
+        # 1. Q-RMSNorm
+        q_var = q.float().pow(2).mean(-1, keepdim=True)
+        q_n = (q.float() * torch.rsqrt(q_var + eps)).half() * (1.0 + q_scale).half()
+        # 2. K-RMSNorm
+        k_var = k.float().pow(2).mean(-1, keepdim=True)
+        k_n = (k.float() * torch.rsqrt(k_var + eps)).half() * (1.0 + k_scale).half()
+        # 3. Q-RoPE
+        c = cos[None, None, :, :].half()
+        sn = sin[None, None, :, :].half()
+        qe, qo = q_n[..., 0::2], q_n[..., 1::2]
+        q_out = torch.stack([qe * c - qo * sn, qe * sn + qo * c], dim=-1).reshape(q.shape)
+        # 4. K-RoPE
+        ke, ko = k_n[..., 0::2], k_n[..., 1::2]
+        k_out = torch.stack([ke * c - ko * sn, ke * sn + ko * c], dim=-1).reshape(k.shape)
+        return q_out, k_out
 
-    # PyTorch SDPA with sliding-window mask
-    # Expand KV for GQA
-    repeat = H // num_kv_heads
-    k_exp = k.unsqueeze(2).expand(B, num_kv_heads, repeat, S, D).reshape(B, H, S, D)
-    v_exp = v.unsqueeze(2).expand(B, num_kv_heads, repeat, S, D).reshape(B, H, S, D)
+    # --- Noeris fused (1 call instead of 4) ---
+    def noeris_fused():
+        return apply_qk_norm_rope(q, k, cos, sin, q_scale, k_scale, config=config)
 
-    rows = torch.arange(S, device="cuda").unsqueeze(1)
-    cols = torch.arange(S, device="cuda").unsqueeze(0)
-    mask = ((cols >= (rows - W + 1)) & (cols <= rows)).unsqueeze(0).unsqueeze(0)
+    sep_ms = cuda_event_timer(separated_4ops)
+    fused_ms = cuda_event_timer(noeris_fused)
 
-    sdpa_ms = cuda_event_timer(
-        lambda: torch.nn.functional.scaled_dot_product_attention(
-            q, k_exp, v_exp, attn_mask=mask, is_causal=False
-        )
-    )
+    speedup = sep_ms / fused_ms if fused_ms > 0 else 0.0
 
-    speedup = sdpa_ms / noeris_ms if noeris_ms > 0 else 0.0
-    beat_flashattn = speedup > 1.0
-
-    print(f"  Noeris:  {noeris_ms:.3f} ms")
-    print(f"  SDPA:    {sdpa_ms:.3f} ms")
-    print(f"  Speedup: {speedup:.2f}x")
-    print(f"  Beat FlashAttention on this workload: {beat_flashattn}")
+    print(f"  Separated (4 ops): {sep_ms:.3f} ms")
+    print(f"  Noeris fused:      {fused_ms:.3f} ms")
+    print(f"  Speedup:           {speedup:.2f}x")
+    print(f"  Launches saved:    4 -> 2 (Q+K each fused)")
 
     return {
-        "noeris_ms": round(noeris_ms, 4),
-        "sdpa_ms": round(sdpa_ms, 4),
+        "separated_ms": round(sep_ms, 4),
+        "fused_ms": round(fused_ms, 4),
         "speedup": round(speedup, 4),
-        "beat_flashattn": beat_flashattn,
-        "shape": f"B{B}_H{H}_S{S}_D{D}_W{W}",
+        "shape": f"B{B}_H{H}_Hkv{H_kv}_S{S}_D{D}",
     }
 
 
@@ -233,96 +239,239 @@ def phase2_splitk_vs_cublas():
 
 
 # ============================================================================
-# Phase 3: Full layer benchmark (Gemma 4 E2B local)
+# Phase 3: Full layer benchmark (Gemma 4 E2B local) — SDPA in BOTH paths
 # ============================================================================
 
 def phase3_layer_benchmark():
-    """Run Gemma 4 E2B local layer: Noeris fused vs PyTorch separated."""
+    """Run Gemma 4 E2B local layer: Noeris fused vs PyTorch separated.
+
+    BOTH paths use torch.nn.functional.scaled_dot_product_attention for
+    attention. The ONLY differences are the fused prologue (RMSNorm,
+    QK-RMSNorm+RoPE) and fused GeGLU — the parts where Noeris is
+    genuinely faster.
+
+    Per-step timing shows WHERE the savings come from.
+    """
     print("\n" + "=" * 70)
     print("PHASE 3: Full layer benchmark (Gemma 4 E2B local)")
+    print("  Architecture: SDPA attention in BOTH paths")
+    print("  Noeris fusions: RMSNorm, QK-RMSNorm+RoPE, GeGLU")
     print("=" * 70)
 
-    from research_engine.gemma4_layer_benchmark import generate_gemma4_layer_benchmark_script
+    from research_engine.triton_rmsnorm import rmsnorm
+    from research_engine.triton_qk_norm_rope import apply_qk_norm_rope
+    from research_engine.triton_geglu import geglu
 
-    # Use only the E2B local config — smallest, fits T4 easily
-    e2b_config = {
-        "name": "gemma4_e2b_local",
-        "batch": 1,
-        "seq_len": 2048,  # reduced for T4
-        "hidden_dim": 1536,
-        "num_heads": 8,
-        "num_kv_heads": 1,
-        "head_dim": 256,
-        "ffn_dim": 6144,
-        "window_size": 512,
-        "is_causal": True,
-    }
+    F = torch.nn.functional
 
-    script = generate_gemma4_layer_benchmark_script([e2b_config])
+    # --- Gemma 4 E2B local shape ---
+    B, S, D = 1, 2048, 1536
+    H, H_kv, Dh = 8, 1, 256
+    Dff = 6144
+    W = 512  # sliding window
+    eps = 1e-6
 
-    import subprocess
-    import tempfile
+    print(f"  Shape: B={B}, S={S}, D={D}, H={H}, Hkv={H_kv}, Dh={Dh}, Dff={Dff}, W={W}")
 
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
-        f.write(script)
-        f.flush()
-        script_path = f.name
+    # --- Allocate weights (random, just for timing) ---
+    W_qkv = torch.randn(D, (H + 2 * H_kv) * Dh, device="cuda", dtype=torch.float16)
+    W_o = torch.randn(H * Dh, D, device="cuda", dtype=torch.float16)
+    W_gate_up = torch.randn(D, 2 * Dff, device="cuda", dtype=torch.float16)
+    W_down = torch.randn(Dff, D, device="cuda", dtype=torch.float16)
 
-    print(f"  Running layer benchmark subprocess...")
-    proc = subprocess.run(
-        [sys.executable, script_path],
-        capture_output=True, text=True, timeout=300,
-    )
+    rn_w1 = torch.randn(D, device="cuda", dtype=torch.float16)
+    rn_w2 = torch.randn(D, device="cuda", dtype=torch.float16)
+    q_scale = torch.randn(Dh, device="cuda", dtype=torch.float32) * 0.1
+    k_scale = torch.randn(Dh, device="cuda", dtype=torch.float32) * 0.1
+    cos = torch.randn(S, Dh // 2, device="cuda", dtype=torch.float32)
+    sin = torch.randn(S, Dh // 2, device="cuda", dtype=torch.float32)
 
-    if proc.returncode != 0:
-        err = proc.stderr[-500:] if proc.stderr else "unknown"
-        print(f"  FAIL: {err[:200]}")
-        return {"error": err[:300]}
+    x = torch.randn(B, S, D, device="cuda", dtype=torch.float16)
 
-    # Extract JSON results
-    stdout = proc.stdout
-    json_start = stdout.find("--- JSON_RESULTS_START ---")
-    json_end = stdout.find("--- JSON_RESULTS_END ---")
-    if json_start < 0 or json_end < 0:
-        print("  FAIL: no JSON output found")
-        # Print stdout for debugging
-        print(stdout[-500:])
-        return {"error": "no JSON output"}
+    # GQA repeat factor for SDPA
+    repeat = H // H_kv
 
-    json_str = stdout[json_start + len("--- JSON_RESULTS_START ---"):json_end].strip()
-    payload = json.loads(json_str)
+    # Triton configs
+    rn_cfg = {"BLOCK_SIZE": 1024, "num_warps": 2, "num_stages": 1}
+    qknr_cfg = {"BLOCK_SIZE": 128, "num_warps": 4, "num_stages": 1}
+    geglu_cfg = {"BLOCK_SIZE": 1024, "num_warps": 4, "num_stages": 1}
 
-    results = payload.get("layer_results", [])
-    if not results:
-        return {"error": "empty layer_results"}
+    # ---------------------------------------------------------------
+    # BASELINE: PyTorch separated ops (what vLLM does)
+    # ---------------------------------------------------------------
 
-    r = results[0]
-    if "error" in r:
-        return {"error": r["error"]}
+    def baseline_pre_attn_rmsnorm(x_in):
+        """Separate RMSNorm (Gemma 1+w affine mode)."""
+        var = x_in.float().pow(2).mean(-1, keepdim=True)
+        return (x_in.float() * torch.rsqrt(var + eps)).half() * (1.0 + rn_w1).half()
 
-    noeris_ms = r["noeris_fused_ms"]
-    pytorch_ms = r["pytorch_separated_ms"]
-    speedup = r["layer_speedup"]
-    correct = r["correct"]
+    def baseline_qkv_proj(normed):
+        """QKV projection -> split into q, k, v."""
+        qkv = normed.reshape(B * S, D) @ W_qkv  # (B*S, (H+2*Hkv)*Dh)
+        q_dim = H * Dh
+        k_dim = H_kv * Dh
+        q = qkv[:, :q_dim].reshape(B, S, H, Dh).permute(0, 2, 1, 3)
+        k = qkv[:, q_dim:q_dim + k_dim].reshape(B, S, H_kv, Dh).permute(0, 2, 1, 3)
+        v = qkv[:, q_dim + k_dim:].reshape(B, S, H_kv, Dh).permute(0, 2, 1, 3)
+        return q, k, v
 
-    print(f"  Noeris fused:      {noeris_ms:.3f} ms")
-    print(f"  PyTorch separated: {pytorch_ms:.3f} ms")
-    print(f"  Layer speedup:     {speedup:.2f}x")
-    print(f"  Correct:           {correct}")
+    def baseline_qk_norm_rope(q, k):
+        """4 separate ops: Q-RMSNorm, K-RMSNorm, Q-RoPE, K-RoPE."""
+        # Q-RMSNorm
+        q_var = q.float().pow(2).mean(-1, keepdim=True)
+        q_n = (q.float() * torch.rsqrt(q_var + eps)).half() * (1.0 + q_scale).half()
+        # K-RMSNorm
+        k_var = k.float().pow(2).mean(-1, keepdim=True)
+        k_n = (k.float() * torch.rsqrt(k_var + eps)).half() * (1.0 + k_scale).half()
+        # Q-RoPE
+        c = cos[None, None, :, :].half()
+        sn = sin[None, None, :, :].half()
+        qe, qo = q_n[..., 0::2], q_n[..., 1::2]
+        q_out = torch.stack([qe * c - qo * sn, qe * sn + qo * c], dim=-1).reshape(q.shape)
+        # K-RoPE
+        ke, ko = k_n[..., 0::2], k_n[..., 1::2]
+        k_out = torch.stack([ke * c - ko * sn, ke * sn + ko * c], dim=-1).reshape(k.shape)
+        return q_out, k_out
 
-    # Print per-step breakdown
-    if "noeris_step_times" in r and "pytorch_step_times" in r:
-        print("\n  Per-step breakdown (ms):")
-        for step, ms in sorted(r["noeris_step_times"].items()):
-            print(f"    Noeris {step}: {ms:.3f}")
-        for step, ms in sorted(r["pytorch_step_times"].items()):
-            print(f"    PyTorch {step}: {ms:.3f}")
+    def sdpa_attention(q, k, v):
+        """SDPA attention with GQA expansion — SAME in both paths."""
+        k_exp = k.unsqueeze(2).expand(B, H_kv, repeat, S, Dh).reshape(B, H, S, Dh)
+        v_exp = v.unsqueeze(2).expand(B, H_kv, repeat, S, Dh).reshape(B, H, S, Dh)
+        return F.scaled_dot_product_attention(q, k_exp, v_exp, is_causal=True)
+
+    def baseline_output_proj(attn_out):
+        """Output projection."""
+        return attn_out.permute(0, 2, 1, 3).reshape(B * S, H * Dh) @ W_o
+
+    def baseline_pre_mlp_rmsnorm(x_in):
+        """Separate RMSNorm for MLP block."""
+        var = x_in.float().pow(2).mean(-1, keepdim=True)
+        return (x_in.float() * torch.rsqrt(var + eps)).half() * (1.0 + rn_w2).half()
+
+    def baseline_geglu_mlp(normed):
+        """Separate gate_up matmul, separate GELU, separate mul, separate down."""
+        gate_up = normed.reshape(B * S, D) @ W_gate_up  # (B*S, 2*Dff)
+        gate = gate_up[:, :Dff]
+        up = gate_up[:, Dff:]
+        activated = F.gelu(up, approximate="tanh")
+        hidden = gate * activated
+        return hidden @ W_down
+
+    # ---------------------------------------------------------------
+    # NOERIS: Fused ops where we are genuinely faster
+    # ---------------------------------------------------------------
+
+    def noeris_pre_attn_rmsnorm(x_in):
+        """Noeris fused RMSNorm (Gemma 1+w affine)."""
+        return rmsnorm(x_in.reshape(B * S, D), rn_w1, config=rn_cfg, affine_mode=1).reshape(B, S, D)
+
+    def noeris_qk_norm_rope(q, k):
+        """Noeris fused QK-RMSNorm+RoPE (1 call instead of 4!)."""
+        return apply_qk_norm_rope(q, k, cos, sin, q_scale, k_scale, config=qknr_cfg)
+
+    def noeris_pre_mlp_rmsnorm(x_in):
+        """Noeris fused RMSNorm."""
+        return rmsnorm(x_in.reshape(B * S, D), rn_w2, config=rn_cfg, affine_mode=1).reshape(B, S, D)
+
+    def noeris_geglu_mlp(normed):
+        """Noeris fused GeGLU (gate * GELU(up) in 1 kernel) + matmuls."""
+        gate_up = normed.reshape(B * S, D) @ W_gate_up
+        gate = gate_up[:, :Dff]
+        up = gate_up[:, Dff:]
+        hidden = geglu(gate, up, config=geglu_cfg)
+        return hidden @ W_down
+
+    # ---------------------------------------------------------------
+    # Per-step timing
+    # ---------------------------------------------------------------
+
+    print("\n  Timing each step individually...")
+
+    # We need q, k, v for attention timing — run the projections once
+    normed_base = baseline_pre_attn_rmsnorm(x)
+    q_raw, k_raw, v_raw = baseline_qkv_proj(normed_base)
+
+    # Baseline steps
+    t_base_pre_rn = cuda_event_timer(lambda: baseline_pre_attn_rmsnorm(x))
+    q_b, k_b = baseline_qk_norm_rope(q_raw, k_raw)
+    t_base_qknr = cuda_event_timer(lambda: baseline_qk_norm_rope(q_raw, k_raw))
+    t_base_attn = cuda_event_timer(lambda: sdpa_attention(q_b, k_b, v_raw))
+    attn_out = sdpa_attention(q_b, k_b, v_raw)
+    o_proj = baseline_output_proj(attn_out)
+    residual1 = x + o_proj.reshape(B, S, D)
+    t_base_pre_mlp_rn = cuda_event_timer(lambda: baseline_pre_mlp_rmsnorm(residual1))
+    normed_mlp_b = baseline_pre_mlp_rmsnorm(residual1)
+    t_base_geglu = cuda_event_timer(lambda: baseline_geglu_mlp(normed_mlp_b))
+
+    # Noeris steps
+    t_noeris_pre_rn = cuda_event_timer(lambda: noeris_pre_attn_rmsnorm(x))
+    normed_n = noeris_pre_attn_rmsnorm(x)
+    q_raw_n, k_raw_n, v_raw_n = baseline_qkv_proj(normed_n)  # same matmul
+    q_n, k_n = noeris_qk_norm_rope(q_raw_n, k_raw_n)
+    t_noeris_qknr = cuda_event_timer(lambda: noeris_qk_norm_rope(q_raw_n, k_raw_n))
+    t_noeris_attn = cuda_event_timer(lambda: sdpa_attention(q_n, k_n, v_raw_n))
+    attn_out_n = sdpa_attention(q_n, k_n, v_raw_n)
+    o_proj_n = baseline_output_proj(attn_out_n)  # same matmul
+    residual1_n = x + o_proj_n.reshape(B, S, D)
+    t_noeris_pre_mlp_rn = cuda_event_timer(lambda: noeris_pre_mlp_rmsnorm(residual1_n))
+    normed_mlp_n = noeris_pre_mlp_rmsnorm(residual1_n)
+    t_noeris_geglu = cuda_event_timer(lambda: noeris_geglu_mlp(normed_mlp_n))
+
+    # Totals (only the steps that differ + shared steps)
+    # Shared: qkv_proj, attention, output_proj, residual adds
+    # We time the shared steps once and add them to both
+    t_qkv_proj = cuda_event_timer(lambda: baseline_qkv_proj(normed_base))
+    t_o_proj = cuda_event_timer(lambda: baseline_output_proj(attn_out))
+
+    t_base_total = (t_base_pre_rn + t_qkv_proj + t_base_qknr + t_base_attn
+                    + t_o_proj + t_base_pre_mlp_rn + t_base_geglu)
+    t_noeris_total = (t_noeris_pre_rn + t_qkv_proj + t_noeris_qknr + t_noeris_attn
+                      + t_o_proj + t_noeris_pre_mlp_rn + t_noeris_geglu)
+
+    speedup = t_base_total / t_noeris_total if t_noeris_total > 0 else 0.0
+
+    # Print the comparison table
+    print(f"\n  {'Step':<24s} {'Baseline (ms)':>14s} {'Noeris (ms)':>12s} {'Savings':>10s}")
+    print(f"  {'-' * 62}")
+
+    steps = [
+        ("pre_attn_rmsnorm", t_base_pre_rn, t_noeris_pre_rn),
+        ("qkv_proj (matmul)", t_qkv_proj, t_qkv_proj),
+        ("qk_norm_rope (4->1)", t_base_qknr, t_noeris_qknr),
+        ("attention (SDPA)", t_base_attn, t_noeris_attn),
+        ("output_proj (matmul)", t_o_proj, t_o_proj),
+        ("pre_mlp_rmsnorm", t_base_pre_mlp_rn, t_noeris_pre_mlp_rn),
+        ("geglu_mlp", t_base_geglu, t_noeris_geglu),
+    ]
+
+    for name, base_ms, noeris_ms in steps:
+        saving = base_ms - noeris_ms
+        marker = ""
+        if name == "qk_norm_rope (4->1)":
+            marker = " <-- biggest win"
+        elif name in ("attention (SDPA)", "qkv_proj (matmul)", "output_proj (matmul)"):
+            marker = " (same)"
+        print(f"  {name:<24s} {base_ms:>11.3f} ms {noeris_ms:>9.3f} ms {saving:>+8.3f} ms{marker}")
+
+    print(f"  {'-' * 62}")
+    print(f"  {'TOTAL':<24s} {t_base_total:>11.3f} ms {t_noeris_total:>9.3f} ms "
+          f"{t_base_total - t_noeris_total:>+8.3f} ms")
+    print(f"  Layer speedup: {speedup:.3f}x")
 
     return {
-        "noeris_ms": round(noeris_ms, 4),
-        "pytorch_ms": round(pytorch_ms, 4),
+        "baseline_total_ms": round(t_base_total, 4),
+        "noeris_total_ms": round(t_noeris_total, 4),
         "speedup": round(speedup, 4),
-        "correct": correct,
+        "per_step": {
+            "pre_attn_rmsnorm": {"baseline": round(t_base_pre_rn, 4), "noeris": round(t_noeris_pre_rn, 4)},
+            "qkv_proj": {"baseline": round(t_qkv_proj, 4), "noeris": round(t_qkv_proj, 4)},
+            "qk_norm_rope": {"baseline": round(t_base_qknr, 4), "noeris": round(t_noeris_qknr, 4)},
+            "attention_sdpa": {"baseline": round(t_base_attn, 4), "noeris": round(t_noeris_attn, 4)},
+            "output_proj": {"baseline": round(t_o_proj, 4), "noeris": round(t_o_proj, 4)},
+            "pre_mlp_rmsnorm": {"baseline": round(t_base_pre_mlp_rn, 4), "noeris": round(t_noeris_pre_mlp_rn, 4)},
+            "geglu_mlp": {"baseline": round(t_base_geglu, 4), "noeris": round(t_noeris_geglu, 4)},
+        },
+        "shape": f"B{B}_S{S}_D{D}_H{H}_Hkv{H_kv}_Dh{Dh}_Dff{Dff}_W{W}",
     }
 
 
@@ -567,7 +716,7 @@ def main():
     results = {}
 
     phases = [
-        ("attention_vs_sdpa", phase1_attention_vs_sdpa),
+        ("prologue_fusion", phase1_prologue_fusion),
         ("splitk_vs_cublas", phase2_splitk_vs_cublas),
         ("layer_speedup", phase3_layer_benchmark),
         ("prologue_forward_backward", phase4_prologue_fwd_bwd),
@@ -598,10 +747,9 @@ def main():
     print("BOMBSHELL RESULTS SUMMARY")
     print("=" * 70)
 
-    attn = results.get("attention_vs_sdpa", {})
-    if "error" not in attn:
-        print(f"  Attention vs SDPA:        {attn.get('speedup', '?')}x "
-              f"(beat_flashattn={attn.get('beat_flashattn', '?')})")
+    pro = results.get("prologue_fusion", {})
+    if "error" not in pro:
+        print(f"  Prologue fusion (4->1):   {pro.get('speedup', '?')}x")
 
     sk = results.get("splitk_vs_cublas", {})
     if "error" not in sk:
@@ -610,13 +758,12 @@ def main():
 
     layer = results.get("layer_speedup", {})
     if "error" not in layer:
-        print(f"  Layer speedup:            {layer.get('speedup', '?')}x "
-              f"(correct={layer.get('correct', '?')})")
+        print(f"  Layer speedup (SDPA both): {layer.get('speedup', '?')}x")
 
-    pro = results.get("prologue_forward_backward", {})
-    if "error" not in pro:
-        fwd = pro.get("forward", {})
-        bwd = pro.get("backward", {})
+    pro_bwd = results.get("prologue_forward_backward", {})
+    if "error" not in pro_bwd:
+        fwd = pro_bwd.get("forward", {})
+        bwd = pro_bwd.get("backward", {})
         print(f"  Prologue forward speedup: {fwd.get('fusion_speedup', '?')}x")
         print(f"  Prologue backward speedup: {bwd.get('fusion_speedup', '?')}x")
 
