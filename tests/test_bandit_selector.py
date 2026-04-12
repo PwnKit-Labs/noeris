@@ -589,5 +589,132 @@ class PosteriorSummaryTests(unittest.TestCase):
             self.assertEqual(summary, [])
 
 
+# ---------------------------------------------------------------------------
+# RankingSurrogate integration tests
+# ---------------------------------------------------------------------------
+
+class RankingSurrogateIntegrationTests(unittest.TestCase):
+    """Tests for the optional RankingSurrogate warm-start in select_configs."""
+
+    def _get_matmul_spec(self):
+        from research_engine.triton_operators import REGISTRY
+        return REGISTRY.get("matmul")
+
+    def _populate_db(self, db: ConfigDatabase, n: int = 60) -> None:
+        """Insert enough distinct records to exceed the 50-measurement threshold."""
+        for i in range(n):
+            bm = 32 * ((i % 8) + 1)
+            bn = 32 * (((i // 8) % 4) + 1)
+            cfg = _matmul_config(bm=bm, bn=bn, bk=64)
+            tflops = 100.0 + (i % 10) * 15.0
+            _record_many(db, [(cfg, tflops)], operator="matmul", bucket="medium")
+
+    def test_ranking_surrogate_integration_enabled(self) -> None:
+        """When enabled + enough data, surrogate-ranked configs get warm-start
+        bonus (higher alpha) before Thompson sampling."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = _make_db(Path(tmpdir))
+            self._populate_db(db, n=60)
+            spec = self._get_matmul_spec()
+
+            selector = BanditSelector(seed=42, use_ranking_surrogate=True)
+            configs = selector.select_configs(
+                spec=spec,
+                database=db,
+                hardware="A100",
+                shapes=[{"M": 2048, "N": 2048, "K": 2048}],
+                max_configs=8,
+            )
+            # Should still return configs (bandit works normally)
+            self.assertGreater(len(configs), 0)
+            self.assertLessEqual(len(configs), 8)
+
+            # At least one arm should have the warm-start bonus (alpha > prior + 2)
+            # The surrogate adds +2 to alpha of top-ranked configs.
+            any_boosted = False
+            for cell_arms in selector._arms.values():
+                for arm in cell_arms.values():
+                    # Arms from the database get +1 for each success observation.
+                    # Surrogate-boosted arms additionally get +2 on top of that.
+                    # A boosted arm that was also observed will have alpha >= _PRIOR_ALPHA + 2.
+                    if arm.alpha >= _PRIOR_ALPHA + 2:
+                        any_boosted = True
+                        break
+            self.assertTrue(any_boosted, "No arms received surrogate warm-start bonus")
+
+    def test_ranking_surrogate_integration_disabled_by_default(self) -> None:
+        """Default behaviour: use_ranking_surrogate=False, no warm-start bonus."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = _make_db(Path(tmpdir))
+            self._populate_db(db, n=60)
+            spec = self._get_matmul_spec()
+
+            selector = BanditSelector(seed=42)  # default: use_ranking_surrogate=False
+            self.assertFalse(selector.use_ranking_surrogate)
+
+            configs = selector.select_configs(
+                spec=spec,
+                database=db,
+                hardware="A100",
+                shapes=[{"M": 2048, "N": 2048, "K": 2048}],
+                max_configs=8,
+            )
+            self.assertGreater(len(configs), 0)
+
+            # No arm should have the +2 surrogate bonus.  Without the
+            # surrogate, alpha + beta == _PRIOR_ALPHA + _PRIOR_BETA + total_obs.
+            # The surrogate adds +2 to alpha only, which would make
+            # alpha + beta > prior_sum + total_obs.  Verify this invariant
+            # holds for every arm (i.e. no extra alpha was injected).
+            for cell_arms in selector._arms.values():
+                for arm in cell_arms.values():
+                    expected_sum = _PRIOR_ALPHA + _PRIOR_BETA + arm.total_observations
+                    self.assertAlmostEqual(
+                        arm.alpha + arm.beta, expected_sum,
+                        msg="Arm alpha+beta should equal prior + observations (no surrogate bonus)",
+                    )
+
+    def test_ranking_surrogate_graceful_fallback(self) -> None:
+        """If surrogate fit fails (e.g. not enough data), bandit continues
+        without it — no crash, normal config selection."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = _make_db(Path(tmpdir))
+            # Only 5 records — well below the 50-measurement threshold
+            self._populate_db(db, n=5)
+            spec = self._get_matmul_spec()
+
+            selector = BanditSelector(seed=42, use_ranking_surrogate=True)
+            configs = selector.select_configs(
+                spec=spec,
+                database=db,
+                hardware="A100",
+                shapes=[{"M": 2048, "N": 2048, "K": 2048}],
+                max_configs=8,
+            )
+            # Should still return configs — fallback to normal bandit
+            self.assertGreater(len(configs), 0)
+            self.assertLessEqual(len(configs), 8)
+
+    def test_ranking_surrogate_graceful_on_import_error(self) -> None:
+        """If gp_surrogate import fails, bandit continues without crash."""
+        import unittest.mock as mock
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = _make_db(Path(tmpdir))
+            self._populate_db(db, n=60)
+            spec = self._get_matmul_spec()
+
+            selector = BanditSelector(seed=42, use_ranking_surrogate=True)
+            # Patch the import to raise ImportError
+            with mock.patch.dict("sys.modules", {"research_engine.gp_surrogate": None}):
+                configs = selector.select_configs(
+                    spec=spec,
+                    database=db,
+                    hardware="A100",
+                    shapes=[{"M": 2048, "N": 2048, "K": 2048}],
+                    max_configs=8,
+                )
+            self.assertGreater(len(configs), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

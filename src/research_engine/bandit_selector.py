@@ -116,6 +116,13 @@ class BanditSelector:
     # Number of random configs to draw on a cold-start bucket. Roughly
     # matches the historical curated count for each operator.
     warm_start_size: int = 8
+    # When True AND the config database has 50+ measurements, fit a
+    # RankingSurrogate (cross-operator GBR) and use it to warm-start
+    # bandit arm priors for surrogate-recommended configs.  The bandit
+    # still makes the final selection via Thompson sampling, but
+    # surrogate-recommended configs get a higher initial alpha, so they
+    # are explored first.
+    use_ranking_surrogate: bool = False
 
     # Internal state: cell_key -> {config_id -> _BetaArm}
     _arms: dict[str, dict[str, _BetaArm]] = field(default_factory=dict, init=False, repr=False)
@@ -294,6 +301,68 @@ class BanditSelector:
 
         if use_curated_seeds is None:
             use_curated_seeds = self.use_curated_seeds
+
+        # ---- Surrogate warm-start (optional) ----
+        # When enabled and enough data exists, fit a RankingSurrogate and
+        # give its top-ranked configs a warm-start bonus in their arm priors.
+        # This biases the bandit to explore surrogate-recommended configs
+        # first while still allowing Thompson sampling to override.
+        _SURROGATE_MIN_RECORDS = 50
+        _SURROGATE_WARM_BONUS = 2  # equivalent to 2 prior successes
+
+        if self.use_ranking_surrogate:
+            total_records = sum(
+                len(rec.results) if isinstance(rec.results, list) else 0
+                for rec in database.records.values()
+            )
+            if total_records >= _SURROGATE_MIN_RECORDS:
+                try:
+                    from .gp_surrogate import RankingSurrogate
+
+                    surrogate = RankingSurrogate()
+                    fit_stats = surrogate.fit(database, hardware)
+                    if fit_stats.get("status") == "trained":
+                        # Generate the full grid once for candidate ranking
+                        try:
+                            all_grid_configs = spec.grid_generator_fn(
+                                include_curated=False, max_configs=500,
+                            )
+                        except TypeError:
+                            all_grid_configs = spec.grid_generator_fn(max_configs=500)
+
+                        for shape in shapes:
+                            bucket = spec.shape_bucket_fn(shape)
+                            cell = self._cell_key(spec.name, bucket, hardware)
+                            ranked = surrogate.recommend_configs_by_ranking(
+                                operator=spec.name,
+                                shape=shape,
+                                candidates=all_grid_configs,
+                                top_k=max_configs * 2,
+                            )
+                            for cfg in ranked[:max_configs]:
+                                # Strip predicted_score before using as config
+                                clean_cfg = {
+                                    k: v for k, v in cfg.items()
+                                    if k != "predicted_score"
+                                }
+                                cid = spec.config_id_fn(clean_cfg)
+                                arm = self._get_or_create_arm(cell, cid, clean_cfg)
+                                arm.alpha += _SURROGATE_WARM_BONUS
+                        LOGGER.debug(
+                            "RankingSurrogate warm-start applied (%d records, R²=%.3f)",
+                            fit_stats.get("n_samples", 0),
+                            fit_stats.get("r_squared", 0.0),
+                        )
+                    else:
+                        LOGGER.debug(
+                            "RankingSurrogate fit returned status=%s, skipping warm-start",
+                            fit_stats.get("status"),
+                        )
+                except Exception as exc:
+                    LOGGER.warning(
+                        "RankingSurrogate warm-start failed, continuing without it: %s",
+                        exc,
+                    )
 
         selected: list[dict[str, int]] = []
         seen_ids: set[str] = set()
