@@ -78,6 +78,27 @@ GEGLU_SHAPE_BUCKETS = [
     {"name": "llama3_70b",              "n_rows": 2048, "ffn_dim": 28672},
     {"name": "mistral_7b",              "n_rows": 2048, "ffn_dim": 14336},
     {"name": "phi3_mini",               "n_rows": 2048, "ffn_dim": 8192},
+    # ---------- April 2026 model expansion ----------
+    # Llama 4 Scout/Maverick (ffn_dim=16384 per MoE expert, SwiGLU)
+    {"name": "llama4_scout",            "n_rows": 2048, "ffn_dim": 16384},
+    # Qwen 3 family (SwiGLU)
+    {"name": "qwen3_8b",               "n_rows": 2048, "ffn_dim": 12288},
+    {"name": "qwen3_32b",              "n_rows": 2048, "ffn_dim": 25600},
+    # Mixtral 8x22B (ffn_dim=16384, SwiGLU)
+    {"name": "mixtral_8x22b",          "n_rows": 2048, "ffn_dim": 16384},
+    # Phi-4 family (SwiGLU)
+    {"name": "phi4_mini",              "n_rows": 2048, "ffn_dim": 8192},
+    {"name": "phi4_14b",               "n_rows": 2048, "ffn_dim": 17920},
+    # Falcon 3 (SwiGLU)
+    {"name": "falcon3_7b",             "n_rows": 2048, "ffn_dim": 8192},
+    {"name": "falcon3_10b",            "n_rows": 2048, "ffn_dim": 14336},
+    # DBRX (SwiGLU, ffn_dim=10752 per expert)
+    {"name": "dbrx",                   "n_rows": 2048, "ffn_dim": 10752},
+    # OLMo 2 (SwiGLU)
+    {"name": "olmo2_7b",               "n_rows": 2048, "ffn_dim": 11008},
+    {"name": "olmo2_32b",              "n_rows": 2048, "ffn_dim": 13824},
+    # InternLM 3 (SwiGLU, ffn=14336)
+    {"name": "internlm3_8b",           "n_rows": 2048, "ffn_dim": 14336},
 ]
 
 

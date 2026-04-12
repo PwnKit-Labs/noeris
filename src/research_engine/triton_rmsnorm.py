@@ -70,6 +70,28 @@ RMSNORM_SHAPE_BUCKETS = [
     {"name": "llama3_70b", "n_rows": 4096, "hidden_dim": 8192, "affine_mode": 0},
     {"name": "mistral_7b", "n_rows": 4096, "hidden_dim": 4096, "affine_mode": 0},
     {"name": "phi3_mini", "n_rows": 4096, "hidden_dim": 3072, "affine_mode": 0},
+    # ---------- April 2026 model expansion ----------
+    # Llama 4 Scout/Maverick (hidden=5120, RoPE, standard affine)
+    {"name": "llama4_scout", "n_rows": 4096, "hidden_dim": 5120, "affine_mode": 0},
+    # Qwen 3 family (QK-norm uses (1+w) Gemma-style affine on Q/K;
+    # layer-norm on hidden uses standard affine)
+    {"name": "qwen3_8b", "n_rows": 4096, "hidden_dim": 4096, "affine_mode": 0},
+    {"name": "qwen3_32b", "n_rows": 4096, "hidden_dim": 5120, "affine_mode": 0},
+    # Mixtral 8x22B (hidden=6144)
+    {"name": "mixtral_8x22b", "n_rows": 4096, "hidden_dim": 6144, "affine_mode": 0},
+    # Phi-4 family
+    {"name": "phi4_mini", "n_rows": 4096, "hidden_dim": 3072, "affine_mode": 0},
+    {"name": "phi4_14b", "n_rows": 4096, "hidden_dim": 5120, "affine_mode": 0},
+    # Falcon 3 (hidden=3072 for 7B, hidden~4096 for 10B)
+    {"name": "falcon3_7b", "n_rows": 4096, "hidden_dim": 3072, "affine_mode": 0},
+    {"name": "falcon3_10b", "n_rows": 4096, "hidden_dim": 4096, "affine_mode": 0},
+    # DBRX (hidden=6144)
+    {"name": "dbrx", "n_rows": 4096, "hidden_dim": 6144, "affine_mode": 0},
+    # OLMo 2 (uses RMSNorm, standard affine)
+    {"name": "olmo2_7b", "n_rows": 4096, "hidden_dim": 4096, "affine_mode": 0},
+    {"name": "olmo2_32b", "n_rows": 4096, "hidden_dim": 5120, "affine_mode": 0},
+    # InternLM 3 (hidden=4096)
+    {"name": "internlm3_8b", "n_rows": 4096, "hidden_dim": 4096, "affine_mode": 0},
 ]
 
 

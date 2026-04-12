@@ -68,11 +68,33 @@ QK_NORM_ROPE_SHAPE_BUCKETS = [
     {"name": "gemma4_31b_local", "batch": 1, "heads": 32, "num_kv_heads": 16, "seq": 4096, "head_dim": 256},
     {"name": "gemma4_31b_global", "batch": 1, "heads": 32, "num_kv_heads": 4, "seq": 4096, "head_dim": 512},
     # Non-Gemma architectures — kernel generalizes via affine_mode=0 (standard RMSNorm)
-    # for models without QK-norm, and affine_mode=1 for Phi-3 which has QK-norm.
+    # for models without QK-norm, and affine_mode=1 for models with QK-norm.
     {"name": "llama3_8b", "batch": 1, "heads": 32, "num_kv_heads": 8, "seq": 4096, "head_dim": 128},
     {"name": "llama3_70b", "batch": 1, "heads": 64, "num_kv_heads": 8, "seq": 4096, "head_dim": 128},
     {"name": "mistral_7b", "batch": 1, "heads": 32, "num_kv_heads": 8, "seq": 4096, "head_dim": 128},
     {"name": "phi3_mini", "batch": 1, "heads": 32, "num_kv_heads": 32, "seq": 4096, "head_dim": 96},
+    # ---------- April 2026 model expansion ----------
+    # Llama 4 Scout/Maverick (MoE, 17B active, RoPE, no QK-norm)
+    {"name": "llama4_scout", "batch": 1, "heads": 40, "num_kv_heads": 8, "seq": 4096, "head_dim": 128},
+    # Qwen 3 family (QK-norm: YES — "qk layernorm" in tech report, RoPE, GQA)
+    {"name": "qwen3_8b", "batch": 1, "heads": 32, "num_kv_heads": 8, "seq": 4096, "head_dim": 128},
+    {"name": "qwen3_32b", "batch": 1, "heads": 64, "num_kv_heads": 8, "seq": 4096, "head_dim": 128},
+    {"name": "qwen3_235b_a22b", "batch": 1, "heads": 64, "num_kv_heads": 4, "seq": 4096, "head_dim": 128},
+    # Mixtral 8x22B (MoE, 39B active, RoPE, GQA, no QK-norm)
+    {"name": "mixtral_8x22b", "batch": 1, "heads": 48, "num_kv_heads": 8, "seq": 4096, "head_dim": 128},
+    # Phi-4 family (RoPE, GQA, no QK-norm confirmed)
+    {"name": "phi4_mini", "batch": 1, "heads": 24, "num_kv_heads": 8, "seq": 4096, "head_dim": 128},
+    {"name": "phi4_14b", "batch": 1, "heads": 40, "num_kv_heads": 10, "seq": 4096, "head_dim": 128},
+    # Falcon 3 (RoPE, GQA, head_dim=256 — optimized for FlashAttention-3)
+    {"name": "falcon3_7b", "batch": 1, "heads": 12, "num_kv_heads": 4, "seq": 4096, "head_dim": 256},
+    {"name": "falcon3_10b", "batch": 1, "heads": 12, "num_kv_heads": 4, "seq": 4096, "head_dim": 256},
+    # DBRX (MoE, 36B active, RoPE, GQA, no QK-norm)
+    {"name": "dbrx", "batch": 1, "heads": 48, "num_kv_heads": 8, "seq": 4096, "head_dim": 128},
+    # OLMo 2 (QK-norm: YES — RMSNorm applied to Q and K, RoPE)
+    {"name": "olmo2_7b", "batch": 1, "heads": 32, "num_kv_heads": 32, "seq": 4096, "head_dim": 128},
+    {"name": "olmo2_32b", "batch": 1, "heads": 40, "num_kv_heads": 8, "seq": 4096, "head_dim": 128},
+    # InternLM 3 (RoPE, GQA, no QK-norm confirmed)
+    {"name": "internlm3_8b", "batch": 1, "heads": 32, "num_kv_heads": 8, "seq": 4096, "head_dim": 128},
 ]
 
 
