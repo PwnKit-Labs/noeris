@@ -797,7 +797,7 @@ def phase6_t4_shootout():
         return residual + mlp_out.reshape(B, S, D)
 
     print("\n  Timing Approach A: PyTorch separated...")
-    t_a = cuda_event_timer(pytorch_separated_layer, warmup=5, trials=20)
+    t_a = cuda_event_timer(lambda: pytorch_separated_layer(x), warmup=5, trials=20)
     print(f"    A (PyTorch separated):  {t_a:.3f} ms")
 
     # ---------------------------------------------------------------
@@ -850,7 +850,7 @@ def phase6_t4_shootout():
             return residual + mlp_out.reshape(B, S, D)
 
         print("\n  Timing Approach B: torch.compile fused (warmup=20 for compilation)...")
-        t_b = cuda_event_timer(compiled_separated_layer, warmup=20, trials=20)
+        t_b = cuda_event_timer(lambda: compiled_separated_layer(x), warmup=20, trials=20)
         print(f"    B (torch.compile fused): {t_b:.3f} ms")
     except Exception as e:
         b_error = str(e)[:200]
@@ -934,7 +934,7 @@ def phase6_t4_shootout():
             return noeris_t4_layer(x_in, best_rn, best_qknr, best_geglu)
 
         print("\n  Timing Approach D: torch.compile + Noeris (warmup=20 for compilation)...")
-        t_d = cuda_event_timer(compiled_noeris_layer, warmup=20, trials=20)
+        t_d = cuda_event_timer(lambda: compiled_noeris_layer(x), warmup=20, trials=20)
         print(f"    D (torch.compile + Noeris): {t_d:.3f} ms")
     except Exception as e:
         d_error = str(e)[:200]
