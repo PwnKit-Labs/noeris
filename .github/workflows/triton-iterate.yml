@@ -133,7 +133,7 @@ jobs:
       - name: Evaluate auto-chain
         id: auto_chain
         env:
-          NOERIS_AUTO_CHAIN_RUNS_REMAINING: ${{ github.event.inputs.auto_chain_runs_remaining || '10' }}
+          NOERIS_AUTO_CHAIN_RUNS_REMAINING: ${{ github.event.inputs.auto_chain_runs_remaining || '0' }}
         run: |
           python - <<'PY'
           import json

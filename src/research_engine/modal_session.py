@@ -50,6 +50,17 @@ class SessionResult:
     error: str = ""
 
 
+GPU_COST_PER_SEC = {
+    "A100": 2.10 / 3600,   # $2.10/hr
+    "H100": 3.90 / 3600,   # $3.90/hr
+    "T4":   0.59 / 3600,   # $0.59/hr
+}
+
+
+class ModalBudgetExceeded(RuntimeError):
+    """Raised when a ModalBenchmarkSession exceeds its per-session cost cap."""
+
+
 class ModalBenchmarkSession:
     """Persistent Modal session that runs multiple benchmark scripts.
 
@@ -57,15 +68,30 @@ class ModalBenchmarkSession:
     container that executes it and returns the stdout/stderr/returncode.
     The caller parses the output as JSON.
 
+    **Cost guardrail**: ``max_cost_usd`` (default $1.00) caps the
+    cumulative estimated GPU cost within a single session. If a
+    ``.run_script()`` call would push the session over this cap,
+    ``ModalBudgetExceeded`` is raised and no further GPU work runs.
+    Set ``max_cost_usd=0`` to disable the cap (not recommended).
+
     Must be used as a context manager:
 
-        with ModalBenchmarkSession(gpu="A100") as session:
+        with ModalBenchmarkSession(gpu="A100", max_cost_usd=0.50) as session:
             result = session.run_script(my_script)
     """
 
-    def __init__(self, *, gpu: str = "A100", timeout_seconds: int = 600) -> None:
+    def __init__(
+        self,
+        *,
+        gpu: str = "A100",
+        timeout_seconds: int = 600,
+        max_cost_usd: float = 1.00,
+    ) -> None:
         self.gpu = gpu
         self.timeout_seconds = timeout_seconds
+        self.max_cost_usd = max_cost_usd
+        self._cost_per_sec = GPU_COST_PER_SEC.get(gpu, GPU_COST_PER_SEC["A100"])
+        self._cumulative_cost = 0.0
         self._app = None
         self._run_function = None
         self._app_ctx = None
@@ -120,14 +146,36 @@ class ModalBenchmarkSession:
                 self._run_function = None
 
     def run_script(self, script: str) -> SessionResult:
-        """Run a benchmark script on the warm GPU container."""
+        """Run a benchmark script on the warm GPU container.
+
+        Raises ModalBudgetExceeded if the cumulative session cost would
+        exceed ``max_cost_usd`` after this call.
+        """
         if self._run_function is None:
             raise RuntimeError(
                 "ModalBenchmarkSession must be used as a context manager"
             )
+        # Pre-flight budget check: estimate this call will take at most
+        # timeout_seconds of GPU time.  If that would blow the cap, bail.
+        if self.max_cost_usd > 0:
+            worst_case = self._cumulative_cost + self.timeout_seconds * self._cost_per_sec
+            if worst_case > self.max_cost_usd:
+                raise ModalBudgetExceeded(
+                    f"Session budget cap ${self.max_cost_usd:.2f} would be "
+                    f"exceeded (cumulative ${self._cumulative_cost:.3f} + "
+                    f"worst-case ${self.timeout_seconds * self._cost_per_sec:.3f} "
+                    f"for a {self.timeout_seconds}s timeout on {self.gpu}). "
+                    f"Raise max_cost_usd or reduce timeout_seconds."
+                )
+
+        import time as _time
+        _t0 = _time.monotonic()
+
         try:
             result = self._run_function.remote(script)
         except Exception as exc:
+            _elapsed = _time.monotonic() - _t0
+            self._cumulative_cost += _elapsed * self._cost_per_sec
             return SessionResult(
                 success=False,
                 hardware={"gpu": self.gpu},
@@ -137,6 +185,10 @@ class ModalBenchmarkSession:
                 stderr="",
                 error=f"{type(exc).__name__}: {exc}"[:500],
             )
+
+        # Track actual wall-clock cost after the call completes
+        _elapsed = _time.monotonic() - _t0
+        self._cumulative_cost += _elapsed * self._cost_per_sec
 
         stdout = result.get("stdout", "")
         stderr = result.get("stderr", "")
