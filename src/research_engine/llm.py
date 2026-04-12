@@ -308,6 +308,8 @@ class LlmResearchMemory(ResearchMemory):
             ),
         )
         claims = _sanitize_claims(payload.get("claims", []), selected_sources)
+        if not claims:
+            claims = _fallback_claims(topic=topic, sources=selected_sources)
         return ResearchContext(
             topic=topic.name,
             sources=selected_sources,
@@ -317,9 +319,12 @@ class LlmResearchMemory(ResearchMemory):
                 payload.get("contradictions", []),
                 claims=claims,
             ),
-            source_assessments=_sanitize_source_assessments(
+            source_assessments=_backfill_source_assessments(
+                sources=selected_sources,
+                assessments=_sanitize_source_assessments(
                 payload.get("source_assessments", []),
                 selected_sources,
+            ),
             ),
         )
 
@@ -474,6 +479,29 @@ def _sanitize_source_assessments(
     return assessments[: len(sources)]
 
 
+def _backfill_source_assessments(
+    *,
+    sources: list[ResearchSource],
+    assessments: list[SourceAssessment],
+) -> list[SourceAssessment]:
+    by_source = {assessment.source_id: assessment for assessment in assessments}
+    output: list[SourceAssessment] = list(assessments)
+    for source in sources:
+        if source.identifier in by_source:
+            continue
+        rationale = "Backfilled default assessment because the model did not score this source."
+        if source.updated_at:
+            rationale += f" Latest observed timestamp: {source.updated_at}."
+        output.append(
+            SourceAssessment(
+                source_id=source.identifier,
+                confidence="medium",
+                rationale=rationale,
+            )
+        )
+    return output[: len(sources)]
+
+
 def _sanitize_contradictions(
     payload: object,
     *,
@@ -505,6 +533,31 @@ def _sanitize_contradictions(
             )
         )
     return contradictions[:5]
+
+
+def _fallback_claims(
+    *,
+    topic: ResearchTopic,
+    sources: list[ResearchSource],
+) -> list[Claim]:
+    claims: list[Claim] = []
+    for source in sources[:3]:
+        title = f"{source.title} is relevant to {topic.name}"
+        if source.kind == "repository":
+            title = f"{source.title} may contain useful implementation evidence"
+        claims.append(
+            Claim(
+                title=title,
+                source=source.identifier,
+                summary=(
+                    "Fallback claim derived from source metadata because the model "
+                    "did not return a usable claim set."
+                ),
+                evidence_refs=[source.identifier],
+                evidence_kind="source-derived",
+            )
+        )
+    return claims
 
 
 def _sanitize_string_list(payload: object, *, limit: int) -> list[str]:

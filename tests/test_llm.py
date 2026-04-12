@@ -267,6 +267,82 @@ class LlmPlannerTests(unittest.TestCase):
             1,
         )
 
+    def test_research_memory_backfills_assessments_for_unscored_sources(self) -> None:
+        http_client = _FakeHttpClient(
+            {
+                "output_text": (
+                    '{"claims":[{"title":"Claim","source":"source-1","summary":"Summary",'
+                    '"evidence_refs":["source-1"]}],"open_questions":["What next?"],'
+                    '"contradictions":[],"source_assessments":[]}'
+                )
+            }
+        )
+        client = ResponsesApiClient(
+            config=ResponsesProviderConfig(
+                provider_name="openai",
+                api_key="sk-test",
+                base_url="https://api.openai.com/v1",
+                model="gpt-4.1-mini",
+            ),
+            http_client=http_client,
+        )
+        planner = LlmResearchMemory(client=client)
+        sources = [
+            ResearchSource(
+                identifier="source-1",
+                kind="paper",
+                title="Source",
+                locator="https://example.com",
+                excerpt="Example",
+                updated_at="2026-04-10T12:00:00Z",
+            )
+        ]
+
+        context = planner.build_context(
+            ResearchTopic(name="tool use", objective="improve reliability"),
+            sources,
+        )
+
+        self.assertEqual(len(context.source_assessments), 1)
+        self.assertEqual(context.source_assessments[0].confidence, "medium")
+        self.assertIn("Backfilled default assessment", context.source_assessments[0].rationale)
+
+    def test_research_memory_falls_back_to_source_claims_when_model_returns_none(self) -> None:
+        http_client = _FakeHttpClient(
+            {
+                "output_text": (
+                    '{"claims":[],"open_questions":["What next?"],"contradictions":[],"source_assessments":[]}'
+                )
+            }
+        )
+        client = ResponsesApiClient(
+            config=ResponsesProviderConfig(
+                provider_name="openai",
+                api_key="sk-test",
+                base_url="https://api.openai.com/v1",
+                model="gpt-4.1-mini",
+            ),
+            http_client=http_client,
+        )
+        planner = LlmResearchMemory(client=client)
+        sources = [
+            ResearchSource(
+                identifier="source-1",
+                kind="repository",
+                title="Source repo",
+                locator="https://example.com",
+                excerpt="Example",
+            )
+        ]
+
+        context = planner.build_context(
+            ResearchTopic(name="tool use", objective="improve reliability"),
+            sources,
+        )
+
+        self.assertEqual(context.claims[0].evidence_kind, "source-derived")
+        self.assertIn("implementation evidence", context.claims[0].title)
+
     def test_hypothesis_planner_filters_unknown_supporting_claims(self) -> None:
         http_client = _FakeHttpClient(
             {
