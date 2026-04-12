@@ -267,6 +267,90 @@ class LlmPlannerTests(unittest.TestCase):
             1,
         )
 
+    def test_research_memory_infers_claim_link_for_single_claim_contradiction(self) -> None:
+        http_client = _FakeHttpClient(
+            {
+                "output_text": (
+                    '{"claims":[{"title":"Only claim","source":"source-1","summary":"Summary",'
+                    '"evidence_refs":["source-1"]}],"open_questions":["What next?"],'
+                    '"contradictions":[{"title":"Conflict","summary":"Sources disagree","claim_titles":[],"severity":"high"}],'
+                    '"source_assessments":[{"source_id":"source-1","confidence":"high","rationale":"Direct primary source"}]}'
+                )
+            }
+        )
+        client = ResponsesApiClient(
+            config=ResponsesProviderConfig(
+                provider_name="openai",
+                api_key="sk-test",
+                base_url="https://api.openai.com/v1",
+                model="gpt-4.1-mini",
+            ),
+            http_client=http_client,
+        )
+        planner = LlmResearchMemory(client=client)
+        context = planner.build_context(
+            ResearchTopic(name="tool use", objective="improve reliability"),
+            [
+                ResearchSource(
+                    identifier="source-1",
+                    kind="paper",
+                    title="Source",
+                    locator="https://example.com",
+                    excerpt="Example",
+                )
+            ],
+        )
+
+        self.assertEqual(context.contradictions[0].claim_titles, ["Only claim"])
+
+    def test_research_memory_infers_claim_links_from_text_when_titles_missing(self) -> None:
+        http_client = _FakeHttpClient(
+            {
+                "output_text": (
+                    '{"claims":['
+                    '{"title":"Fresh memory claim","source":"source-1","summary":"Summary","evidence_refs":["source-1"]},'
+                    '{"title":"Older retrieval claim","source":"source-2","summary":"Summary","evidence_refs":["source-2"]}'
+                    '],"open_questions":["What next?"],'
+                    '"contradictions":[{"title":"Fresh memory claim conflict","summary":"Fresh memory claim conflicts with older retrieval claim","claim_titles":[],"severity":"medium"}],'
+                    '"source_assessments":['
+                    '{"source_id":"source-1","confidence":"high","rationale":"Direct primary source"},'
+                    '{"source_id":"source-2","confidence":"medium","rationale":"Secondary source"}'
+                    ']}'
+                )
+            }
+        )
+        client = ResponsesApiClient(
+            config=ResponsesProviderConfig(
+                provider_name="openai",
+                api_key="sk-test",
+                base_url="https://api.openai.com/v1",
+                model="gpt-4.1-mini",
+            ),
+            http_client=http_client,
+        )
+        planner = LlmResearchMemory(client=client)
+        context = planner.build_context(
+            ResearchTopic(name="tool use", objective="improve reliability"),
+            [
+                ResearchSource(
+                    identifier="source-1",
+                    kind="paper",
+                    title="Fresh source",
+                    locator="https://example.com/1",
+                    excerpt="Example",
+                ),
+                ResearchSource(
+                    identifier="source-2",
+                    kind="paper",
+                    title="Older source",
+                    locator="https://example.com/2",
+                    excerpt="Example",
+                ),
+            ],
+        )
+
+        self.assertIn("Fresh memory claim", context.contradictions[0].claim_titles)
+
     def test_research_memory_backfills_assessments_for_unscored_sources(self) -> None:
         http_client = _FakeHttpClient(
             {

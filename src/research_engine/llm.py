@@ -523,6 +523,12 @@ def _sanitize_contradictions(
             for claim_title in _sanitize_string_list(item.get("claim_titles", []), limit=4)
             if claim_title in valid_claims
         ]
+        if not claim_titles:
+            claim_titles = _infer_claim_titles(
+                title=title,
+                summary=summary,
+                claims=claims,
+            )
         if not title or not summary:
             continue
         contradictions.append(
@@ -534,6 +540,27 @@ def _sanitize_contradictions(
             )
         )
     return contradictions[:5]
+
+
+def _infer_claim_titles(
+    *,
+    title: str,
+    summary: str,
+    claims: list[Claim],
+) -> list[str]:
+    if not claims:
+        return []
+    if len(claims) == 1:
+        return [claims[0].title]
+
+    lowered = f"{title} {summary}".lower()
+    matched = [claim.title for claim in claims if claim.title.lower() in lowered]
+    if matched:
+        return matched[:4]
+
+    # If the model produced a contradiction object but omitted titles,
+    # preserve a minimal linkage by attaching the top two available claims.
+    return [claim.title for claim in claims[:2]]
 
 
 def _fallback_claims(
