@@ -1,0 +1,283 @@
+{
+  "gpu": "A100",
+  "results": [
+    {
+      "model": "gemma4_e2b_local",
+      "shape": "B1_H8_Hkv1_S4096_D256",
+      "qk_norm": true,
+      "config": {
+        "BLOCK_SIZE": 128,
+        "num_warps": 4,
+        "num_stages": 2
+      },
+      "separated_ms": 0.7281,
+      "fused_ms": 0.1321,
+      "speedup": 5.51,
+      "bandwidth_gbps": 317.5
+    },
+    {
+      "model": "gemma4_31b_global",
+      "shape": "B1_H32_Hkv4_S4096_D512",
+      "qk_norm": true,
+      "config": {
+        "BLOCK_SIZE": 256,
+        "num_warps": 4,
+        "num_stages": 2
+      },
+      "separated_ms": 4.6264,
+      "fused_ms": 0.4741,
+      "speedup": 9.76,
+      "bandwidth_gbps": 654.7
+    },
+    {
+      "model": "llama3_8b",
+      "shape": "B1_H32_Hkv8_S4096_D128",
+      "qk_norm": false,
+      "config": {
+        "BLOCK_SIZE": 128,
+        "num_warps": 4,
+        "num_stages": 2
+      },
+      "separated_ms": 1.4111,
+      "fused_ms": 0.3348,
+      "speedup": 4.21,
+      "bandwidth_gbps": 256.8
+    },
+    {
+      "model": "llama3_70b",
+      "shape": "B1_H64_Hkv8_S4096_D128",
+      "qk_norm": false,
+      "config": {
+        "BLOCK_SIZE": 128,
+        "num_warps": 4,
+        "num_stages": 2
+      },
+      "separated_ms": 2.4023,
+      "fused_ms": 0.5427,
+      "speedup": 4.43,
+      "bandwidth_gbps": 282.1
+    },
+    {
+      "model": "llama4_scout",
+      "shape": "B1_H40_Hkv8_S4096_D128",
+      "qk_norm": false,
+      "config": {
+        "BLOCK_SIZE": 128,
+        "num_warps": 4,
+        "num_stages": 2
+      },
+      "separated_ms": 1.6558,
+      "fused_ms": 0.383,
+      "speedup": 4.32,
+      "bandwidth_gbps": 268.3
+    },
+    {
+      "model": "qwen3_8b",
+      "shape": "B1_H32_Hkv8_S4096_D128",
+      "qk_norm": true,
+      "config": {
+        "BLOCK_SIZE": 128,
+        "num_warps": 4,
+        "num_stages": 2
+      },
+      "separated_ms": 1.4141,
+      "fused_ms": 0.3338,
+      "speedup": 4.24,
+      "bandwidth_gbps": 257.6
+    },
+    {
+      "model": "qwen3_32b",
+      "shape": "B1_H64_Hkv8_S4096_D128",
+      "qk_norm": true,
+      "config": {
+        "BLOCK_SIZE": 128,
+        "num_warps": 4,
+        "num_stages": 2
+      },
+      "separated_ms": 2.3951,
+      "fused_ms": 0.4424,
+      "speedup": 5.41,
+      "bandwidth_gbps": 346.1
+    },
+    {
+      "model": "qwen3_235b_a22b",
+      "shape": "B1_H64_Hkv4_S4096_D128",
+      "qk_norm": true,
+      "config": {
+        "BLOCK_SIZE": 128,
+        "num_warps": 4,
+        "num_stages": 2
+      },
+      "separated_ms": 2.1166,
+      "fused_ms": 0.4209,
+      "speedup": 5.03,
+      "bandwidth_gbps": 343.8
+    },
+    {
+      "model": "mistral_7b",
+      "shape": "B1_H32_Hkv8_S4096_D128",
+      "qk_norm": false,
+      "config": {
+        "BLOCK_SIZE": 128,
+        "num_warps": 4,
+        "num_stages": 2
+      },
+      "separated_ms": 1.2739,
+      "fused_ms": 0.2775,
+      "speedup": 4.59,
+      "bandwidth_gbps": 309.8
+    },
+    {
+      "model": "mixtral_8x22b",
+      "shape": "B1_H48_Hkv8_S4096_D128",
+      "qk_norm": false,
+      "config": {
+        "BLOCK_SIZE": 128,
+        "num_warps": 4,
+        "num_stages": 2
+      },
+      "separated_ms": 1.7428,
+      "fused_ms": 0.3584,
+      "speedup": 4.86,
+      "bandwidth_gbps": 333.5
+    },
+    {
+      "model": "phi3_mini",
+      "shape": "B1_H32_Hkv32_S4096_D96",
+      "qk_norm": false,
+      "config": {
+        "BLOCK_SIZE": 64,
+        "num_warps": 4,
+        "num_stages": 2
+      },
+      "separated_ms": 1.577,
+      "fused_ms": 0.4065,
+      "speedup": 3.88,
+      "bandwidth_gbps": 251.5
+    },
+    {
+      "model": "phi4_mini",
+      "shape": "B1_H24_Hkv8_S4096_D128",
+      "qk_norm": false,
+      "config": {
+        "BLOCK_SIZE": 128,
+        "num_warps": 4,
+        "num_stages": 2
+      },
+      "separated_ms": 1.0209,
+      "fused_ms": 0.2355,
+      "speedup": 4.33,
+      "bandwidth_gbps": 293.8
+    },
+    {
+      "model": "phi4_14b",
+      "shape": "B1_H40_Hkv10_S4096_D128",
+      "qk_norm": false,
+      "config": {
+        "BLOCK_SIZE": 128,
+        "num_warps": 4,
+        "num_stages": 2
+      },
+      "separated_ms": 1.5739,
+      "fused_ms": 0.3308,
+      "speedup": 4.76,
+      "bandwidth_gbps": 323.4
+    },
+    {
+      "model": "falcon3_7b",
+      "shape": "B1_H12_Hkv4_S4096_D256",
+      "qk_norm": false,
+      "config": {
+        "BLOCK_SIZE": 128,
+        "num_warps": 4,
+        "num_stages": 2
+      },
+      "separated_ms": 1.0312,
+      "fused_ms": 0.1577,
+      "speedup": 6.54,
+      "bandwidth_gbps": 452.2
+    },
+    {
+      "model": "falcon3_10b",
+      "shape": "B1_H12_Hkv4_S4096_D256",
+      "qk_norm": false,
+      "config": {
+        "BLOCK_SIZE": 128,
+        "num_warps": 4,
+        "num_stages": 2
+      },
+      "separated_ms": 1.0322,
+      "fused_ms": 0.1577,
+      "speedup": 6.55,
+      "bandwidth_gbps": 452.2
+    },
+    {
+      "model": "dbrx",
+      "shape": "B1_H48_Hkv8_S4096_D128",
+      "qk_norm": false,
+      "config": {
+        "BLOCK_SIZE": 128,
+        "num_warps": 4,
+        "num_stages": 2
+      },
+      "separated_ms": 1.7459,
+      "fused_ms": 0.3615,
+      "speedup": 4.83,
+      "bandwidth_gbps": 330.7
+    },
+    {
+      "model": "olmo2_7b",
+      "shape": "B1_H32_Hkv32_S4096_D128",
+      "qk_norm": true,
+      "config": {
+        "BLOCK_SIZE": 128,
+        "num_warps": 4,
+        "num_stages": 2
+      },
+      "separated_ms": 2.0787,
+      "fused_ms": 0.3983,
+      "speedup": 5.22,
+      "bandwidth_gbps": 342.2
+    },
+    {
+      "model": "olmo2_32b",
+      "shape": "B1_H40_Hkv8_S4096_D128",
+      "qk_norm": true,
+      "config": {
+        "BLOCK_SIZE": 128,
+        "num_warps": 4,
+        "num_stages": 2
+      },
+      "separated_ms": 1.5084,
+      "fused_ms": 0.3185,
+      "speedup": 4.74,
+      "bandwidth_gbps": 322.7
+    },
+    {
+      "model": "internlm3_8b",
+      "shape": "B1_H32_Hkv8_S4096_D128",
+      "qk_norm": false,
+      "config": {
+        "BLOCK_SIZE": 128,
+        "num_warps": 4,
+        "num_stages": 2
+      },
+      "separated_ms": 1.2831,
+      "fused_ms": 0.2744,
+      "speedup": 4.68,
+      "bandwidth_gbps": 313.3
+    }
+  ],
+  "cross_hardware_comparison": {
+    "reference_gpu": "Tesla T4",
+    "spearman_rho_speedup_ratio": -0.3275,
+    "spearman_rho_fused_ms": 0.9065,
+    "spearman_rho_separated_ms": 0.9807,
+    "spearman_rho_bandwidth": -0.2037,
+    "note": "Speedup ratios differ because A100 2TB/s HBM benefits the PyTorch separated baseline more than T4 320GB/s. Fused kernel ms ranking (rho=0.91) shows strong cross-hardware transfer.",
+    "mean_speedup": 5.15,
+    "min_speedup": 3.88,
+    "max_speedup": 9.76,
+    "all_above_3x": true
+  }
+}
