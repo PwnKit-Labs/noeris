@@ -1,0 +1,765 @@
+{
+  "gpu": "A100",
+  "results": [
+    {
+      "shape": "n8192_w128",
+      "B": 1,
+      "H": 8,
+      "S": 8192,
+      "D": 64,
+      "W": 128,
+      "skip_ratio_pct": 96.1,
+      "sdpa_causal_ms": 0.7066,
+      "sdpa_mask_ms": 4.6305,
+      "best_noeris_ms": 0.1495,
+      "best_noeris_config": "m64_n64_w4_s2",
+      "noeris_wins": true,
+      "speedup_vs_sdpa": 4.726,
+      "noeris_configs": [
+        {
+          "config": "m16_n32_w2_s2",
+          "ms": 0.1659,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m32_n32_w2_s2",
+          "ms": 0.1516,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m32_n64_w2_s2",
+          "ms": 0.1577,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m64_n32_w2_s2",
+          "ms": 0.1526,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m64_n64_w2_s1",
+          "ms": 0.1608,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m64_n64_w4_s2",
+          "ms": 0.1495,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m64_n64_w4_s3",
+          "ms": 0.1516,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m128_n64_w4_s2",
+          "ms": 0.172,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m128_n64_w4_s3",
+          "ms": 0.169,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m64_n128_w4_s2",
+          "ms": 0.1731,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m128_n128_w4_s2",
+          "ms": 0.1905,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m64_n32_w4_s2",
+          "ms": 0.1618,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m32_n64_w4_s2",
+          "ms": 0.1669,
+          "correct": true,
+          "max_err": 0.00049
+        }
+      ]
+    },
+    {
+      "shape": "n8192_w256",
+      "B": 1,
+      "H": 8,
+      "S": 8192,
+      "D": 64,
+      "W": 256,
+      "skip_ratio_pct": 93.1,
+      "sdpa_causal_ms": 0.7076,
+      "sdpa_mask_ms": 4.6428,
+      "best_noeris_ms": 0.1741,
+      "best_noeris_config": "m32_n32_w2_s2",
+      "noeris_wins": true,
+      "speedup_vs_sdpa": 4.065,
+      "noeris_configs": [
+        {
+          "config": "m16_n32_w2_s2",
+          "ms": 0.1935,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m32_n32_w2_s2",
+          "ms": 0.1741,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m32_n64_w2_s2",
+          "ms": 0.1976,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m64_n32_w2_s2",
+          "ms": 0.1894,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m64_n64_w2_s1",
+          "ms": 0.2017,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m64_n64_w4_s2",
+          "ms": 0.1884,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m64_n64_w4_s3",
+          "ms": 0.1935,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m128_n64_w4_s2",
+          "ms": 0.2284,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m128_n64_w4_s3",
+          "ms": 0.2099,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m64_n128_w4_s2",
+          "ms": 0.212,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m128_n128_w4_s2",
+          "ms": 0.2243,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m64_n32_w4_s2",
+          "ms": 0.2079,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m32_n64_w4_s2",
+          "ms": 0.2171,
+          "correct": true,
+          "max_err": 0.00049
+        }
+      ]
+    },
+    {
+      "shape": "n4096_w128",
+      "B": 1,
+      "H": 8,
+      "S": 4096,
+      "D": 64,
+      "W": 128,
+      "skip_ratio_pct": 92.4,
+      "sdpa_causal_ms": 0.2458,
+      "sdpa_mask_ms": 1.3814,
+      "best_noeris_ms": 0.1137,
+      "best_noeris_config": "m32_n32_w2_s2",
+      "noeris_wins": true,
+      "speedup_vs_sdpa": 2.162,
+      "noeris_configs": [
+        {
+          "config": "m16_n32_w2_s2",
+          "ms": 0.126,
+          "correct": true,
+          "max_err": 0.00098
+        },
+        {
+          "config": "m32_n32_w2_s2",
+          "ms": 0.1137,
+          "correct": true,
+          "max_err": 0.00098
+        },
+        {
+          "config": "m32_n64_w2_s2",
+          "ms": 0.1229,
+          "correct": true,
+          "max_err": 0.00024
+        },
+        {
+          "config": "m64_n32_w2_s2",
+          "ms": 0.1178,
+          "correct": true,
+          "max_err": 0.00098
+        },
+        {
+          "config": "m64_n64_w2_s1",
+          "ms": 0.1249,
+          "correct": true,
+          "max_err": 0.00024
+        },
+        {
+          "config": "m64_n64_w4_s2",
+          "ms": 0.1147,
+          "correct": true,
+          "max_err": 0.00024
+        },
+        {
+          "config": "m64_n64_w4_s3",
+          "ms": 0.1137,
+          "correct": true,
+          "max_err": 0.00024
+        },
+        {
+          "config": "m128_n64_w4_s2",
+          "ms": 0.1352,
+          "correct": true,
+          "max_err": 0.00024
+        },
+        {
+          "config": "m128_n64_w4_s3",
+          "ms": 0.1352,
+          "correct": true,
+          "max_err": 0.00024
+        },
+        {
+          "config": "m64_n128_w4_s2",
+          "ms": 0.1331,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m128_n128_w4_s2",
+          "ms": 0.1485,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m64_n32_w4_s2",
+          "ms": 0.1178,
+          "correct": true,
+          "max_err": 0.00098
+        },
+        {
+          "config": "m32_n64_w4_s2",
+          "ms": 0.1239,
+          "correct": true,
+          "max_err": 0.00024
+        }
+      ]
+    },
+    {
+      "shape": "n4096_w256",
+      "B": 1,
+      "H": 8,
+      "S": 4096,
+      "D": 64,
+      "W": 256,
+      "skip_ratio_pct": 86.5,
+      "sdpa_causal_ms": 0.2447,
+      "sdpa_mask_ms": 1.1469,
+      "best_noeris_ms": 0.1219,
+      "best_noeris_config": "m64_n64_w4_s2",
+      "noeris_wins": true,
+      "speedup_vs_sdpa": 2.008,
+      "noeris_configs": [
+        {
+          "config": "m16_n32_w2_s2",
+          "ms": 0.1403,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m32_n32_w2_s2",
+          "ms": 0.126,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m32_n64_w2_s2",
+          "ms": 0.13,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m64_n32_w2_s2",
+          "ms": 0.128,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m64_n64_w2_s1",
+          "ms": 0.1341,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m64_n64_w4_s2",
+          "ms": 0.1219,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m64_n64_w4_s3",
+          "ms": 0.1229,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m128_n64_w4_s2",
+          "ms": 0.1393,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m128_n64_w4_s3",
+          "ms": 0.1393,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m64_n128_w4_s2",
+          "ms": 0.1382,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m128_n128_w4_s2",
+          "ms": 0.1516,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m64_n32_w4_s2",
+          "ms": 0.128,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m32_n64_w4_s2",
+          "ms": 0.1331,
+          "correct": true,
+          "max_err": 0.00049
+        }
+      ]
+    },
+    {
+      "shape": "n4096_w256_d128",
+      "B": 1,
+      "H": 8,
+      "S": 4096,
+      "D": 128,
+      "W": 256,
+      "skip_ratio_pct": 86.5,
+      "sdpa_causal_ms": 0.3615,
+      "sdpa_mask_ms": 1.2872,
+      "best_noeris_ms": 0.1772,
+      "best_noeris_config": "m64_n64_w4_s2",
+      "noeris_wins": true,
+      "speedup_vs_sdpa": 2.04,
+      "noeris_configs": [
+        {
+          "config": "m16_n32_w2_s2",
+          "ms": 0.2161,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m32_n32_w2_s2",
+          "ms": 0.1966,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m32_n64_w2_s2",
+          "ms": 0.1925,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m64_n32_w2_s2",
+          "ms": 0.1905,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m64_n64_w2_s1",
+          "ms": 0.2796,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m64_n64_w4_s2",
+          "ms": 0.1772,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m64_n64_w4_s3",
+          "ms": 0.1772,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m128_n64_w4_s2",
+          "ms": 0.2284,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m128_n64_w4_s3",
+          "ms": 0.2365,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m64_n128_w4_s2",
+          "ms": 0.2109,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m128_n128_w4_s2",
+          "ms": 3.3413,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m64_n32_w4_s2",
+          "ms": 0.2048,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m32_n64_w4_s2",
+          "ms": 0.2181,
+          "correct": true,
+          "max_err": 0.00049
+        }
+      ]
+    },
+    {
+      "shape": "n8192_w256_d128",
+      "B": 1,
+      "H": 4,
+      "S": 8192,
+      "D": 128,
+      "W": 256,
+      "skip_ratio_pct": 93.1,
+      "sdpa_causal_ms": 0.8079,
+      "sdpa_mask_ms": 3.5779,
+      "best_noeris_ms": 0.1772,
+      "best_noeris_config": "m64_n64_w4_s2",
+      "noeris_wins": true,
+      "speedup_vs_sdpa": 4.561,
+      "noeris_configs": [
+        {
+          "config": "m16_n32_w2_s2",
+          "ms": 0.2171,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m32_n32_w2_s2",
+          "ms": 0.1976,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m32_n64_w2_s2",
+          "ms": 0.1915,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m64_n32_w2_s2",
+          "ms": 0.1966,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m64_n64_w2_s1",
+          "ms": 0.2847,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m64_n64_w4_s2",
+          "ms": 0.1772,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m64_n64_w4_s3",
+          "ms": 0.1772,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m128_n64_w4_s2",
+          "ms": 0.2345,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m128_n64_w4_s3",
+          "ms": 0.2304,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m64_n128_w4_s2",
+          "ms": 0.2109,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m128_n128_w4_s2",
+          "ms": 3.3567,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m64_n32_w4_s2",
+          "ms": 0.2048,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m32_n64_w4_s2",
+          "ms": 0.2017,
+          "correct": true,
+          "max_err": 0.00049
+        }
+      ]
+    },
+    {
+      "shape": "n4096_w128_h32",
+      "B": 1,
+      "H": 32,
+      "S": 4096,
+      "D": 64,
+      "W": 128,
+      "skip_ratio_pct": 92.4,
+      "sdpa_causal_ms": 0.6287,
+      "sdpa_mask_ms": 3.4427,
+      "best_noeris_ms": 0.2028,
+      "best_noeris_config": "m32_n32_w2_s2",
+      "noeris_wins": true,
+      "speedup_vs_sdpa": 3.101,
+      "noeris_configs": [
+        {
+          "config": "m16_n32_w2_s2",
+          "ms": 0.2478,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m32_n32_w2_s2",
+          "ms": 0.2028,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m32_n64_w2_s2",
+          "ms": 0.2324,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m64_n32_w2_s2",
+          "ms": 0.2243,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m64_n64_w2_s1",
+          "ms": 0.2222,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m64_n64_w4_s2",
+          "ms": 0.2212,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m64_n64_w4_s3",
+          "ms": 0.2191,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m128_n64_w4_s2",
+          "ms": 0.2591,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m128_n64_w4_s3",
+          "ms": 0.258,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m64_n128_w4_s2",
+          "ms": 0.2601,
+          "correct": true,
+          "max_err": 0.00098
+        },
+        {
+          "config": "m128_n128_w4_s2",
+          "ms": 0.2734,
+          "correct": true,
+          "max_err": 0.00098
+        },
+        {
+          "config": "m64_n32_w4_s2",
+          "ms": 0.2335,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m32_n64_w4_s2",
+          "ms": 0.2509,
+          "correct": true,
+          "max_err": 0.00049
+        }
+      ]
+    },
+    {
+      "shape": "n8192_w128_h16",
+      "B": 1,
+      "H": 16,
+      "S": 8192,
+      "D": 64,
+      "W": 128,
+      "skip_ratio_pct": 96.1,
+      "sdpa_causal_ms": 1.1878,
+      "sdpa_mask_ms": 7.3523,
+      "best_noeris_ms": 0.1905,
+      "best_noeris_config": "m32_n32_w2_s2",
+      "noeris_wins": true,
+      "speedup_vs_sdpa": 6.237,
+      "noeris_configs": [
+        {
+          "config": "m16_n32_w2_s2",
+          "ms": 0.2202,
+          "correct": true,
+          "max_err": 0.00098
+        },
+        {
+          "config": "m32_n32_w2_s2",
+          "ms": 0.1905,
+          "correct": true,
+          "max_err": 0.00098
+        },
+        {
+          "config": "m32_n64_w2_s2",
+          "ms": 0.2355,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m64_n32_w2_s2",
+          "ms": 0.2109,
+          "correct": true,
+          "max_err": 0.00098
+        },
+        {
+          "config": "m64_n64_w2_s1",
+          "ms": 0.2212,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m64_n64_w4_s2",
+          "ms": 0.2222,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m64_n64_w4_s3",
+          "ms": 0.2202,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m128_n64_w4_s2",
+          "ms": 0.2437,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m128_n64_w4_s3",
+          "ms": 0.256,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m64_n128_w4_s2",
+          "ms": 0.2601,
+          "correct": true,
+          "max_err": 0.00098
+        },
+        {
+          "config": "m128_n128_w4_s2",
+          "ms": 0.2734,
+          "correct": true,
+          "max_err": 0.00098
+        },
+        {
+          "config": "m64_n32_w4_s2",
+          "ms": 0.2324,
+          "correct": true,
+          "max_err": 0.00098
+        },
+        {
+          "config": "m32_n64_w4_s2",
+          "ms": 0.2499,
+          "correct": true,
+          "max_err": 0.00049
+        }
+      ]
+    }
+  ]
+}
