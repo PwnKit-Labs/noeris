@@ -164,6 +164,24 @@ def fmt(ms):
     return f"{{ms:.3f}} ms"
 
 
+def expand_kv(kv, num_heads, num_kv_heads):
+    """Repeat-interleave KV heads to match Q head count (GQA expansion).
+
+    Args:
+        kv: Tensor of shape (B, H_kv, S, Dh).
+        num_heads: Total number of query heads (H).
+        num_kv_heads: Number of KV heads (H_kv).
+
+    Returns:
+        Tensor of shape (B, H, S, Dh).
+    """
+    if num_heads == num_kv_heads:
+        return kv
+    n_rep = num_heads // num_kv_heads
+    B, H_kv, S, Dh = kv.shape
+    return kv[:, :, None, :, :].expand(B, H_kv, n_rep, S, Dh).reshape(B, num_heads, S, Dh)
+
+
 # ============================================================================
 # Per-shape benchmark
 # ============================================================================
@@ -230,11 +248,14 @@ def benchmark_shape(cfg):
         q = (x @ W_q).view(B, S, H, Dh).transpose(1, 2)
         k = (x @ W_k).view(B, S, H_kv, Dh).transpose(1, 2)
         v = (x @ W_v).view(B, S, H_kv, Dh).transpose(1, 2)
+        k = expand_kv(k, H, H_kv)
+        v = expand_kv(v, H, H_kv)
         return F.scaled_dot_product_attention(q, k, v, is_causal=True, scale=scale)
 
     def attn_kv_shared():
         q = (x @ W_q).view(B, S, H, Dh).transpose(1, 2)
         kv = (x @ W_kv).view(B, S, H_kv, Dh).transpose(1, 2)
+        kv = expand_kv(kv, H, H_kv)
         return F.scaled_dot_product_attention(q, kv, kv, is_causal=True, scale=scale)
 
     t_base_attn = cuda_timer(attn_baseline)
@@ -272,6 +293,7 @@ def benchmark_shape(cfg):
     x_check = torch.randn(B, min(S, 512), D, device="cuda", dtype=torch.float16)
     q_c = (x_check @ W_q).view(B, -1, H, Dh).transpose(1, 2)
     k_c = (x_check @ W_k).view(B, -1, H_kv, Dh).transpose(1, 2)
+    k_c = expand_kv(k_c, H, H_kv)
 
     out_base = F.scaled_dot_product_attention(q_c, k_c, k_c, is_causal=True, scale=scale)
     out_shared = F.scaled_dot_product_attention(q_c, k_c, k_c, is_causal=True, scale=scale)
