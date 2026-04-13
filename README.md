@@ -26,6 +26,9 @@ Noeris generates GPU kernels from compact parameter tuples, stores winning confi
 | Sliding-window attention vs cuDNN FlashAttention (A100) | **6.24x faster** (8/8 shapes win) |
 | Fused QK-RMSNorm+RoPE prologue (A100) | **10.2--12.9x** vs separated launches |
 | Fused QK-RMSNorm+RoPE prologue (H100) | **10.4--11.9x**, peak 1628 GB/s |
+| SSM selective scan validated (Mamba-3, T4) | **1.88 GB/s** -- architecture-agnostic (transformers + SSMs) |
+| PLE fusion (Per-Layer Expert, T4) | **2.07x** (72.44 GB/s) |
+| Operators validated on T4 | **18/20** |
 | Cross-model fusion speedup (19 models, T4) | **6.5--8.9x** (19/19 pass) |
 | Cross-model fusion speedup (19 models, A100) | **3.9--9.8x** (mean 340 GB/s) |
 | End-to-end 26-layer Gemma 4 E2B (A100) | **1.43x** (41.4 ms -> 29.1 ms) |
@@ -67,7 +70,7 @@ All 19 shapes pass correctness. Fusion speedup measured on T4 (Kaggle) and A100 
 | DBRX | 132B | 8.9x | 6.3x |
 | OLMo 2 | 7B | 8.3x | 5.2x |
 | InternLM 3 | 8B | 8.3x | 5.2x |
-| Mamba-3 | SSM scan (eval pending) | -- | -- |
+| Mamba-3 | SSM scan | 1.88 GB/s | -- |
 
 ## Operators (21 parameterized Triton templates)
 
@@ -77,10 +80,10 @@ All 19 shapes pass correctness. Fusion speedup measured on T4 (Kaggle) and A100 
 | Attention | GQA + causal + sliding-window + QK-norm + YOCO KV-share, paged-KV decode (pure Triton) |
 | Fusion | fused QK-RMSNorm+RoPE (fwd + bwd), fused GeGLU, fused norm+matmul |
 | Routing | RoPE (dual-base with p-RoPE), MoE router (matmul+softmax+top-k), grouped GEMM (sort-free) |
-| Embedding | PLE gather (Gemma E2B/E4B per-layer), K=V attention |
+| Embedding | PLE gather (Gemma E2B/E4B per-layer), PLE fusion (2.07x), K=V attention |
 | SSM | selective scan (Mamba-3) |
 
-110+ shape buckets. 606 unit tests. All operators pass correctness on T4, A100, and H100.
+110+ shape buckets. 606 unit tests. 18/20 operators validated on T4; all operators pass correctness on A100 and H100.
 
 ## Search system
 
