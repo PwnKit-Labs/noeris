@@ -120,10 +120,15 @@ def _attn_v2_inner(
 ):
     if STAGE == 1:
         lo = 0
-        hi = start_m * BLOCK_M
+        # Align hi to BLOCK_N boundary so we don't miss/double-count
+        # keys when BLOCK_M != BLOCK_N.
+        hi = (start_m * BLOCK_M // BLOCK_N) * BLOCK_N
     elif STAGE == 2:
-        lo = start_m * BLOCK_M
-        hi = (start_m + 1) * BLOCK_M
+        # Start where STAGE 1 left off (BLOCK_N-aligned).
+        lo = (start_m * BLOCK_M // BLOCK_N) * BLOCK_N
+        # Cover through the last key that could be causally valid for
+        # any row in this Q-tile, rounded up to BLOCK_N boundary.
+        hi = (((start_m + 1) * BLOCK_M + BLOCK_N - 1) // BLOCK_N) * BLOCK_N
         if hi > N:
             hi = N
     else:
@@ -144,7 +149,7 @@ def _attn_v2_inner(
                     hi = N
 
     if WINDOW_SIZE > 0:
-        tile_window_lo = start_m * BLOCK_M - WINDOW_SIZE + 1
+        tile_window_lo = (start_m + 1) * BLOCK_M - WINDOW_SIZE
 
     for start_n in range(lo, hi, BLOCK_N):
         curr_n = start_n + offs_n

@@ -264,13 +264,18 @@ def flash_attn_v2(
         # STAGE 2: on-band (diagonal block) — apply causal + window masks.
         # STAGE 3: full range (non-causal) — no mask.
         if STAGE == 1:
-            # Off-band: keys before the diagonal block
+            # Off-band: keys before the diagonal block.
+            # Align hi to BLOCK_N boundary so we don't miss/double-count
+            # keys when BLOCK_M != BLOCK_N.
             lo = 0
-            hi = start_m * BLOCK_M
+            hi = (start_m * BLOCK_M // BLOCK_N) * BLOCK_N
         elif STAGE == 2:
-            # On-band: the diagonal block itself
-            lo = start_m * BLOCK_M
-            hi = (start_m + 1) * BLOCK_M
+            # On-band: diagonal block(s).
+            # Start where STAGE 1 left off (BLOCK_N-aligned).
+            lo = (start_m * BLOCK_M // BLOCK_N) * BLOCK_N
+            # Cover through the last key that could be causally valid for
+            # any row in this Q-tile, rounded up to BLOCK_N boundary.
+            hi = (((start_m + 1) * BLOCK_M + BLOCK_N - 1) // BLOCK_N) * BLOCK_N
             if hi > N:
                 hi = N
         else:
@@ -297,10 +302,11 @@ def flash_attn_v2(
                     if hi > N:
                         hi = N
 
-        # Pre-compute window floor for the Q-tile (constant across K-tiles).
-        # min(offs_m) = start_m * BLOCK_M, so the most restrictive floor is:
+        # Pre-compute window floor for the last (most restrictive) row of
+        # the Q-tile.  If an entire K-tile starts at or after this floor,
+        # every element is in-window for all Q rows — skip per-element mask.
         if WINDOW_SIZE > 0:
-            tile_window_lo = start_m * BLOCK_M - WINDOW_SIZE + 1
+            tile_window_lo = (start_m + 1) * BLOCK_M - WINDOW_SIZE
 
         for start_n in range(lo, hi, BLOCK_N):
             curr_n = start_n + offs_n
@@ -601,10 +607,15 @@ def _attn_v2_inner(
 ):
     if STAGE == 1:
         lo = 0
-        hi = start_m * BLOCK_M
+        # Align hi to BLOCK_N boundary so we don't miss/double-count
+        # keys when BLOCK_M != BLOCK_N.
+        hi = (start_m * BLOCK_M // BLOCK_N) * BLOCK_N
     elif STAGE == 2:
-        lo = start_m * BLOCK_M
-        hi = (start_m + 1) * BLOCK_M
+        # Start where STAGE 1 left off (BLOCK_N-aligned).
+        lo = (start_m * BLOCK_M // BLOCK_N) * BLOCK_N
+        # Cover through the last key that could be causally valid for
+        # any row in this Q-tile, rounded up to BLOCK_N boundary.
+        hi = (((start_m + 1) * BLOCK_M + BLOCK_N - 1) // BLOCK_N) * BLOCK_N
         if hi > N:
             hi = N
     else:
@@ -625,7 +636,7 @@ def _attn_v2_inner(
                     hi = N
 
     if WINDOW_SIZE > 0:
-        tile_window_lo = start_m * BLOCK_M - WINDOW_SIZE + 1
+        tile_window_lo = (start_m + 1) * BLOCK_M - WINDOW_SIZE
 
     for start_n in range(lo, hi, BLOCK_N):
         curr_n = start_n + offs_n
