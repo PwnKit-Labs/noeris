@@ -43,6 +43,8 @@ from . import triton_attention_decode  # noqa: F401  (registers attention_decode
 from . import triton_qk_norm_rope_bwd  # noqa: F401  (registers qk_norm_rope_bwd)
 from . import triton_matmul_splitk  # noqa: F401  (registers matmul_splitk)
 from . import triton_fused_norm_matmul  # noqa: F401  (registers fused_norm_linear)
+from . import triton_ple_fusion  # noqa: F401  (registers ple_fusion)
+from . import triton_kv_shared_attention  # noqa: F401  (registers kv_shared_attention)
 from .triton_operators import REGISTRY as TRITON_OPERATORS  # noqa: F401
 
 __all__ = [
