@@ -67,6 +67,9 @@ QK_NORM_ROPE_SHAPE_BUCKETS = [
     {"name": "gemma4_26b_a4b_global", "batch": 1, "heads": 16, "num_kv_heads": 2, "seq": 4096, "head_dim": 512},
     {"name": "gemma4_31b_local", "batch": 1, "heads": 32, "num_kv_heads": 16, "seq": 4096, "head_dim": 256},
     {"name": "gemma4_31b_global", "batch": 1, "heads": 32, "num_kv_heads": 4, "seq": 4096, "head_dim": 512},
+    # Gemma 4 global layers with partial RoPE (partial_ratio=0.25): rotation applied to first 25% of head dims only
+    {"name": "gemma4_31b_global_partial", "batch": 1, "heads": 32, "num_kv_heads": 4, "seq": 4096, "head_dim": 512, "partial_ratio": 0.25},
+    {"name": "gemma4_26b_a4b_global_partial", "batch": 1, "heads": 16, "num_kv_heads": 2, "seq": 4096, "head_dim": 512, "partial_ratio": 0.25},
     # Non-Gemma architectures — kernel generalizes via affine_mode=0 (standard RMSNorm)
     # for models without QK-norm, and affine_mode=1 for models with QK-norm.
     {"name": "llama3_8b", "batch": 1, "heads": 32, "num_kv_heads": 8, "seq": 4096, "head_dim": 128},
@@ -138,10 +141,11 @@ def qk_norm_rope_shape_bucket_key(shape: dict[str, int]) -> str:
         return "llama3_8b"
 
     if hd >= 512:
-        # Gemma 4 global attention layers
+        # Gemma 4 global attention layers — partial RoPE variants preferred
+        partial = shape.get("partial_ratio", 1.0)
         if h >= 32:
-            return "gemma4_31b_global"
-        return "gemma4_26b_a4b_global"
+            return "gemma4_31b_global_partial" if partial < 1.0 else "gemma4_31b_global"
+        return "gemma4_26b_a4b_global_partial" if partial < 1.0 else "gemma4_26b_a4b_global"
 
     # head_dim == 256 branch (Gemma local attention family)
     if h >= 32:
@@ -207,6 +211,7 @@ def _ensure_triton_qk_norm_rope():
             heads, seq_len, head_dim,
             eps,
             BLOCK_SIZE: tl.constexpr,
+            PARTIAL_ROTARY_PAIRS: tl.constexpr,
         ):
             pid = tl.program_id(0)
             s_idx = pid % seq_len
@@ -224,12 +229,20 @@ def _ensure_triton_qk_norm_rope():
             s_odd = tl.load(scale_ptr + 2 * offs + 1, mask=mask, other=0.0).to(tl.float32)
             n_even = x_even * rstd * (1.0 + s_even)
             n_odd = x_odd * rstd * (1.0 + s_odd)
+            # Partial RoPE: only rotate the first PARTIAL_ROTARY_PAIRS pairs;
+            # remaining pairs pass through with RMSNorm only (no rotation).
+            rope_mask = offs < PARTIAL_ROTARY_PAIRS
+            rot_mask = mask & rope_mask
+            pass_mask = mask & ~rope_mask
             cos_row = cos_ptr + s_idx * half
             sin_row = sin_ptr + s_idx * half
-            c = tl.load(cos_row + offs, mask=mask, other=1.0).to(tl.float32)
-            sn = tl.load(sin_row + offs, mask=mask, other=0.0).to(tl.float32)
+            c = tl.load(cos_row + offs, mask=rot_mask, other=1.0).to(tl.float32)
+            sn = tl.load(sin_row + offs, mask=rot_mask, other=0.0).to(tl.float32)
             out_even = n_even * c - n_odd * sn
             out_odd = n_even * sn + n_odd * c
+            # For non-rotated pairs, write normalized values directly
+            out_even = tl.where(rope_mask, out_even, n_even)
+            out_odd = tl.where(rope_mask, out_odd, n_odd)
             tl.store(out_base + 2 * offs, out_even.to(tl.float16), mask=mask)
             tl.store(out_base + 2 * offs + 1, out_odd.to(tl.float16), mask=mask)
 
@@ -239,7 +252,7 @@ def _ensure_triton_qk_norm_rope():
         _triton_qk_available = False
 
 
-def apply_qk_norm_rope(q, k, cos, sin, q_scale, k_scale, config=None, eps=1e-6):
+def apply_qk_norm_rope(q, k, cos, sin, q_scale, k_scale, config=None, eps=1e-6, partial_ratio=1.0):
     """Module-level fused QK-RMSNorm+RoPE launcher. Requires CUDA GPU.
 
     Args:
@@ -252,6 +265,9 @@ def apply_qk_norm_rope(q, k, cos, sin, q_scale, k_scale, config=None, eps=1e-6):
         config: Triton config dict with BLOCK_SIZE, num_warps, num_stages.
             Defaults to the first curated config.
         eps: Epsilon for RMSNorm.
+        partial_ratio: Fraction of head-dim pairs to rotate (default 1.0 = full
+            RoPE).  Gemma 4 global layers use 0.25 — only the first 25% of
+            pairs get rotated, the rest pass through with RMSNorm only.
 
     Returns:
         (q_out, k_out) tuple of fp16 tensors with same shapes as inputs.
@@ -282,11 +298,15 @@ def apply_qk_norm_rope(q, k, cos, sin, q_scale, k_scale, config=None, eps=1e-6):
     cos_c = cos.contiguous()
     sin_c = sin.contiguous()
 
+    # Number of even/odd pairs to actually rotate (partial RoPE support)
+    partial_rotary_pairs = int(half * partial_ratio)
+
     # Q launch
     _qk_norm_rope_kernel_compiled[(B * H * S,)](
         q_flat, q_scale, cos_c, sin_c, q_out_flat,
         D, H, S, D, eps,
         BLOCK_SIZE=BLOCK_SIZE,
+        PARTIAL_ROTARY_PAIRS=partial_rotary_pairs,
         num_warps=config["num_warps"],
         num_stages=config["num_stages"],
     )
@@ -296,6 +316,7 @@ def apply_qk_norm_rope(q, k, cos, sin, q_scale, k_scale, config=None, eps=1e-6):
         k_flat, k_scale, cos_c, sin_c, k_out_flat,
         D, H_kv, S, D, eps,
         BLOCK_SIZE=BLOCK_SIZE,
+        PARTIAL_ROTARY_PAIRS=partial_rotary_pairs,
         num_warps=config["num_warps"],
         num_stages=config["num_stages"],
     )
@@ -333,12 +354,18 @@ def qk_norm_rope_kernel(
     heads, seq_len, head_dim,
     eps,
     BLOCK_SIZE: tl.constexpr,
+    PARTIAL_ROTARY_PAIRS: tl.constexpr,
 ):
     """Fused RMSNorm (Gemma-mode affine) + split-pair RoPE for one row.
 
     Grid: (B * H * S,) — one program per (batch, head, seq) row.
     Each row has ``head_dim`` elements; we process the ``head_dim // 2``
     even/odd pairs in parallel within BLOCK_SIZE.
+
+    PARTIAL_ROTARY_PAIRS controls how many of the ``half`` pairs get
+    RoPE-rotated.  When equal to ``half`` this is standard full RoPE.
+    Gemma 4 global layers set partial_ratio=0.25, so only the first 25%
+    of pairs are rotated — the rest pass through with RMSNorm only.
     """
     pid = tl.program_id(0)
 
@@ -368,26 +395,37 @@ def qk_norm_rope_kernel(
     n_even = x_even * rstd * (1.0 + s_even)
     n_odd = x_odd * rstd * (1.0 + s_odd)
 
+    # Partial RoPE: only rotate the first PARTIAL_ROTARY_PAIRS pairs;
+    # remaining pairs pass through with RMSNorm only (no rotation).
+    rope_mask = offs < PARTIAL_ROTARY_PAIRS
+    rot_mask = mask & rope_mask
+    pass_mask = mask & ~rope_mask
+
     # RoPE lookup — cos/sin rows are [seq_len, half] row-major.
     cos_row = cos_ptr + s_idx * half
     sin_row = sin_ptr + s_idx * half
-    c = tl.load(cos_row + offs, mask=mask, other=1.0).to(tl.float32)
-    sn = tl.load(sin_row + offs, mask=mask, other=0.0).to(tl.float32)
+    c = tl.load(cos_row + offs, mask=rot_mask, other=1.0).to(tl.float32)
+    sn = tl.load(sin_row + offs, mask=rot_mask, other=0.0).to(tl.float32)
 
     out_even = n_even * c - n_odd * sn
     out_odd = n_even * sn + n_odd * c
+
+    # For non-rotated pairs, write normalized values directly
+    out_even = tl.where(rope_mask, out_even, n_even)
+    out_odd = tl.where(rope_mask, out_odd, n_odd)
 
     tl.store(out_base + 2 * offs, out_even.to(tl.float16), mask=mask)
     tl.store(out_base + 2 * offs + 1, out_odd.to(tl.float16), mask=mask)
 
 
-def apply_qk_norm_rope(q, k, cos, sin, q_scale, k_scale, config, eps=1e-6):
+def apply_qk_norm_rope(q, k, cos, sin, q_scale, k_scale, config, eps=1e-6, partial_ratio=1.0):
     """Launch two kernel invocations — one for Q, one for K.
 
     q: (B, H, S, D) fp16
     k: (B, H_kv, S, D) fp16
     cos/sin: (S, D/2) fp32
     q_scale/k_scale: (D,) fp32
+    partial_ratio: fraction of head-dim pairs to rotate (1.0 = full RoPE)
     """
     B, H, S, D = q.shape
     _, H_kv, _, _ = k.shape
@@ -403,6 +441,7 @@ def apply_qk_norm_rope(q, k, cos, sin, q_scale, k_scale, config, eps=1e-6):
 
     half = D // 2
     BLOCK_SIZE = max(config["BLOCK_SIZE"], triton.next_power_of_2(half))
+    partial_rotary_pairs = int(half * partial_ratio)
 
     cos_c = cos.contiguous()
     sin_c = sin.contiguous()
@@ -415,6 +454,7 @@ def apply_qk_norm_rope(q, k, cos, sin, q_scale, k_scale, config, eps=1e-6):
         H, S, D,
         eps,
         BLOCK_SIZE=BLOCK_SIZE,
+        PARTIAL_ROTARY_PAIRS=partial_rotary_pairs,
         num_warps=config["num_warps"],
         num_stages=config["num_stages"],
     )
@@ -427,6 +467,7 @@ def apply_qk_norm_rope(q, k, cos, sin, q_scale, k_scale, config, eps=1e-6):
         H_kv, S, D,
         eps,
         BLOCK_SIZE=BLOCK_SIZE,
+        PARTIAL_ROTARY_PAIRS=partial_rotary_pairs,
         num_warps=config["num_warps"],
         num_stages=config["num_stages"],
     )
@@ -434,61 +475,75 @@ def apply_qk_norm_rope(q, k, cos, sin, q_scale, k_scale, config, eps=1e-6):
     return q_out, k_out
 
 
-def torch_qk_norm_rope(q, k, cos, sin, q_scale, k_scale, eps=1e-6):
+def torch_qk_norm_rope(q, k, cos, sin, q_scale, k_scale, eps=1e-6, partial_ratio=1.0):
     """PyTorch reference: fused RMSNorm (Gemma-mode) + RoPE."""
     q_var = q.float().pow(2).mean(-1, keepdim=True)
     q_normed = (q.float() * torch.rsqrt(q_var + eps)).to(torch.float16) * (1.0 + q_scale).to(torch.float16)
     k_var = k.float().pow(2).mean(-1, keepdim=True)
     k_normed = (k.float() * torch.rsqrt(k_var + eps)).to(torch.float16) * (1.0 + k_scale).to(torch.float16)
 
+    half = q.shape[-1] // 2
+    partial_pairs = int(half * partial_ratio)
+
     q_even, q_odd = q_normed[..., 0::2], q_normed[..., 1::2]
     k_even, k_odd = k_normed[..., 0::2], k_normed[..., 1::2]
-    c = cos[None, None, :, :].to(torch.float16)
-    sn = sin[None, None, :, :].to(torch.float16)
-    q_out_even = q_even * c - q_odd * sn
-    q_out_odd = q_even * sn + q_odd * c
-    k_out_even = k_even * c - k_odd * sn
-    k_out_odd = k_even * sn + k_odd * c
+    c = cos[None, None, :, :partial_pairs].to(torch.float16)
+    sn = sin[None, None, :, :partial_pairs].to(torch.float16)
+    # Rotate only the first partial_pairs pairs
+    q_out_even = q_even.clone()
+    q_out_odd = q_odd.clone()
+    q_out_even[..., :partial_pairs] = q_even[..., :partial_pairs] * c - q_odd[..., :partial_pairs] * sn
+    q_out_odd[..., :partial_pairs] = q_even[..., :partial_pairs] * sn + q_odd[..., :partial_pairs] * c
+    k_out_even = k_even.clone()
+    k_out_odd = k_odd.clone()
+    k_out_even[..., :partial_pairs] = k_even[..., :partial_pairs] * c - k_odd[..., :partial_pairs] * sn
+    k_out_odd[..., :partial_pairs] = k_even[..., :partial_pairs] * sn + k_odd[..., :partial_pairs] * c
     q_out = torch.stack([q_out_even, q_out_odd], dim=-1).reshape(q.shape)
     k_out = torch.stack([k_out_even, k_out_odd], dim=-1).reshape(k.shape)
     return q_out.to(torch.float16), k_out.to(torch.float16)
 
 
-def separated_baseline(q, k, cos, sin, q_scale, k_scale, eps=1e-6):
+def separated_baseline(q, k, cos, sin, q_scale, k_scale, eps=1e-6, partial_ratio=1.0):
     """vLLM-style separated baseline: 4 distinct torch ops, no fusion.
 
     This mimics what vLLM does per layer:
       1. Q-RMSNorm
       2. K-RMSNorm
-      3. Q-RoPE
-      4. K-RoPE
+      3. Q-RoPE (partial: only first partial_ratio of pairs)
+      4. K-RoPE (partial: only first partial_ratio of pairs)
 
     Reporting ``separated_ms / fused_ms`` against this baseline is the
     headline number that justifies the fused kernel.
     """
     D = q.shape[-1]
+    half = D // 2
+    partial_pairs = int(half * partial_ratio)
     # 1. Q-RMSNorm
     q_var = q.float().pow(2).mean(-1, keepdim=True)
     q_normed = (q.float() * torch.rsqrt(q_var + eps)).to(torch.float16) * (1.0 + q_scale).to(torch.float16)
     # 2. K-RMSNorm
     k_var = k.float().pow(2).mean(-1, keepdim=True)
     k_normed = (k.float() * torch.rsqrt(k_var + eps)).to(torch.float16) * (1.0 + k_scale).to(torch.float16)
-    # 3. Q-RoPE
+    # 3. Q-RoPE (partial)
     q_even, q_odd = q_normed[..., 0::2], q_normed[..., 1::2]
-    c = cos[None, None, :, :].to(torch.float16)
-    sn = sin[None, None, :, :].to(torch.float16)
-    q_out_even = q_even * c - q_odd * sn
-    q_out_odd = q_even * sn + q_odd * c
+    c = cos[None, None, :, :partial_pairs].to(torch.float16)
+    sn = sin[None, None, :, :partial_pairs].to(torch.float16)
+    q_out_even = q_even.clone()
+    q_out_odd = q_odd.clone()
+    q_out_even[..., :partial_pairs] = q_even[..., :partial_pairs] * c - q_odd[..., :partial_pairs] * sn
+    q_out_odd[..., :partial_pairs] = q_even[..., :partial_pairs] * sn + q_odd[..., :partial_pairs] * c
     q_out = torch.stack([q_out_even, q_out_odd], dim=-1).reshape(q.shape)
-    # 4. K-RoPE
+    # 4. K-RoPE (partial)
     k_even, k_odd = k_normed[..., 0::2], k_normed[..., 1::2]
-    k_out_even = k_even * c - k_odd * sn
-    k_out_odd = k_even * sn + k_odd * c
+    k_out_even = k_even.clone()
+    k_out_odd = k_odd.clone()
+    k_out_even[..., :partial_pairs] = k_even[..., :partial_pairs] * c - k_odd[..., :partial_pairs] * sn
+    k_out_odd[..., :partial_pairs] = k_even[..., :partial_pairs] * sn + k_odd[..., :partial_pairs] * c
     k_out = torch.stack([k_out_even, k_out_odd], dim=-1).reshape(k.shape)
     return q_out.to(torch.float16), k_out.to(torch.float16)
 
 
-def benchmark_one(batch, heads, num_kv_heads, seq, head_dim, config):
+def benchmark_one(batch, heads, num_kv_heads, seq, head_dim, config, partial_ratio=1.0):
     try:
         q = torch.randn((batch, heads, seq, head_dim), device="cuda", dtype=torch.float16)
         k = torch.randn((batch, num_kv_heads, seq, head_dim), device="cuda", dtype=torch.float16)
@@ -497,8 +552,8 @@ def benchmark_one(batch, heads, num_kv_heads, seq, head_dim, config):
         q_scale = torch.randn((head_dim,), device="cuda", dtype=torch.float32) * 0.1
         k_scale = torch.randn((head_dim,), device="cuda", dtype=torch.float32) * 0.1
 
-        q_ref, k_ref = torch_qk_norm_rope(q, k, cos, sin, q_scale, k_scale)
-        q_out, k_out = apply_qk_norm_rope(q, k, cos, sin, q_scale, k_scale, config)
+        q_ref, k_ref = torch_qk_norm_rope(q, k, cos, sin, q_scale, k_scale, partial_ratio=partial_ratio)
+        q_out, k_out = apply_qk_norm_rope(q, k, cos, sin, q_scale, k_scale, config, partial_ratio=partial_ratio)
 
         q_err = (q_out - q_ref).abs().max().item()
         k_err = (k_out - k_ref).abs().max().item()
@@ -507,11 +562,11 @@ def benchmark_one(batch, heads, num_kv_heads, seq, head_dim, config):
             return {{"correct": False, "max_err": max_err, "ms": None, "gb_per_s": None, "tflops": None}}
 
         ms = triton.testing.do_bench(
-            lambda: apply_qk_norm_rope(q, k, cos, sin, q_scale, k_scale, config),
+            lambda: apply_qk_norm_rope(q, k, cos, sin, q_scale, k_scale, config, partial_ratio=partial_ratio),
             warmup=25, rep=100,
         )
         sep_ms = triton.testing.do_bench(
-            lambda: separated_baseline(q, k, cos, sin, q_scale, k_scale),
+            lambda: separated_baseline(q, k, cos, sin, q_scale, k_scale, partial_ratio=partial_ratio),
             warmup=25, rep=100,
         )
         # Memory bandwidth: read q + k + cos + sin + scales, write q_out + k_out
@@ -552,8 +607,10 @@ def main():
             num_kv_heads = shape["num_kv_heads"]
             seq = shape["seq"]
             head_dim = shape["head_dim"]
-            result = benchmark_one(batch, heads, num_kv_heads, seq, head_dim, config)
+            partial_ratio = shape.get("partial_ratio", 1.0)
+            result = benchmark_one(batch, heads, num_kv_heads, seq, head_dim, config, partial_ratio=partial_ratio)
             result["shape"] = f"{{batch}}x{{heads}}x{{num_kv_heads}}x{{seq}}x{{head_dim}}"
+            result["partial_ratio"] = partial_ratio
             result["shape_name"] = shape.get("name", "")
             shape_results.append(result)
         all_results.append({{
