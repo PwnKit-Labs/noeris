@@ -1,0 +1,35 @@
+{
+  "gpu": "NVIDIA A100 80GB PCIe",
+  "model": "gemma4_e2b",
+  "n_layers": 26,
+  "shapes": {
+    "B": 1,
+    "S": 2048,
+    "D": 1536,
+    "H": 8,
+    "H_kv": 1,
+    "Dh": 256,
+    "Dff": 6144
+  },
+  "configs": {
+    "rmsnorm": {
+      "BLOCK_SIZE": 2048,
+      "num_warps": 4,
+      "num_stages": 1
+    },
+    "qk_norm_rope": {
+      "BLOCK_SIZE": 128,
+      "num_warps": 4,
+      "num_stages": 1
+    },
+    "geglu": {
+      "BLOCK_SIZE": 1024,
+      "num_warps": 4,
+      "num_stages": 1
+    }
+  },
+  "baseline_ms": 41.41,
+  "noeris_ms": 29.06,
+  "speedup": 1.425,
+  "per_layer_savings_ms": 0.475
+}
