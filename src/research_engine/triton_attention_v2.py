@@ -67,6 +67,10 @@ ATTENTION_V2_CURATED_CONFIGS = [
     {"BLOCK_M": 64, "BLOCK_N": 32, "num_warps": 4, "num_stages": 2},
     {"BLOCK_M": 32, "BLOCK_N": 64, "num_warps": 4, "num_stages": 2},
     {"BLOCK_M": 64, "BLOCK_N": 64, "num_warps": 2, "num_stages": 2},
+    # T4 sliding-window: small tiles, low warps, minimal register pressure
+    {"BLOCK_M": 32, "BLOCK_N": 32, "num_warps": 2, "num_stages": 2},
+    {"BLOCK_M": 32, "BLOCK_N": 64, "num_warps": 2, "num_stages": 2},
+    {"BLOCK_M": 64, "BLOCK_N": 32, "num_warps": 2, "num_stages": 2},
 ]
 
 
@@ -274,7 +278,7 @@ def flash_attn_v2(
             lo = 0
             hi = N
 
-        # Sliding-window: tighten lo to exclude keys before the window.
+        # Sliding-window: tighten both lo AND hi to exclude keys outside window.
         if WINDOW_SIZE > 0:
             window_lo = start_m * BLOCK_M - WINDOW_SIZE + 1
             if window_lo < 0:
@@ -282,14 +286,36 @@ def flash_attn_v2(
             if lo < window_lo:
                 # Align to BLOCK_N boundary (round down)
                 lo = (window_lo // BLOCK_N) * BLOCK_N
+            # Tighten hi: keys past the window end are irrelevant
+            # For causal STAGE 1, hi is already <= start_m*BLOCK_M which is fine.
+            # For non-causal STAGE 3, cap hi to the window upper bound.
+            if STAGE == 3:
+                window_hi = (start_m + 1) * BLOCK_M + WINDOW_SIZE - 1
+                if window_hi < hi:
+                    # Align up to BLOCK_N boundary
+                    hi = ((window_hi + BLOCK_N - 1) // BLOCK_N) * BLOCK_N
+                    if hi > N:
+                        hi = N
+
+        # Pre-compute window floor for the Q-tile (constant across K-tiles).
+        # min(offs_m) = start_m * BLOCK_M, so the most restrictive floor is:
+        if WINDOW_SIZE > 0:
+            tile_window_lo = start_m * BLOCK_M - WINDOW_SIZE + 1
 
         for start_n in range(lo, hi, BLOCK_N):
             curr_n = start_n + offs_n
 
-            # Load K tile
+            # Tile-level bounds checks: skip per-element masking when safe
+            tile_n_end = start_n + BLOCK_N
+            tile_fully_in_bounds = tile_n_end <= N
+
+            # Load K tile — skip mask when tile is fully in bounds
             k_ptrs = K_base + curr_n[:, None] * stride_kn + offs_k[None, :] * stride_kk
-            n_mask = curr_n[:, None] < N
-            k = tl.load(k_ptrs, mask=n_mask, other=0.0)
+            if tile_fully_in_bounds:
+                k = tl.load(k_ptrs)
+            else:
+                n_mask = curr_n[:, None] < N
+                k = tl.load(k_ptrs, mask=n_mask, other=0.0)
 
             # Fused QK-norm on K (per-row RMSNorm)
             if USE_QK_NORM:
@@ -309,7 +335,8 @@ def flash_attn_v2(
             if STAGE == 2:
                 NEG_INF = -1.0e6
                 mask = offs_m[:, None] >= curr_n[None, :]
-                qk = tl.where(curr_n[None, :] < N, qk, NEG_INF)
+                if not tile_fully_in_bounds:
+                    qk = tl.where(curr_n[None, :] < N, qk, NEG_INF)
                 qk = qk * qk_scale + tl.where(mask, 0, NEG_INF)
                 # Sliding-window mask on diagonal block
                 if WINDOW_SIZE > 0:
@@ -319,14 +346,21 @@ def flash_attn_v2(
                 m_ij = tl.maximum(m_i, tl.max(qk, 1))
                 qk -= m_ij[:, None]
             else:
-                # Off-band or non-causal: no causal mask, but OOB + window mask
-                qk = tl.where(curr_n[None, :] < N, qk, -1.0e6)
+                # Off-band or non-causal: scale first (consistent with on-band)
+                qk = qk * qk_scale
+                if not tile_fully_in_bounds:
+                    qk = tl.where(curr_n[None, :] < N, qk, -1.0e6)
+                # Sliding-window: skip per-element mask when tile is fully inside window
                 if WINDOW_SIZE > 0:
-                    window_floor = offs_m[:, None] - WINDOW_SIZE + 1
-                    window_mask = curr_n[None, :] >= window_floor
-                    qk = tl.where(window_mask, qk, -1.0e6)
-                m_ij = tl.maximum(m_i, tl.max(qk, 1) * qk_scale)
-                qk = qk * qk_scale - m_ij[:, None]
+                    # tile_window_lo is the floor for the last row of Q-tile;
+                    # if start_n >= tile_window_lo, the entire K-tile is in-window
+                    # for all Q rows.
+                    if start_n < tile_window_lo:
+                        window_floor = offs_m[:, None] - WINDOW_SIZE + 1
+                        window_mask = curr_n[None, :] >= window_floor
+                        qk = tl.where(window_mask, qk, -1.0e6)
+                m_ij = tl.maximum(m_i, tl.max(qk, 1))
+                qk -= m_ij[:, None]
 
             # exp2-based softmax (numerically stable)
             p = tl.math.exp2(qk)
@@ -338,9 +372,13 @@ def flash_attn_v2(
             # Update accumulator
             acc = acc * alpha[:, None]
 
-            # Load V tile and accumulate
+            # Load V tile and accumulate — skip mask when tile is in bounds
             v_ptrs = V_base + curr_n[:, None] * stride_vn + offs_k[None, :] * stride_vk
-            v = tl.load(v_ptrs, mask=n_mask, other=0.0)
+            if tile_fully_in_bounds:
+                v = tl.load(v_ptrs)
+            else:
+                n_mask = curr_n[:, None] < N
+                v = tl.load(v_ptrs, mask=n_mask, other=0.0)
             p = p.to(v.dtype)
             acc = tl.dot(p, v, acc)
 
@@ -579,12 +617,28 @@ def _attn_v2_inner(
             window_lo = 0
         if lo < window_lo:
             lo = (window_lo // BLOCK_N) * BLOCK_N
+        if STAGE == 3:
+            window_hi = (start_m + 1) * BLOCK_M + WINDOW_SIZE - 1
+            if window_hi < hi:
+                hi = ((window_hi + BLOCK_N - 1) // BLOCK_N) * BLOCK_N
+                if hi > N:
+                    hi = N
+
+    if WINDOW_SIZE > 0:
+        tile_window_lo = start_m * BLOCK_M - WINDOW_SIZE + 1
 
     for start_n in range(lo, hi, BLOCK_N):
         curr_n = start_n + offs_n
+
+        tile_n_end = start_n + BLOCK_N
+        tile_fully_in_bounds = tile_n_end <= N
+
         k_ptrs = K_base + curr_n[:, None] * stride_kn + offs_k[None, :] * stride_kk
-        n_mask = curr_n[:, None] < N
-        k = tl.load(k_ptrs, mask=n_mask, other=0.0)
+        if tile_fully_in_bounds:
+            k = tl.load(k_ptrs)
+        else:
+            n_mask = curr_n[:, None] < N
+            k = tl.load(k_ptrs, mask=n_mask, other=0.0)
 
         if USE_QK_NORM:
             k = k.to(tl.float32)
@@ -601,7 +655,8 @@ def _attn_v2_inner(
         if STAGE == 2:
             NEG_INF = -1.0e6
             mask = offs_m[:, None] >= curr_n[None, :]
-            qk = tl.where(curr_n[None, :] < N, qk, NEG_INF)
+            if not tile_fully_in_bounds:
+                qk = tl.where(curr_n[None, :] < N, qk, NEG_INF)
             qk = qk * qk_scale + tl.where(mask, 0, NEG_INF)
             if WINDOW_SIZE > 0:
                 window_floor = offs_m[:, None] - WINDOW_SIZE + 1
@@ -610,13 +665,16 @@ def _attn_v2_inner(
             m_ij = tl.maximum(m_i, tl.max(qk, 1))
             qk -= m_ij[:, None]
         else:
-            qk = tl.where(curr_n[None, :] < N, qk, -1.0e6)
+            qk = qk * qk_scale
+            if not tile_fully_in_bounds:
+                qk = tl.where(curr_n[None, :] < N, qk, -1.0e6)
             if WINDOW_SIZE > 0:
-                window_floor = offs_m[:, None] - WINDOW_SIZE + 1
-                window_mask = curr_n[None, :] >= window_floor
-                qk = tl.where(window_mask, qk, -1.0e6)
-            m_ij = tl.maximum(m_i, tl.max(qk, 1) * qk_scale)
-            qk = qk * qk_scale - m_ij[:, None]
+                if start_n < tile_window_lo:
+                    window_floor = offs_m[:, None] - WINDOW_SIZE + 1
+                    window_mask = curr_n[None, :] >= window_floor
+                    qk = tl.where(window_mask, qk, -1.0e6)
+            m_ij = tl.maximum(m_i, tl.max(qk, 1))
+            qk -= m_ij[:, None]
 
         p = tl.math.exp2(qk)
         alpha = tl.math.exp2(m_i - m_ij)
@@ -625,7 +683,11 @@ def _attn_v2_inner(
         acc = acc * alpha[:, None]
 
         v_ptrs = V_base + curr_n[:, None] * stride_vn + offs_k[None, :] * stride_vk
-        v = tl.load(v_ptrs, mask=n_mask, other=0.0)
+        if tile_fully_in_bounds:
+            v = tl.load(v_ptrs)
+        else:
+            n_mask = curr_n[:, None] < N
+            v = tl.load(v_ptrs, mask=n_mask, other=0.0)
         p = p.to(v.dtype)
         acc = tl.dot(p, v, acc)
 
