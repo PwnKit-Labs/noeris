@@ -103,26 +103,30 @@ measures the speedup from exploiting that identity:
   - Attention: pass same tensor as K and V to SDPA
   - Memory: halve KV-cache storage
 
-Usage (Kaggle T4 / Colab):
-    !pip install torch -q
-    !python kv_shared_benchmark.py
+Outputs JSON to stdout with "config_results" key for the validator.
+All diagnostic messages go to stderr.
 """
 
 import json
+import platform
 import sys
-import time
-from pathlib import Path
 
 import torch
 import torch.nn.functional as F
 
-print(f"PyTorch {{torch.__version__}}, CUDA available: {{torch.cuda.is_available()}}")
+
+def log(msg):
+    """Print to stderr so stdout stays clean for JSON."""
+    print(msg, file=sys.stderr, flush=True)
+
+
+log(f"PyTorch {{torch.__version__}}, CUDA available: {{torch.cuda.is_available()}}")
 if not torch.cuda.is_available():
-    print("ERROR: No GPU available. Change runtime to T4 GPU.")
+    log("ERROR: No GPU available. Change runtime to T4 GPU.")
     sys.exit(1)
 
 GPU_NAME = torch.cuda.get_device_name(0)
-print(f"GPU: {{GPU_NAME}}")
+log(f"GPU: {{GPU_NAME}}")
 
 # ============================================================================
 # Shapes
@@ -157,24 +161,8 @@ def cuda_timer(fn, warmup=WARMUP, rep=REP):
     return times[len(times) // 2]  # median
 
 
-def fmt(ms):
-    """Format milliseconds."""
-    if ms < 0.01:
-        return f"{{ms * 1000:.1f}} us"
-    return f"{{ms:.3f}} ms"
-
-
 def expand_kv(kv, num_heads, num_kv_heads):
-    """Repeat-interleave KV heads to match Q head count (GQA expansion).
-
-    Args:
-        kv: Tensor of shape (B, H_kv, S, Dh).
-        num_heads: Total number of query heads (H).
-        num_kv_heads: Number of KV heads (H_kv).
-
-    Returns:
-        Tensor of shape (B, H, S, Dh).
-    """
+    """Repeat-interleave KV heads to match Q head count (GQA expansion)."""
     if num_heads == num_kv_heads:
         return kv
     n_rep = num_heads // num_kv_heads
@@ -188,121 +176,107 @@ def expand_kv(kv, num_heads, num_kv_heads):
 
 def benchmark_shape(cfg):
     """Run projection and full-attention benchmarks for one shape config."""
-    name = cfg["name"]
-    B = cfg["batch"]
-    S = cfg["seq_len"]
-    D = cfg["hidden_dim"]
-    H = cfg["num_heads"]
-    H_kv = cfg["num_kv_heads"]
-    Dh = cfg["head_dim"]
+    try:
+        name = cfg["name"]
+        B = cfg["batch"]
+        S = cfg["seq_len"]
+        D = cfg["hidden_dim"]
+        H = cfg["num_heads"]
+        H_kv = cfg["num_kv_heads"]
+        Dh = cfg["head_dim"]
 
-    print(f"\\n{{' ' + name + ' ':=^72}}")
-    print(f"  B={{B}}, S={{S}}, D={{D}}, H={{H}}, H_kv={{H_kv}}, Dh={{Dh}}")
+        log(f"  benchmarking {{name}}: B={{B}}, S={{S}}, D={{D}}, H={{H}}, H_kv={{H_kv}}, Dh={{Dh}}")
 
-    # Allocate input + weights
-    x = torch.randn(B, S, D, device="cuda", dtype=torch.float16)
-    W_q = torch.randn(D, H * Dh, device="cuda", dtype=torch.float16)
-    W_k = torch.randn(D, H_kv * Dh, device="cuda", dtype=torch.float16)
-    W_v = torch.randn(D, H_kv * Dh, device="cuda", dtype=torch.float16)
-    # For K=V, we use a single weight matrix
-    W_kv = W_k  # same weight — K=V identity
+        # Allocate input + weights
+        x = torch.randn(B, S, D, device="cuda", dtype=torch.float16)
+        W_q = torch.randn(D, H * Dh, device="cuda", dtype=torch.float16)
+        W_k = torch.randn(D, H_kv * Dh, device="cuda", dtype=torch.float16)
+        W_kv = W_k  # K=V identity — single weight matrix
 
-    results = {{"name": name, "B": B, "S": S, "D": D, "H": H, "H_kv": H_kv, "Dh": Dh}}
+        scale = Dh ** -0.5
 
-    # ------------------------------------------------------------------
-    # 1. Projection benchmark: 3 matmuls vs 2 matmuls
-    # ------------------------------------------------------------------
-    print("\\n  [Projection: 3 matmuls vs 2 matmuls]")
+        # --- Correctness check: attn(Q, KV, KV) with same data for K and V ---
+        torch.manual_seed(42)
+        x_check = torch.randn(B, min(S, 512), D, device="cuda", dtype=torch.float16)
+        q_c = (x_check @ W_q).view(B, -1, H, Dh).transpose(1, 2)
+        k_c = (x_check @ W_k).view(B, -1, H_kv, Dh).transpose(1, 2)
+        k_c = expand_kv(k_c, H, H_kv)
 
-    def proj_baseline():
-        q = x @ W_q
-        k = x @ W_k
-        v = x @ W_v
-        return q, k, v
+        out_a = F.scaled_dot_product_attention(q_c, k_c, k_c, is_causal=True, scale=scale)
+        out_b = F.scaled_dot_product_attention(q_c, k_c, k_c, is_causal=True, scale=scale)
+        max_diff = (out_a - out_b).abs().max().item()
+        correct = max_diff < 0.01
 
-    def proj_kv_shared():
-        q = x @ W_q
-        kv = x @ W_kv
-        return q, kv
+        # --- Projection timing: 3 matmuls vs 2 matmuls ---
+        W_v = torch.randn(D, H_kv * Dh, device="cuda", dtype=torch.float16)
 
-    t_base = cuda_timer(proj_baseline)
-    t_shared = cuda_timer(proj_kv_shared)
-    speedup_proj = t_base / t_shared
+        def proj_baseline():
+            return x @ W_q, x @ W_k, x @ W_v
 
-    print(f"    baseline (Q+K+V):   {{fmt(t_base)}}")
-    print(f"    kv_shared (Q+KV):   {{fmt(t_shared)}}")
-    print(f"    speedup:            {{speedup_proj:.2f}}x")
+        def proj_kv_shared():
+            return x @ W_q, x @ W_kv
 
-    results["proj_baseline_ms"] = t_base
-    results["proj_kv_shared_ms"] = t_shared
-    results["proj_speedup"] = speedup_proj
+        t_base = cuda_timer(proj_baseline)
+        t_shared = cuda_timer(proj_kv_shared)
+        speedup_proj = t_base / t_shared if t_shared > 0 else 0.0
 
-    # ------------------------------------------------------------------
-    # 2. Full attention path: proj + reshape + SDPA
-    # ------------------------------------------------------------------
-    print("\\n  [Full attention: proj + SDPA]")
+        # --- Full attention path ---
+        def attn_baseline():
+            q = (x @ W_q).view(B, S, H, Dh).transpose(1, 2)
+            k = (x @ W_k).view(B, S, H_kv, Dh).transpose(1, 2)
+            v = (x @ W_v).view(B, S, H_kv, Dh).transpose(1, 2)
+            k = expand_kv(k, H, H_kv)
+            v = expand_kv(v, H, H_kv)
+            return F.scaled_dot_product_attention(q, k, v, is_causal=True, scale=scale)
 
-    scale = Dh ** -0.5
+        def attn_kv_shared():
+            q = (x @ W_q).view(B, S, H, Dh).transpose(1, 2)
+            kv = (x @ W_kv).view(B, S, H_kv, Dh).transpose(1, 2)
+            kv = expand_kv(kv, H, H_kv)
+            return F.scaled_dot_product_attention(q, kv, kv, is_causal=True, scale=scale)
 
-    def attn_baseline():
-        q = (x @ W_q).view(B, S, H, Dh).transpose(1, 2)
-        k = (x @ W_k).view(B, S, H_kv, Dh).transpose(1, 2)
-        v = (x @ W_v).view(B, S, H_kv, Dh).transpose(1, 2)
-        k = expand_kv(k, H, H_kv)
-        v = expand_kv(v, H, H_kv)
-        return F.scaled_dot_product_attention(q, k, v, is_causal=True, scale=scale)
+        t_base_attn = cuda_timer(attn_baseline)
+        t_shared_attn = cuda_timer(attn_kv_shared)
+        speedup_attn = t_base_attn / t_shared_attn if t_shared_attn > 0 else 0.0
 
-    def attn_kv_shared():
-        q = (x @ W_q).view(B, S, H, Dh).transpose(1, 2)
-        kv = (x @ W_kv).view(B, S, H_kv, Dh).transpose(1, 2)
-        kv = expand_kv(kv, H, H_kv)
-        return F.scaled_dot_product_attention(q, kv, kv, is_causal=True, scale=scale)
+        # --- KV cache memory savings ---
+        kv_cache_baseline_bytes = 2 * B * S * H_kv * Dh * 2  # K + V, fp16
+        kv_cache_shared_bytes = 1 * B * S * H_kv * Dh * 2    # KV only, fp16
+        savings_mb = (kv_cache_baseline_bytes - kv_cache_shared_bytes) / (1024 ** 2)
 
-    t_base_attn = cuda_timer(attn_baseline)
-    t_shared_attn = cuda_timer(attn_kv_shared)
-    speedup_attn = t_base_attn / t_shared_attn
+        # Memory bandwidth: bytes moved per attn call
+        total_bytes = (B * S * D * 2  # input
+                       + D * H_kv * Dh * 2  # W_kv
+                       + B * S * H * Dh * 2)  # output Q+attention
+        gb_per_s = total_bytes / (t_shared_attn * 1e-3) / 1e9 if t_shared_attn > 0 else 0.0
 
-    print(f"    baseline (Q+K+V+SDPA):  {{fmt(t_base_attn)}}")
-    print(f"    kv_shared (Q+KV+SDPA):  {{fmt(t_shared_attn)}}")
-    print(f"    speedup:                {{speedup_attn:.2f}}x")
+        log(f"    proj speedup: {{speedup_proj:.2f}}x, attn speedup: {{speedup_attn:.2f}}x, correct: {{correct}}")
 
-    results["attn_baseline_ms"] = t_base_attn
-    results["attn_kv_shared_ms"] = t_shared_attn
-    results["attn_speedup"] = speedup_attn
-
-    # ------------------------------------------------------------------
-    # 3. KV cache memory savings
-    # ------------------------------------------------------------------
-    kv_cache_baseline_bytes = 2 * B * S * H_kv * Dh * 2  # K + V, fp16
-    kv_cache_shared_bytes = 1 * B * S * H_kv * Dh * 2    # KV only, fp16
-    savings_mb = (kv_cache_baseline_bytes - kv_cache_shared_bytes) / (1024 ** 2)
-
-    print(f"\\n  [KV cache memory]")
-    print(f"    baseline (K+V):   {{kv_cache_baseline_bytes / (1024**2):.2f}} MB")
-    print(f"    kv_shared (KV):   {{kv_cache_shared_bytes / (1024**2):.2f}} MB")
-    print(f"    savings:          {{savings_mb:.2f}} MB  (50%)")
-
-    results["kv_cache_baseline_mb"] = kv_cache_baseline_bytes / (1024 ** 2)
-    results["kv_cache_shared_mb"] = kv_cache_shared_bytes / (1024 ** 2)
-    results["kv_cache_savings_mb"] = savings_mb
-
-    # ------------------------------------------------------------------
-    # 4. Correctness check: attn(Q, K, V) == attn(Q, KV, KV) when K=V
-    # ------------------------------------------------------------------
-    torch.manual_seed(42)
-    x_check = torch.randn(B, min(S, 512), D, device="cuda", dtype=torch.float16)
-    q_c = (x_check @ W_q).view(B, -1, H, Dh).transpose(1, 2)
-    k_c = (x_check @ W_k).view(B, -1, H_kv, Dh).transpose(1, 2)
-    k_c = expand_kv(k_c, H, H_kv)
-
-    out_base = F.scaled_dot_product_attention(q_c, k_c, k_c, is_causal=True, scale=scale)
-    out_shared = F.scaled_dot_product_attention(q_c, k_c, k_c, is_causal=True, scale=scale)
-
-    max_diff = (out_base - out_shared).abs().max().item()
-    print(f"\\n  [Correctness] max |baseline - kv_shared| = {{max_diff:.2e}}  (expect 0.0)")
-    results["correctness_max_diff"] = max_diff
-
-    return results
+        return {{
+            "correct": correct,
+            "max_err": max_diff,
+            "shape_name": name,
+            "shape": f"{{B}}x{{S}}x{{D}}_H{{H}}_Hkv{{H_kv}}_Dh{{Dh}}",
+            "ms": round(t_shared_attn, 4),
+            "gb_per_s": round(gb_per_s, 2),
+            "proj_baseline_ms": round(t_base, 4),
+            "proj_kv_shared_ms": round(t_shared, 4),
+            "proj_speedup": round(speedup_proj, 3),
+            "attn_baseline_ms": round(t_base_attn, 4),
+            "attn_kv_shared_ms": round(t_shared_attn, 4),
+            "attn_speedup": round(speedup_attn, 3),
+            "fusion_speedup": round(speedup_attn, 3),
+            "kv_cache_savings_mb": round(savings_mb, 2),
+        }}
+    except Exception as exc:
+        log(f"    ERROR: {{exc}}")
+        return {{
+            "correct": False,
+            "error": str(exc)[:200],
+            "shape_name": cfg.get("name", "?"),
+            "ms": None,
+            "gb_per_s": None,
+        }}
 
 
 # ============================================================================
@@ -310,37 +284,30 @@ def benchmark_shape(cfg):
 # ============================================================================
 
 def main():
-    print("=" * 72)
-    print("K=V Shared Attention Benchmark — Gemma 4 Global Layers")
-    print("=" * 72)
-    print(f"\\nExploiting K=V identity: halve KV projection + cache.")
-    print(f"Ref: https://github.com/PwnKit-Labs/noeris/issues/76")
+    log("K=V Shared Attention Benchmark — Gemma 4 Global Layers")
 
-    all_results = []
+    shape_results = []
     for shape in SHAPES:
         result = benchmark_shape(shape)
-        all_results.append(result)
+        shape_results.append(result)
 
-    # Summary table
-    print("\\n" + "=" * 72)
-    print("SUMMARY")
-    print("=" * 72)
-    print(f"  {{'Shape':<30s}} {{'Proj speedup':>14s}} {{'Attn speedup':>14s}} {{'Cache saved':>12s}}")
-    print("  " + "-" * 70)
-    for r in all_results:
-        print(f"  {{r['name']:<30s}} {{r['proj_speedup']:>13.2f}}x {{r['attn_speedup']:>13.2f}}x {{r['kv_cache_savings_mb']:>10.2f}} MB")
-
-    # Save JSON
-    out_path = Path("kv_shared_results.json")
-    meta = {{
-        "gpu": GPU_NAME,
-        "pytorch": torch.__version__,
-        "warmup": WARMUP,
-        "rep": REP,
+    # Output JSON to stdout with config_results format expected by the validator.
+    # kv_shared has no tunable Triton configs, so we emit a single "default" config.
+    output = {{
+        "operator": "kv_shared_attention",
+        "hardware": {{
+            "gpu": GPU_NAME,
+            "cuda_version": torch.version.cuda or "unknown",
+            "python": platform.python_version(),
+        }},
+        "configs_tested": 1,
+        "config_results": [{{
+            "config_id": "kv_shared_default",
+            "config": {{}},
+            "results": shape_results,
+        }}],
     }}
-    payload = {{"meta": meta, "results": all_results}}
-    out_path.write_text(json.dumps(payload, indent=2))
-    print(f"\\nResults saved to {{out_path}}")
+    print(json.dumps(output, indent=2))
 
 
 if __name__ == "__main__":

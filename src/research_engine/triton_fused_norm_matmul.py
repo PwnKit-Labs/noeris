@@ -63,6 +63,9 @@ FUSED_NORM_LINEAR_PARAM_SPACE = {
 # For E2B (K=1536, N=2560): moderate tiles since N and K are both modest.
 # For 31B (K=5376, N=16384): larger tiles in N, smaller BLOCK_K for two-pass.
 FUSED_NORM_LINEAR_CURATED_CONFIGS = [
+    # T4-safe default: BLOCK_K=128 works for all shapes including test_small (K=256).
+    # Must be first — the validator uses curated_configs[:1].
+    {"BLOCK_M": 32, "BLOCK_N": 64,  "BLOCK_K": 128,  "num_warps": 2, "num_stages": 2},
     # Gemma 4 E2B sweet spot: K=1536 → BLOCK_K must be power-of-2 for tl.arange
     {"BLOCK_M": 32, "BLOCK_N": 64,  "BLOCK_K": 512, "num_warps": 4, "num_stages": 1},
     {"BLOCK_M": 64, "BLOCK_N": 128, "BLOCK_K": 512, "num_warps": 8, "num_stages": 1},
@@ -72,7 +75,6 @@ FUSED_NORM_LINEAR_CURATED_CONFIGS = [
     {"BLOCK_M": 128, "BLOCK_N": 256, "BLOCK_K": 64,  "num_warps": 8, "num_stages": 3},
     {"BLOCK_M": 64, "BLOCK_N": 128, "BLOCK_K": 512,  "num_warps": 4, "num_stages": 2},
     # T4-optimized: fewer warps for 40-SM GPU
-    {"BLOCK_M": 32, "BLOCK_N": 64,  "BLOCK_K": 128,  "num_warps": 2, "num_stages": 2},
     {"BLOCK_M": 64, "BLOCK_N": 64,  "BLOCK_K": 256,  "num_warps": 2, "num_stages": 1},
     # Small tiles for small batch (decode-time, M=1..8)
     {"BLOCK_M": 16, "BLOCK_N": 128, "BLOCK_K": 256,  "num_warps": 4, "num_stages": 2},
@@ -553,7 +555,8 @@ def benchmark_one(M, N, K, config, dtype=torch.float16, affine_mode=0):
         max_abs_err = abs_err.max().item()
         # fp16 matmul tolerance: allow up to 5% relative error or 1.0 absolute
         if max_rel_err > 0.05 and max_abs_err > 1.0:
-            return {{"correct": False, "max_abs_err": max_abs_err, "max_rel_err": max_rel_err,
+            return {{"correct": False, "max_err": max_abs_err,
+                     "max_abs_err": max_abs_err, "max_rel_err": max_rel_err,
                      "ms": None, "tflops": None, "gb_per_s": None}}
 
         # Benchmark fused kernel
@@ -577,6 +580,7 @@ def benchmark_one(M, N, K, config, dtype=torch.float16, affine_mode=0):
 
         return {{
             "correct": True,
+            "max_err": round(max_abs_err, 6),
             "max_abs_err": round(max_abs_err, 6),
             "max_rel_err": round(max_rel_err, 6),
             "fused_ms": round(fused_ms, 4),
