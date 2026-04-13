@@ -25,7 +25,7 @@ PHASE_PRESETS = {
     "new": {8, 9},
     "paper": {1, 4, 5, 6, 7},
     "search": {1, 2, 3},
-    "novel": {1, 10, 11, 12, 13, 14, 15},
+    "novel": {1, 10, 11, 12, 13, 14, 15, 16},
 }
 
 phases_env = os.environ.get("NOERIS_PHASES", "novel").strip().lower()
@@ -152,6 +152,12 @@ if 15 in ACTIVE_PHASES:
     print("PHASE 15: Mamba-3 SSM scan benchmark")
     print("=" * 60)
     subprocess.run([sys.executable, "/tmp/noeris/scripts/ssm_scan_benchmark.py"])
+
+if 16 in ACTIVE_PHASES:
+    print("\n" + "=" * 60)
+    print("PHASE 16: @triton.autotune vs Noeris bandit comparison")
+    print("=" * 60)
+    subprocess.run([sys.executable, "/tmp/noeris/scripts/autotune_comparison.py"])
 
 print("\n" + "=" * 60)
 print(f"DONE — Ran phases {sorted(ACTIVE_PHASES)}")

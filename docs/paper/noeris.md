@@ -1,4 +1,4 @@
-# One Kernel Is All You Need: Architecture-Agnostic GPU Kernel Autotuning Across Transformers and State-Space Models
+# Noeris: Architecture-Agnostic Kernel Fusion and Autotuning
 
 **Draft — work in progress.** Not yet submitted.
 

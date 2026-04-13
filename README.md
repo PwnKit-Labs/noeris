@@ -165,7 +165,7 @@ Paper draft: [`docs/paper/noeris.md`](docs/paper/noeris.md). arXiv preprint comi
 
 ```bibtex
 @misc{noeris2026,
-  title   = {One Kernel Is All You Need: Architecture-Agnostic GPU Kernel Autotuning Across Transformers and State-Space Models},
+  title   = {Noeris: Architecture-Agnostic Kernel Fusion and Autotuning},
   author  = {Doruk Tan Ozturk},
   year    = {2026},
   url     = {https://github.com/PwnKit-Labs/noeris}
