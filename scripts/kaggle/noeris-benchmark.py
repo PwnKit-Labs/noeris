@@ -25,9 +25,10 @@ PHASE_PRESETS = {
     "new": {8, 9},
     "paper": {1, 4, 5, 6, 7},
     "search": {1, 2, 3},
+    "novel": {1, 10, 11},
 }
 
-phases_env = os.environ.get("NOERIS_PHASES", "all").strip().lower()
+phases_env = os.environ.get("NOERIS_PHASES", "novel").strip().lower()
 if phases_env in PHASE_PRESETS:
     ACTIVE_PHASES = PHASE_PRESETS[phases_env]
 else:
@@ -111,6 +112,24 @@ if 9 in ACTIVE_PHASES:
     subprocess.run([sys.executable, "/tmp/noeris/scripts/llm_kernel_search.py",
                     "--operator", "rmsnorm", "--dry-run", "--variants", "3"])
 
+if 10 in ACTIVE_PHASES:
+    print("\n" + "=" * 60)
+    print("PHASE 10: Sliding-window showdown (Noeris vs SDPA)")
+    print("=" * 60)
+    subprocess.run([sys.executable, "/tmp/noeris/scripts/sliding_window_showdown.py"])
+
+if 11 in ACTIVE_PHASES:
+    print("\n" + "=" * 60)
+    print("PHASE 11: Fused norm+matmul validation")
+    print("=" * 60)
+    # Validate via the operator registry
+    subprocess.run([sys.executable, "-c",
+        "import sys; sys.path.insert(0,'/tmp/noeris/src'); "
+        "from research_engine.triton_operators import REGISTRY; "
+        "spec = REGISTRY.get('fused_norm_linear'); "
+        "script = spec.benchmark_script_fn(spec.curated_configs[:2], spec.shape_buckets[:2]); "
+        "exec(script)"])
+
 print("\n" + "=" * 60)
 print(f"DONE — Ran phases {sorted(ACTIVE_PHASES)}")
 print("=" * 60)
@@ -118,6 +137,12 @@ print("=" * 60)
 # ============================================================================
 # Copy results to Kaggle output
 # ============================================================================
+RESULT_FILES_DIR = "/tmp/noeris/results"
+if os.path.isdir(RESULT_FILES_DIR):
+    for f in os.listdir(RESULT_FILES_DIR):
+        shutil.copy(os.path.join(RESULT_FILES_DIR, f), f"/kaggle/working/{f}")
+        print(f"Saved {f}")
+
 RESULT_FILES = {
     "/tmp/noeris/.noeris/colab-configs.json": "colab-configs.json",
     "/tmp/noeris/colab_validation_results.json": "validation_results.json",
