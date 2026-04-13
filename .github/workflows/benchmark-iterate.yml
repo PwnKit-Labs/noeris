@@ -1,9 +1,6 @@
 name: Benchmark Iterate
 
 on:
-  schedule:
-    - cron: "0 2 * * *"
-    - cron: "0 14 * * *"
   workflow_dispatch:
     inputs:
       benchmark_id:
