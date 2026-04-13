@@ -319,6 +319,9 @@ def _make_wrapper_classes() -> dict[str, type]:
     class NoerisGELUWrapper(nn.Module):
         """Drop-in replacement for ``nn.GELU`` using Noeris geglu kernel with gate=1."""
 
+        def __init__(self, original_module=None):
+            super().__init__()
+
         def forward(self, x: torch.Tensor) -> torch.Tensor:
             orig_dtype = x.dtype
             orig_shape = x.shape
