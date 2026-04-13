@@ -17,6 +17,8 @@
 \usepackage{microtype}
 \usepackage{graphicx}
 \usepackage{xcolor}
+\usepackage{tikz}
+\usetikzlibrary{shapes.geometric, arrows.meta, positioning, fit, backgrounds}
 \usepackage{multirow}
 \usepackage{enumitem}
 \usepackage{natbib}
@@ -188,36 +190,62 @@ coverage beyond transformer attention.
 \section{System}
 \label{sec:system}
 
-% ASCII system diagram
+% TikZ system architecture diagram
 \begin{figure}[t]
 \centering
-\small
-\begin{verbatim}
- +---------------------------------------------------------------+
- |                       Noeris System                            |
- |                                                                |
- |  +-------------+    +-------------+    +------------------+   |
- |  | LLM         |    | Cost Model  |    | Bandit /         |   |
- |  | Proposer    |--->| (GBR)       |--->| Adaptive Router  |   |
- |  | + cross-run |    | rank-orders |    | selector         |   |
- |  |   insights  |    | grid cands  |    |                  |   |
- |  +-------------+    +-------------+    +--------+---------+   |
- |        ^                                        |             |
- |        |                                        v             |
- |  +-----+----------------------------------------------+      |
- |  |   Shape-Indexed Config Database                     |      |
- |  |   key: (operator, shape_bucket, hardware)           |      |
- |  |   value: best_config_id, best_metric, trajectory    |      |
- |  +----------------------------+------------------------+      |
- |                               |                               |
- |                               v                               |
- |                  +-----------------------+                     |
- |                  |  Modal GPU Runner     |                     |
- |                  |  (A100 / H100)        |                     |
- |                  |  ~$0.01 / iteration   |                     |
- |                  +-----------------------+                     |
- +---------------------------------------------------------------+
-\end{verbatim}
+\begin{tikzpicture}[
+    node distance=1.2cm and 1.0cm,
+    box/.style={
+      rectangle, rounded corners=3pt, draw, thick,
+      minimum width=2.8cm, minimum height=1.2cm,
+      text width=2.6cm, align=center, font=\small
+    },
+    bluebox/.style={box, fill=blue!12, draw=blue!50!black},
+    greenbox/.style={box, fill=green!12, draw=green!50!black,
+      minimum width=10.2cm, text width=10.0cm},
+    graybox/.style={box, fill=gray!15, draw=gray!60!black},
+    arr/.style={-{Stealth[length=3mm]}, thick},
+    lbl/.style={font=\scriptsize\itshape, fill=white, inner sep=1pt},
+  ]
+
+  % Top row: three processing stages
+  \node[bluebox] (proposer)
+    {LLM\\Proposer\\{\scriptsize + cross-run insights}};
+  \node[bluebox, right=of proposer] (costmodel)
+    {Cost Model\\(GBR)};
+  \node[bluebox, right=of costmodel] (bandit)
+    {Bandit /\\Adaptive Router};
+
+  % Middle: database
+  \node[greenbox, below=1.4cm of costmodel] (db)
+    {Shape-Indexed Config Database\\
+     {\scriptsize key: (operator, shape\_bucket, hardware) \quad
+      value: best\_config, metric, trajectory}};
+
+  % Bottom: GPU runner
+  \node[graybox, below=1.2cm of db] (runner)
+    {Modal GPU Runner\\(A100 / H100)\\{\scriptsize \raisebox{0pt}{\~{}}\$0.01\,/\,iteration}};
+
+  % Arrows: top row
+  \draw[arr] (proposer) -- node[lbl, above] {candidates} (costmodel);
+  \draw[arr] (costmodel) -- node[lbl, above] {rank-orders} (bandit);
+
+  % Arrows: top row to/from database
+  \draw[arr] (bandit.south) -- node[lbl, right, pos=0.4] {configs} (db.north -| bandit);
+  \draw[arr] (db.north -| proposer) -- node[lbl, left, pos=0.4] {history} (proposer.south);
+
+  % Arrows: database <-> runner
+  \draw[arr] (db.south) -- node[lbl, right, pos=0.45] {configs} (runner.north);
+  \draw[arr] ([xshift=-1.2cm]runner.north) -- node[lbl, left, pos=0.45] {results} ([xshift=-1.2cm]db.south);
+
+  % Dashed outer box
+  \begin{scope}[on background layer]
+    \node[draw=gray!70, dashed, thick, rounded corners=5pt,
+          fit=(proposer)(bandit)(db)(runner),
+          inner xsep=12pt, inner ysep=10pt,
+          label={[font=\small\bfseries, anchor=north]above:Noeris}] {};
+  \end{scope}
+\end{tikzpicture}
 \caption{Noeris system architecture. The LLM proposer generates configurations
 informed by cross-run database history. A gradient-boosted cost model and a
 multi-armed bandit (or adaptive router combining both) filter candidates before
