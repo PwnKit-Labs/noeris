@@ -53,7 +53,7 @@ from .triton_operators import TritonOperatorSpec, register_operator
 FUSED_NORM_LINEAR_PARAM_SPACE = {
     "BLOCK_M": [16, 32, 64, 128],
     "BLOCK_N": [32, 64, 128, 256],
-    "BLOCK_K": [32, 64, 128, 256, 512, 1024, 1536],
+    "BLOCK_K": [32, 64, 128, 256, 512, 1024],
     "num_warps": [2, 4, 8],
     "num_stages": [1, 2, 3, 4],
 }
@@ -63,9 +63,9 @@ FUSED_NORM_LINEAR_PARAM_SPACE = {
 # For E2B (K=1536, N=2560): moderate tiles since N and K are both modest.
 # For 31B (K=5376, N=16384): larger tiles in N, smaller BLOCK_K for two-pass.
 FUSED_NORM_LINEAR_CURATED_CONFIGS = [
-    # Gemma 4 E2B sweet spot: K=1536 fits in BLOCK_K=1536 (single-pass)
-    {"BLOCK_M": 32, "BLOCK_N": 64,  "BLOCK_K": 1536, "num_warps": 4, "num_stages": 1},
-    {"BLOCK_M": 64, "BLOCK_N": 128, "BLOCK_K": 1536, "num_warps": 8, "num_stages": 1},
+    # Gemma 4 E2B sweet spot: K=1536 → BLOCK_K must be power-of-2 for tl.arange
+    {"BLOCK_M": 32, "BLOCK_N": 64,  "BLOCK_K": 512, "num_warps": 4, "num_stages": 1},
+    {"BLOCK_M": 64, "BLOCK_N": 128, "BLOCK_K": 512, "num_warps": 8, "num_stages": 1},
     # Multi-pass configs for larger K
     {"BLOCK_M": 32, "BLOCK_N": 128, "BLOCK_K": 256,  "num_warps": 4, "num_stages": 2},
     {"BLOCK_M": 64, "BLOCK_N": 256, "BLOCK_K": 128,  "num_warps": 8, "num_stages": 3},
@@ -293,14 +293,15 @@ def _ensure_triton_fused_norm_linear():
                     # Gemma mode: y = x * rstd * (1 + w)
                     x_normed = x_normed * (1.0 + w_tile[None, :])
 
-                # Load linear weight tile: (BLOCK_N, BLOCK_K) -> we need (BLOCK_K, BLOCK_N)
+                # Load linear weight tile in natural (BLOCK_N, BLOCK_K) layout,
+                # then transpose for the dot product.
                 # linear_ptr is (N, K) row-major, so linear[n, k] = linear_ptr + n * stride_ln + k * stride_lk
-                l_ptrs = linear_ptr + offs_n[None, :] * stride_ln + offs_k[:, None] * stride_lk
-                l_tile = tl.load(l_ptrs, mask=mask_k[:, None] & mask_n[None, :], other=0.0)
-                # l_tile is (BLOCK_K, BLOCK_N)
+                l_ptrs = linear_ptr + offs_n[:, None] * stride_ln + offs_k[None, :] * stride_lk
+                l_tile = tl.load(l_ptrs, mask=mask_n[:, None] & mask_k[None, :], other=0.0)
+                # l_tile is (BLOCK_N, BLOCK_K); transpose to (BLOCK_K, BLOCK_N) for matmul
 
                 # Dot product: (BLOCK_M, BLOCK_K) @ (BLOCK_K, BLOCK_N) -> (BLOCK_M, BLOCK_N)
-                acc += tl.dot(x_normed.to(tl.float16), l_tile.to(tl.float16))
+                acc += tl.dot(x_normed.to(tl.float16), tl.trans(l_tile.to(tl.float16)))
 
             # Store output tile
             out_ptrs = out_ptr + offs_m[:, None] * stride_om + offs_n[None, :] * stride_on
@@ -462,10 +463,10 @@ def fused_rmsnorm_linear_kernel(
         else:
             x_normed = x_normed * (1.0 + w_tile[None, :])
 
-        l_ptrs = linear_ptr + offs_n[None, :] * stride_ln + offs_k[:, None] * stride_lk
-        l_tile = tl.load(l_ptrs, mask=mask_k[:, None] & mask_n[None, :], other=0.0)
+        l_ptrs = linear_ptr + offs_n[:, None] * stride_ln + offs_k[None, :] * stride_lk
+        l_tile = tl.load(l_ptrs, mask=mask_n[:, None] & mask_k[None, :], other=0.0)
 
-        acc += tl.dot(x_normed.to(tl.float16), l_tile.to(tl.float16))
+        acc += tl.dot(x_normed.to(tl.float16), tl.trans(l_tile.to(tl.float16)))
 
     out_ptrs = out_ptr + offs_m[:, None] * stride_om + offs_n[None, :] * stride_on
     tl.store(out_ptrs, acc.to(tl.float16), mask=mask_m[:, None] & mask_n[None, :])
