@@ -1,4 +1,7 @@
-"""Core package for the autonomous ML research scaffold."""
+"""Noeris — the fusions your compiler can't find.
+
+Cross-operation kernel fusion + autotuning for LLM training and inference.
+"""
 
 from .agenda import DEFAULT_RESEARCH_AGENDA
 from .benchmarks import DEFAULT_BENCHMARKS
