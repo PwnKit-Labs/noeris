@@ -163,6 +163,108 @@ def generate_rotary_grid(
     return configs
 
 
+# ---------------------------------------------------------------------------
+# Module-level launcher (lazy-init pattern, matches triton_rmsnorm.py)
+# ---------------------------------------------------------------------------
+
+_triton_rotary_available = False
+_rotary_kernel_compiled = None
+
+
+def _ensure_triton_rotary():
+    global _triton_rotary_available, _rotary_kernel_compiled
+    if _rotary_kernel_compiled is not None:
+        return
+    try:
+        import triton
+        import triton.language as tl
+
+        @triton.jit
+        def _rotary_kernel(
+            x_ptr, cos_ptr, sin_ptr, out_ptr,
+            x_stride_b, x_stride_s, x_stride_h, x_stride_d,
+            out_stride_b, out_stride_s, out_stride_h, out_stride_d,
+            cos_stride_s,
+            seq_len, head_dim,
+            BLOCK_SIZE: tl.constexpr,
+        ):
+            pid = tl.program_id(0)
+            half = head_dim // 2
+            offs = tl.arange(0, BLOCK_SIZE)
+            mask = offs < half
+
+            x_base = x_ptr + pid * head_dim
+            out_base = out_ptr + pid * head_dim
+
+            x_even = tl.load(x_base + 2 * offs, mask=mask, other=0.0).to(tl.float32)
+            x_odd = tl.load(x_base + 2 * offs + 1, mask=mask, other=0.0).to(tl.float32)
+
+            cos_base = cos_ptr + pid * cos_stride_s
+            sin_base = sin_ptr + pid * cos_stride_s
+            c = tl.load(cos_base + offs, mask=mask, other=1.0).to(tl.float32)
+            s = tl.load(sin_base + offs, mask=mask, other=0.0).to(tl.float32)
+
+            out_even = x_even * c - x_odd * s
+            out_odd = x_even * s + x_odd * c
+
+            tl.store(out_base + 2 * offs, out_even.to(tl.float16), mask=mask)
+            tl.store(out_base + 2 * offs + 1, out_odd.to(tl.float16), mask=mask)
+
+        _rotary_kernel_compiled = _rotary_kernel
+        _triton_rotary_available = True
+    except ImportError:
+        _triton_rotary_available = False
+
+
+def apply_rotary_emb(x, cos, sin, config=None):
+    """Module-level RoPE launcher (flat grid). Requires CUDA GPU.
+
+    Args:
+        x: (batch, seq, heads, head_dim) fp16 tensor.
+        cos: (seq, head_dim // 2) fp16 precomputed cosines.
+        sin: (seq, head_dim // 2) fp16 precomputed sines.
+        config: Triton config dict with BLOCK_SIZE, num_warps, num_stages.
+            Defaults to the first curated config.
+
+    Returns:
+        (batch, seq, heads, head_dim) fp16 output tensor.
+    """
+    import torch
+    import triton
+
+    _ensure_triton_rotary()
+    if not _triton_rotary_available:
+        raise RuntimeError("Triton not available")
+
+    if config is None:
+        config = ROTARY_CURATED_CONFIGS[0]
+
+    B, S, H, D = x.shape
+    out = torch.empty_like(x)
+
+    # Flatten to (B*S*H, D) for the flat launcher
+    x_flat = x.reshape(B * S * H, D).contiguous()
+    out_flat = out.reshape(B * S * H, D).contiguous()
+
+    # Expand cos/sin from (S, D//2) to (B*S*H, D//2) so each program
+    # can index its row directly.
+    cos_expanded = cos.unsqueeze(0).unsqueeze(2).expand(B, S, H, D // 2).reshape(-1, D // 2).contiguous()
+    sin_expanded = sin.unsqueeze(0).unsqueeze(2).expand(B, S, H, D // 2).reshape(-1, D // 2).contiguous()
+
+    grid = (B * S * H,)
+    _rotary_kernel_compiled[grid](
+        x_flat, cos_expanded, sin_expanded, out_flat,
+        x_flat.stride(0), 0, 0, 1,
+        out_flat.stride(0), 0, 0, 1,
+        cos_expanded.stride(0),
+        S, D,
+        BLOCK_SIZE=max(config["BLOCK_SIZE"], triton.next_power_of_2(D // 2)),
+        num_warps=config["num_warps"],
+        num_stages=config["num_stages"],
+    )
+    return out
+
+
 def generate_rotary_benchmark_script(
     configs: list[dict[str, int]],
     shapes: list[dict[str, Any]],

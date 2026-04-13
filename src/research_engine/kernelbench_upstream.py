@@ -200,24 +200,76 @@ def materialize_problem(
 
 
 # ---------------------------------------------------------------------------
-# Noeris kernel sources (inlined verbatim from triton_*.py modules)
+# Noeris kernel sources (inlined into the generated Modal script)
 #
 # The Modal benchmark image only ships torch + triton — it does NOT have the
 # Noeris package installed. So we cannot ``import research_engine.triton_rmsnorm``
-# inside the generated benchmark script. Instead we copy the Triton kernel
-# source + the thin Python launcher verbatim into the generated script. The
-# code below is a byte-for-byte copy of the relevant ``@triton.jit`` kernel
-# and its launcher function from the corresponding ``triton_<op>.py`` module
-# at the commit this file was authored against. If those modules change, this
-# file must be updated in lockstep — tests exercise the generated script's
-# Python validity but correctness-drift detection is still a manual step.
+# inside the generated benchmark script. Instead we inline the Triton kernel
+# source + the thin Python launcher into the generated script.
 #
-# The rationale (vs. e.g. inspect.getsource): the kernels in triton_<op>.py
-# are defined INSIDE f-strings returned by ``generate_*_benchmark_script``
-# helpers, not as top-level Python objects, so ``inspect.getsource`` would
-# return the wrong thing. Copying the kernel here keeps the adapter honest
-# and offline-testable.
+# As of issue #41, the real Triton operators now have module-level launchers
+# (``triton_rmsnorm.rmsnorm``, ``triton_softmax.softmax``, etc.) and adapter
+# functions live in ``noeris_kb_adapters.py``. For LOCAL evaluation (where
+# Noeris is importable), prefer ``noeris_kb_adapters.NOERIS_ADAPTERS`` —
+# those call the real operators and never drift.
+#
+# The inlined sources below are used ONLY for the generated Modal script.
+# They are extracted from the ``_ensure_triton_*`` functions in each
+# ``triton_<op>.py`` module. If a module-level launcher changes, these
+# must be updated in lockstep. Use ``_extract_kernel_source`` to regenerate.
 # ---------------------------------------------------------------------------
+
+
+def _extract_kernel_source(module_name: str) -> str:
+    """Extract the @triton.jit kernel + launcher from a triton_<op>.py module.
+
+    Reads the source file and extracts the kernel defined inside the
+    ``_ensure_triton_*`` function body, plus the module-level launcher
+    function. Returns standalone source suitable for inlining into a
+    generated script.
+
+    This is a development helper — call it to regenerate the inlined
+    constants when a kernel changes. Not used at runtime.
+    """
+    import re
+    import textwrap
+
+    src_path = Path(__file__).with_name(f"triton_{module_name}.py")
+    if not src_path.exists():
+        raise FileNotFoundError(f"Module not found: {src_path}")
+
+    source = src_path.read_text()
+
+    # Extract @triton.jit kernel bodies from _ensure_triton_* functions
+    # and the module-level launcher function that follows.
+    chunks: list[str] = []
+
+    # Find @triton.jit decorated functions (inside _ensure_triton_*)
+    lines = source.splitlines()
+    i = 0
+    while i < len(lines):
+        stripped = lines[i].lstrip()
+        if "@triton.jit" in stripped or "@triton.autotune" in stripped:
+            # Capture from decorator to end of function body
+            indent = len(lines[i]) - len(stripped)
+            start = i
+            j = i + 1
+            while j < len(lines):
+                if lines[j].strip() == "":
+                    j += 1
+                    continue
+                line_indent = len(lines[j]) - len(lines[j].lstrip())
+                if line_indent <= indent and lines[j].strip():
+                    break
+                j += 1
+            block = "\n".join(lines[start:j])
+            # Dedent to top level
+            chunks.append(textwrap.dedent(block))
+            i = j
+        else:
+            i += 1
+
+    return "\n\n".join(chunks)
 
 
 NOERIS_MATMUL_SOURCE = '''
@@ -593,22 +645,31 @@ def noeris_flash_attn(q, k, v, config, is_causal=False, sm_scale=None):
 '''
 
 
-# Curated "first-choice" configs per operator. These are copies of the
-# first entry from each triton_<op>.py module's CURATED_CONFIGS list (or a
-# small-tile config for attention head_dim=1024 which sits outside every
-# bucket and needs conservative shared-memory usage).
-NOERIS_CURATED_CONFIGS = {
-    "matmul": {"BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 128, "BLOCK_SIZE_K": 32, "GROUP_SIZE_M": 8, "num_warps": 4, "num_stages": 4},
-    "softmax": {"BLOCK_SIZE": 4096, "num_warps": 8, "num_stages": 1},
-    "rmsnorm": {"BLOCK_SIZE": 1024, "num_warps": 4, "num_stages": 1},
-    "layernorm": {"BLOCK_SIZE": 1024, "num_warps": 4, "num_stages": 1},
-    "cross_entropy": {"BLOCK_SIZE": 4096, "num_warps": 8, "num_stages": 1},
-    "geglu": {"BLOCK_SIZE": 1024, "num_warps": 4, "num_stages": 1},
-    # head_dim=1024 is huge — use the smallest BLOCK_M/BLOCK_N we can so
-    # each tile fits in shared memory. Even this may fail to launch; if
-    # so, the adapter will fall back via its try/except in the runner.
-    "attention": {"BLOCK_M": 32, "BLOCK_N": 32, "num_warps": 4, "num_stages": 2},
-}
+# Curated "first-choice" configs per operator. Derived from each
+# triton_<op>.py module's CURATED_CONFIGS[0] at import time so they
+# never drift from the source of truth. Attention uses a conservative
+# small-tile config because head_dim=1024 sits outside every bucket.
+def _build_curated_configs() -> dict[str, dict]:
+    from .triton_rmsnorm import RMSNORM_CURATED_CONFIGS
+    from .triton_softmax import SOFTMAX_CURATED_CONFIGS
+    from .triton_layernorm import LAYERNORM_CURATED_CONFIGS
+    from .triton_cross_entropy import CROSS_ENTROPY_CURATED_CONFIGS
+    from .triton_geglu import GEGLU_CURATED_CONFIGS
+    return {
+        "matmul": {"BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 128, "BLOCK_SIZE_K": 32, "GROUP_SIZE_M": 8, "num_warps": 4, "num_stages": 4},
+        "softmax": dict(SOFTMAX_CURATED_CONFIGS[0]),
+        "rmsnorm": dict(RMSNORM_CURATED_CONFIGS[0]),
+        "layernorm": dict(LAYERNORM_CURATED_CONFIGS[0]),
+        "cross_entropy": dict(CROSS_ENTROPY_CURATED_CONFIGS[0]),
+        "geglu": dict(GEGLU_CURATED_CONFIGS[0]),
+        # head_dim=1024 is huge — use the smallest BLOCK_M/BLOCK_N we can so
+        # each tile fits in shared memory. Even this may fail to launch; if
+        # so, the adapter will fall back via its try/except in the runner.
+        "attention": {"BLOCK_M": 32, "BLOCK_N": 32, "num_warps": 4, "num_stages": 2},
+    }
+
+
+NOERIS_CURATED_CONFIGS = _build_curated_configs()
 
 
 # ---------------------------------------------------------------------------
@@ -1011,7 +1072,7 @@ def run_kernelbench_upstream_eval(
         "problem_count":   len(problems),
     })
 
-    with ModalBenchmarkSession(gpu=gpu, timeout_seconds=3600) as session:
+    with ModalBenchmarkSession(gpu=gpu, timeout_seconds=600, max_cost_usd=5.0) as session:
         batch = session.run_batch(script)
 
     if not batch.success:

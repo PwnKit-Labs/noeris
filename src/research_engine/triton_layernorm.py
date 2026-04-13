@@ -110,6 +110,89 @@ def generate_layernorm_grid(
     return configs
 
 
+# ---------------------------------------------------------------------------
+# Module-level launcher (lazy-init pattern, matches triton_rmsnorm.py)
+# ---------------------------------------------------------------------------
+
+_triton_layernorm_available = False
+_layernorm_kernel_compiled = None
+
+
+def _ensure_triton_layernorm():
+    global _triton_layernorm_available, _layernorm_kernel_compiled
+    if _layernorm_kernel_compiled is not None:
+        return
+    try:
+        import triton
+        import triton.language as tl
+
+        @triton.jit
+        def _layernorm_kernel(
+            x_ptr, w_ptr, b_ptr, y_ptr,
+            x_row_stride, y_row_stride,
+            n_cols, eps,
+            BLOCK_SIZE: tl.constexpr,
+        ):
+            row_idx = tl.program_id(0)
+            x_ptr += row_idx * x_row_stride
+            y_ptr += row_idx * y_row_stride
+            offs = tl.arange(0, BLOCK_SIZE)
+            mask = offs < n_cols
+            x = tl.load(x_ptr + offs, mask=mask, other=0.0).to(tl.float32)
+            inv_n = 1.0 / n_cols
+            mean = tl.sum(x, axis=0) * inv_n
+            mean_sq = tl.sum(x * x, axis=0) * inv_n
+            var = mean_sq - mean * mean
+            rstd = tl.rsqrt(var + eps)
+            w = tl.load(w_ptr + offs, mask=mask, other=0.0).to(tl.float32)
+            b = tl.load(b_ptr + offs, mask=mask, other=0.0).to(tl.float32)
+            y = (x - mean) * rstd * w + b
+            tl.store(y_ptr + offs, y.to(tl.float16), mask=mask)
+
+        _layernorm_kernel_compiled = _layernorm_kernel
+        _triton_layernorm_available = True
+    except ImportError:
+        _triton_layernorm_available = False
+
+
+def layernorm(x, w, b, config=None, eps=1e-5):
+    """Module-level LayerNorm launcher. Requires CUDA GPU.
+
+    Args:
+        x: (n_rows, hidden_dim) fp16 tensor.
+        w: (hidden_dim,) fp16 weight tensor.
+        b: (hidden_dim,) fp16 bias tensor.
+        config: Triton config dict with BLOCK_SIZE, num_warps, num_stages.
+            Defaults to the first curated config.
+        eps: Epsilon for numerical stability.
+
+    Returns:
+        (n_rows, hidden_dim) fp16 output tensor.
+    """
+    import torch
+    import triton
+
+    _ensure_triton_layernorm()
+    if not _triton_layernorm_available:
+        raise RuntimeError("Triton not available")
+
+    if config is None:
+        config = LAYERNORM_CURATED_CONFIGS[0]
+
+    n_rows, n_cols = x.shape
+    y = torch.empty_like(x)
+    BLOCK_SIZE = max(config["BLOCK_SIZE"], triton.next_power_of_2(n_cols))
+    _layernorm_kernel_compiled[(n_rows,)](
+        x, w, b, y,
+        x.stride(0), y.stride(0),
+        n_cols, eps,
+        BLOCK_SIZE=BLOCK_SIZE,
+        num_warps=config["num_warps"],
+        num_stages=config["num_stages"],
+    )
+    return y
+
+
 def generate_layernorm_benchmark_script(
     configs: list[dict[str, int]],
     shapes: list[dict[str, Any]],

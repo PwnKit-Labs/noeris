@@ -135,6 +135,95 @@ def generate_softmax_grid(
     return configs
 
 
+# ---------------------------------------------------------------------------
+# Module-level launcher (lazy-init pattern, matches triton_rmsnorm.py)
+# ---------------------------------------------------------------------------
+
+_triton_softmax_available = False
+_softmax_kernel_compiled = None
+
+
+def _ensure_triton_softmax():
+    global _triton_softmax_available, _softmax_kernel_compiled
+    if _softmax_kernel_compiled is not None:
+        return
+    try:
+        import triton
+        import triton.language as tl
+
+        @triton.jit
+        def _softmax_kernel(
+            x_ptr, y_ptr,
+            x_row_stride,
+            y_row_stride,
+            n_cols,
+            softcap,
+            BLOCK_SIZE: tl.constexpr,
+            USE_SOFTCAP: tl.constexpr,
+        ):
+            row_idx = tl.program_id(0)
+            x_ptr += row_idx * x_row_stride
+            y_ptr += row_idx * y_row_stride
+            offs = tl.arange(0, BLOCK_SIZE)
+            mask = offs < n_cols
+
+            x = tl.load(x_ptr + offs, mask=mask, other=-float("inf")).to(tl.float32)
+            if USE_SOFTCAP:
+                inv_softcap = 1.0 / softcap
+                x = softcap * (2.0 / (1.0 + tl.exp(-2.0 * x * inv_softcap)) - 1.0)
+            row_max = tl.max(x, axis=0)
+            x_shifted = x - row_max
+            exp_x = tl.exp(x_shifted)
+            denom = tl.sum(exp_x, axis=0)
+            y = exp_x / denom
+
+            tl.store(y_ptr + offs, y.to(tl.float16), mask=mask)
+
+        _softmax_kernel_compiled = _softmax_kernel
+        _triton_softmax_available = True
+    except ImportError:
+        _triton_softmax_available = False
+
+
+def softmax(x, config=None, softcap=0.0):
+    """Module-level Softmax launcher. Requires CUDA GPU.
+
+    Args:
+        x: (n_rows, n_cols) fp16 tensor.
+        config: Triton config dict with BLOCK_SIZE, num_warps, num_stages.
+            Defaults to the first curated config.
+        softcap: If > 0, applies softcap pre-step (Gemma 4 31B style).
+
+    Returns:
+        (n_rows, n_cols) fp16 output tensor.
+    """
+    import torch
+    import triton
+
+    _ensure_triton_softmax()
+    if not _triton_softmax_available:
+        raise RuntimeError("Triton not available")
+
+    if config is None:
+        config = SOFTMAX_CURATED_CONFIGS[0]
+
+    n_rows, n_cols = x.shape
+    y = torch.empty_like(x)
+    BLOCK_SIZE = max(config["BLOCK_SIZE"], triton.next_power_of_2(n_cols))
+    use_softcap = float(softcap) > 0.0
+    _softmax_kernel_compiled[(n_rows,)](
+        x, y,
+        x.stride(0), y.stride(0),
+        n_cols,
+        float(softcap) if use_softcap else 1.0,
+        BLOCK_SIZE=BLOCK_SIZE,
+        USE_SOFTCAP=use_softcap,
+        num_warps=config["num_warps"],
+        num_stages=config["num_stages"],
+    )
+    return y
+
+
 def generate_softmax_benchmark_script(
     configs: list[dict[str, int]],
     shapes: list[dict[str, Any]],

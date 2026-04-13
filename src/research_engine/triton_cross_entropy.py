@@ -116,6 +116,83 @@ def generate_cross_entropy_grid(
     return configs
 
 
+# ---------------------------------------------------------------------------
+# Module-level launcher (lazy-init pattern, matches triton_rmsnorm.py)
+# ---------------------------------------------------------------------------
+
+_triton_ce_available = False
+_ce_kernel_compiled = None
+
+
+def _ensure_triton_cross_entropy():
+    global _triton_ce_available, _ce_kernel_compiled
+    if _ce_kernel_compiled is not None:
+        return
+    try:
+        import triton
+        import triton.language as tl
+
+        @triton.jit
+        def _ce_kernel(
+            logits_ptr, target_ptr, loss_ptr,
+            logits_row_stride,
+            n_cols,
+            BLOCK_SIZE: tl.constexpr,
+        ):
+            row_idx = tl.program_id(0)
+            logits_ptr += row_idx * logits_row_stride
+            target = tl.load(target_ptr + row_idx)
+            offs = tl.arange(0, BLOCK_SIZE)
+            mask = offs < n_cols
+            logits = tl.load(logits_ptr + offs, mask=mask, other=-float("inf")).to(tl.float32)
+            row_max = tl.max(logits, axis=0)
+            log_sum_exp = row_max + tl.log(tl.sum(tl.exp(logits - row_max), axis=0))
+            target_logit = tl.load(logits_ptr + target).to(tl.float32)
+            loss = log_sum_exp - target_logit
+            tl.store(loss_ptr + row_idx, loss.to(tl.float16))
+
+        _ce_kernel_compiled = _ce_kernel
+        _triton_ce_available = True
+    except ImportError:
+        _triton_ce_available = False
+
+
+def cross_entropy(logits, target, config=None):
+    """Module-level cross-entropy launcher. Requires CUDA GPU.
+
+    Args:
+        logits: (n_rows, n_cols) fp16 tensor.
+        target: (n_rows,) int64 tensor of class indices.
+        config: Triton config dict with BLOCK_SIZE, num_warps, num_stages.
+            Defaults to the first curated config.
+
+    Returns:
+        (n_rows,) fp16 per-row loss tensor.
+    """
+    import torch
+    import triton
+
+    _ensure_triton_cross_entropy()
+    if not _triton_ce_available:
+        raise RuntimeError("Triton not available")
+
+    if config is None:
+        config = CROSS_ENTROPY_CURATED_CONFIGS[0]
+
+    n_rows, n_cols = logits.shape
+    loss = torch.empty((n_rows,), device=logits.device, dtype=torch.float16)
+    BLOCK_SIZE = max(config["BLOCK_SIZE"], triton.next_power_of_2(n_cols))
+    _ce_kernel_compiled[(n_rows,)](
+        logits, target, loss,
+        logits.stride(0),
+        n_cols,
+        BLOCK_SIZE=BLOCK_SIZE,
+        num_warps=config["num_warps"],
+        num_stages=config["num_stages"],
+    )
+    return loss
+
+
 def generate_cross_entropy_benchmark_script(
     configs: list[dict[str, int]],
     shapes: list[dict[str, Any]],
