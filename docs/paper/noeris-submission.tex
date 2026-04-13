@@ -964,8 +964,20 @@ the landscape into four groups.
 \label{sec:rw-llm}
 
 \textbf{AutoKernel}~\citep{autokernel} is the closest direct competitor:
-autonomous agent loop on Triton and CUDA C++, nine operator types, 5.29$\times$
-on RMSNorm. Stateless across invocations. Our curated starters exceed
+autonomous LLM-driven edit-benchmark-keep loop on 9 Triton + 9 CUDA C++ starter
+kernels, with a 5-stage correctness harness and Amdahl's-law multi-kernel
+orchestrator. On H100: RMSNorm 2,788~GB/s (5.29$\times$), softmax 2,800~GB/s,
+cross-entropy 2,070~GB/s; beats \texttt{torch.compile} on 12/16 configs.
+AutoKernel optimizes \emph{individual kernel implementations} through 300+
+experiments per kernel. Noeris operates at a different level: it discovers
+cross-operator fusion patterns (QK-RMSNorm+RoPE, PLE, GeGLU) and learns
+hardware-specific configurations via Thompson-sampling bandit with 50$\times$
+fewer experiments (6~configs to 98\% optimal vs.\ 300+). Additional
+differentiators: cross-hardware zero-shot transfer ($\rho$=0.907 fused,
+$\rho$=0.967 per-op) vs.\ single-GPU; transformers + SSMs vs.\ transformers
+only; fusion \emph{discovery} vs.\ per-kernel optimization. The two approaches
+are complementary---AutoKernel's per-kernel LLM loop could serve as a mutation
+operator within Noeris's search framework. Our curated starters already exceed
 AutoKernel's best H100 figures on three of four operators.
 
 \textbf{KernelSkill}~\citep{kernelskill} introduces multi-agent framework with
