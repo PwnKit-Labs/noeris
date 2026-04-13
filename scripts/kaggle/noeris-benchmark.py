@@ -25,7 +25,7 @@ PHASE_PRESETS = {
     "new": {8, 9},
     "paper": {1, 4, 5, 6, 7},
     "search": {1, 2, 3},
-    "novel": {1, 10, 11},
+    "novel": {1, 10, 11, 12, 13, 14},
 }
 
 phases_env = os.environ.get("NOERIS_PHASES", "novel").strip().lower()
@@ -122,13 +122,30 @@ if 11 in ACTIVE_PHASES:
     print("\n" + "=" * 60)
     print("PHASE 11: Fused norm+matmul validation")
     print("=" * 60)
-    # Validate via the operator registry
     subprocess.run([sys.executable, "-c",
         "import sys; sys.path.insert(0,'/tmp/noeris/src'); "
         "from research_engine.triton_operators import REGISTRY; "
         "spec = REGISTRY.get('fused_norm_linear'); "
         "script = spec.benchmark_script_fn(spec.curated_configs[:2], spec.shape_buckets[:2]); "
         "exec(script)"])
+
+if 12 in ACTIVE_PHASES:
+    print("\n" + "=" * 60)
+    print("PHASE 12: Bandit convergence experiment")
+    print("=" * 60)
+    subprocess.run([sys.executable, "/tmp/noeris/scripts/convergence_experiment.py"])
+
+if 13 in ACTIVE_PHASES:
+    print("\n" + "=" * 60)
+    print("PHASE 13: PLE fusion benchmark")
+    print("=" * 60)
+    subprocess.run([sys.executable, "/tmp/noeris/scripts/ple_fusion_benchmark.py"])
+
+if 14 in ACTIVE_PHASES:
+    print("\n" + "=" * 60)
+    print("PHASE 14: K=V shared attention benchmark")
+    print("=" * 60)
+    subprocess.run([sys.executable, "/tmp/noeris/scripts/kv_shared_benchmark.py"])
 
 print("\n" + "=" * 60)
 print(f"DONE — Ran phases {sorted(ACTIVE_PHASES)}")
