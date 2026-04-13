@@ -9,7 +9,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from .codex_config import load_codex_provider_config
-from .components import HypothesisPlanner, ResearchMemory
+from ._legacy.components import HypothesisPlanner, ResearchMemory
 from .models import (
     Claim,
     Contradiction,

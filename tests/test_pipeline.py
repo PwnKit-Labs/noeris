@@ -3,7 +3,7 @@ import unittest
 from tests import _pathfix  # noqa: F401
 
 from research_engine.cli import ARCHITECTURE, THESIS
-from research_engine.components import (
+from research_engine._legacy.components import (
     ExperimentExecutor,
     ExperimentPlanner,
     HypothesisPlanner,
@@ -27,7 +27,7 @@ from research_engine.models import (
     SourceAssessment,
     VerificationReport,
 )
-from research_engine.pipeline import ResearchPipeline
+from research_engine._legacy.pipeline import ResearchPipeline
 from research_engine.executors import (
     LIVE_MATMUL_FIXTURES,
     LONG_CONTEXT_FIXTURES,

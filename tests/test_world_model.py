@@ -20,7 +20,7 @@ from pathlib import Path
 
 from tests import _pathfix  # noqa: F401
 
-from research_engine.world_model import (
+from research_engine._legacy.world_model import (
     ConfigHypothesis,
     WorldModel,
     _BUILTIN_HYPOTHESES,

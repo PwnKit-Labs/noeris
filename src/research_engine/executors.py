@@ -10,7 +10,7 @@ from random import Random
 from statistics import median
 from time import perf_counter
 
-from .components import ExperimentExecutor
+from ._legacy.components import ExperimentExecutor
 from .llm import ResponsesApiClient, extract_usage
 from .models import ExperimentResult, ExperimentSpec, ExperimentStatus, ResearchTopic
 

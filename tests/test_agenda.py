@@ -4,7 +4,7 @@ import unittest
 
 from tests import _pathfix  # noqa: F401
 
-from research_engine.agenda import DEFAULT_RESEARCH_AGENDA
+from research_engine._legacy.agenda import DEFAULT_RESEARCH_AGENDA
 
 
 class ResearchAgendaTests(unittest.TestCase):

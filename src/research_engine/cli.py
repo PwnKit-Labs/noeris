@@ -9,7 +9,7 @@ import subprocess
 import sys
 from pathlib import Path as _Path
 
-from .agenda import DEFAULT_RESEARCH_AGENDA
+from ._legacy.agenda import DEFAULT_RESEARCH_AGENDA
 from .benchmarks import DEFAULT_BENCHMARKS, get_benchmark
 from .codex_config import load_codex_provider_config, render_github_env_setup
 from .export import export_run_bundle
@@ -19,7 +19,7 @@ from .executors import (
     MatmulPythonExecutor,
     ToolUseResponsesExecutor,
 )
-from .ingestion import (
+from ._legacy.ingestion import (
     ArxivAtomSourceProvider,
     CompositeSourceProvider,
     GitHubRepositorySourceProvider,
@@ -34,7 +34,7 @@ from .triton_kernels import (
     select_configs_for_run,
 )
 from .models import ResearchTopic
-from .pipeline import ResearchPipeline
+from ._legacy.pipeline import ResearchPipeline
 from .store import JsonFileRunStore
 
 
@@ -399,8 +399,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     kb_up_parser.add_argument(
         "--output",
-        default="docs/results/kernelbench-upstream-l1-a100.md",
-        help="path to write the markdown summary (JSON path is auto-derived).",
+        default="",
+        help="path to write the markdown summary (JSON path is auto-derived). "
+             "Defaults to docs/results/kernelbench-upstream-l1-{gpu}.md.",
     )
 
     ablation_parser = subparsers.add_parser(
@@ -1112,7 +1113,8 @@ def _run_kernelbench_upstream_eval(args) -> int:
         gpu=args.gpu,
         timer=args.timer,
     )
-    out_md = _Path(args.output)
+    output_path = args.output or f"docs/results/kernelbench-upstream-l1-{args.gpu.lower()}.md"
+    out_md = _Path(output_path)
     out_md.parent.mkdir(parents=True, exist_ok=True)
     out_md.write_text(report.summary_text())
     out_json = out_md.with_suffix(".json")
