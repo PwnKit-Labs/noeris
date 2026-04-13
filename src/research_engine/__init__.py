@@ -46,9 +46,15 @@ from . import triton_fused_norm_matmul  # noqa: F401  (registers fused_norm_line
 from . import triton_ple_fusion  # noqa: F401  (registers ple_fusion)
 from . import triton_kv_shared_attention  # noqa: F401  (registers kv_shared_attention)
 from . import triton_ssm_scan  # noqa: F401  (registers ssm_scan)
+from . import cuda_qk_norm_rope  # noqa: F401  (registers cuda_qk_norm_rope)
 from .triton_operators import REGISTRY as TRITON_OPERATORS  # noqa: F401
-from .autograd_functions import FusedRMSNorm, FusedGeGLU, FusedQKNormRoPE  # noqa: F401
-from .patch import patch  # noqa: F401  (drop-in model accelerator)
+# Autograd wrappers and patch() require torch — import lazily so the CLI
+# works on machines without CUDA (the GPU work happens on Modal).
+try:
+    from .autograd_functions import FusedRMSNorm, FusedGeGLU, FusedQKNormRoPE  # noqa: F401
+    from .patch import patch  # noqa: F401  (drop-in model accelerator)
+except ImportError:
+    pass
 
 __all__ = [
     "ArxivAtomSourceProvider",
