@@ -1,0 +1,145 @@
+{
+  "gpu": "Tesla T4",
+  "pytorch": "2.10.0+cu128",
+  "triton": "3.6.0",
+  "passed": 18,
+  "total": 20,
+  "results": [
+    {
+      "op": "attention",
+      "ok": true,
+      "metric": 0.43,
+      "shape": "short_64",
+      "fusion_speedup": null
+    },
+    {
+      "op": "attention_decode",
+      "ok": true,
+      "metric": 22.62,
+      "shape": "gemma4_31b_decode_global",
+      "fusion_speedup": null
+    },
+    {
+      "op": "attention_v2",
+      "ok": true,
+      "metric": 0.42,
+      "shape": "short_64",
+      "fusion_speedup": null
+    },
+    {
+      "op": "cross_entropy",
+      "ok": true,
+      "metric": 92.57,
+      "shape": "gpt2_small",
+      "fusion_speedup": null
+    },
+    {
+      "op": "fused_norm_linear",
+      "ok": false,
+      "error": "unknown correctness failure"
+    },
+    {
+      "op": "geglu",
+      "ok": true,
+      "metric": 152.83,
+      "shape": "test_small",
+      "fusion_speedup": null
+    },
+    {
+      "op": "grouped_gemm",
+      "ok": true,
+      "metric": 9.01,
+      "shape": "gemma4_26b_a4b_w1_small",
+      "fusion_speedup": 0.109
+    },
+    {
+      "op": "kv_shared_attention",
+      "ok": false,
+      "error": "71.py\", line 147, in attn_baseline\n    return F.scaled_dot_product_attention(q, k, v, is_causal=True, scale=scale)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nRunti"
+    },
+    {
+      "op": "layernorm",
+      "ok": true,
+      "metric": 136.17,
+      "shape": "small_hidden",
+      "fusion_speedup": null
+    },
+    {
+      "op": "matmul",
+      "ok": true,
+      "metric": null,
+      "shape": null,
+      "fusion_speedup": null
+    },
+    {
+      "op": "matmul_splitk",
+      "ok": true,
+      "metric": null,
+      "shape": null,
+      "fusion_speedup": null
+    },
+    {
+      "op": "moe_router",
+      "ok": true,
+      "metric": 4.28,
+      "shape": "gemma4_26b_a4b_router_small",
+      "fusion_speedup": null
+    },
+    {
+      "op": "ple_fusion",
+      "ok": true,
+      "metric": 72.44,
+      "shape": "gemma4_e2b_ple_fuse",
+      "fusion_speedup": 2.066
+    },
+    {
+      "op": "ple_gather",
+      "ok": true,
+      "metric": 227.59,
+      "shape": "gemma4_e2b_ple",
+      "fusion_speedup": null
+    },
+    {
+      "op": "qk_norm_rope",
+      "ok": true,
+      "metric": 80.57,
+      "shape": "gemma3_local_1024",
+      "fusion_speedup": 6.299
+    },
+    {
+      "op": "qk_norm_rope_bwd",
+      "ok": true,
+      "metric": 35.54,
+      "shape": "gemma3_local_1024",
+      "fusion_speedup": null
+    },
+    {
+      "op": "rmsnorm",
+      "ok": true,
+      "metric": 152.85,
+      "shape": "small_hidden",
+      "fusion_speedup": null
+    },
+    {
+      "op": "rotary",
+      "ok": true,
+      "metric": 71.24,
+      "shape": "llama7b_short",
+      "fusion_speedup": null
+    },
+    {
+      "op": "softmax",
+      "ok": true,
+      "metric": 100.31,
+      "shape": "small",
+      "fusion_speedup": null
+    },
+    {
+      "op": "ssm_scan",
+      "ok": true,
+      "metric": 1.88,
+      "shape": "mamba3_130m",
+      "fusion_speedup": null
+    }
+  ]
+}
