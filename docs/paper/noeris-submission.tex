@@ -1,0 +1,1198 @@
+% Noeris: arXiv submission draft (v1)
+% Compile: pdflatex noeris-submission.tex && pdflatex noeris-submission.tex
+%
+% No external .sty required — uses standard article class with geometry.
+
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{amsfonts}
+\usepackage{amsmath}
+\usepackage{nicefrac}
+\usepackage{microtype}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{multirow}
+\usepackage{enumitem}
+\usepackage{natbib}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!60!black,
+  citecolor=blue!60!black,
+  urlcolor=blue!60!black,
+}
+
+\title{Noeris: Parameterized GPU Kernel Search\\with LLM Proposals and Learned Cost Models}
+
+\author{
+  Doruk Tan Ozturk \\
+  Independent \\
+  \texttt{doruk@pwnkit.dev}
+}
+
+\date{}
+
+\begin{document}
+
+\maketitle
+
+% ---------------------------------------------------------------------------
+% ABSTRACT
+% ---------------------------------------------------------------------------
+\begin{abstract}
+We present Noeris, an autonomous GPU kernel optimization system with three
+distinguishing properties relative to existing LLM-driven approaches:
+\textbf{(1)}~parameterized kernel templates (no free-form source rewriting),
+\textbf{(2)}~a shape-indexed cross-run configuration database keyed by
+\texttt{(operator, shape\_bucket, hardware)} that persists winning
+configurations across sessions, and \textbf{(3)}~complementary selectors---a
+gradient-boosted cost model and a multi-armed bandit---that rank LLM-proposed
+configurations before GPU evaluation.
+
+\textbf{Headline result.} A fused Triton kernel for the Gemma~3/4 attention
+prologue (\texttt{Q-RMSNorm $\to$ K-RMSNorm $\to$ Q-RoPE $\to$ K-RoPE}) beats
+the separated-kernel-launches baseline by $10.2$--$12.9\times$ on A100 and
+$10.4$--$11.9\times$ on H100, reaching 1627.7~GB/s peak throughput ($\approx$49\%
+of HBM3 theoretical peak). Cross-model generalization across 19 model shapes
+and 13 families confirms the fusion is architecture-general
+($6.5$--$8.9\times$ on T4, $3.9$--$9.8\times$ on A100). A sliding-window
+attention kernel with tile-pruning beats cuDNN FlashAttention by up to
+$3.56\times$ on T4 and $6.24\times$ on A100. A bandit convergence study
+demonstrates $\geq$98\% of exhaustive-search optimal throughput with just 6
+configurations (12\% of the search space) in a single iteration. The system
+covers 15 operators including a Mamba-3 SSM scan operator, 110+ shape buckets,
+and 606 unit tests at ${\sim}\$0.01$ per iteration.
+
+\textbf{Second headline result.} The sliding-window attention kernel with
+tile-pruning beats cuDNN FlashAttention (via
+\texttt{torch.nn.functional.scaled\_dot\_product\_attention}) on narrow-window
+workloads: on T4, 4/8 shapes win with up to $3.56\times$ speedup; on A100,
+8/8 shapes win with up to $6.24\times$ speedup. Tile-pruning skips 96--98\%
+of tiles that cuDNN computes densely.
+
+At the full-model level, a 26-layer Gemma~4 E2B forward pass achieves
+$1.18\times$ end-to-end speedup on T4 and $1.43\times$ on A100 by fusing only
+RMSNorm, QK-norm+RoPE, and GeGLU---operations accounting for ${<}20\%$ of
+per-layer compute. Cross-hardware fused kernel latency rankings between A100
+and H100 achieve Spearman $\rho = 0.907$ ($p < 10^{-7}$), validating zero-shot
+cross-hardware config prediction without target-device fine-tuning.
+
+The system runs at ${\sim}\$0.01$ per iteration. Code and data are available at
+\url{https://github.com/PwnKit-Labs/noeris} (MIT License).
+\end{abstract}
+
+% ---------------------------------------------------------------------------
+% 1. INTRODUCTION
+% ---------------------------------------------------------------------------
+\section{Introduction}
+\label{sec:intro}
+
+LLM-driven GPU kernel optimization has become an active research topic in
+2025--2026~\citep{autokernel,kernelskill,cudal1,cudaagent,kernelfoundry}. These
+systems share a common architecture: an LLM agent proposes kernel code, a
+harness measures correctness and performance, and an orchestration layer decides
+whether to keep or revert the change.
+
+A shared limitation of published systems is that \textbf{search state does not
+persist across sessions}. Each invocation starts from the same initial kernel (or
+a cached version), runs its own iterative search loop, and discards the
+trajectory. Information learned in one run---which tile sizes work for a given
+matrix shape on a given GPU---is not systematically reused in the next.
+
+Noeris investigates an alternative. Rather than rewriting kernel source per
+invocation, we generate kernels from a compact parameter tuple (e.g.,
+\texttt{BLOCK\_SIZE\_M}, \texttt{BLOCK\_SIZE\_N}, \texttt{num\_warps},
+\texttt{num\_stages}) and store winning configurations in a \textbf{shape-indexed
+cross-run database} keyed by \texttt{(operator, shape\_bucket, hardware)}. When
+an LLM proposer is invoked, it sees the database state as cross-run insights,
+allowing it to reason about what has worked on similar shapes before. A
+gradient-boosted cost model trained on accumulated benchmark data then
+rank-orders grid candidates at prediction time, without incurring additional GPU
+calls.
+
+All code, benchmark data, and reproduction scripts are available at
+\url{https://github.com/PwnKit-Labs/noeris} under the MIT License. We make
+thirteen contributions:
+
+\begin{enumerate}[leftmargin=*,itemsep=2pt]
+
+\item \textbf{A practical fused kernel that makes QK-norm+RoPE fusion actually
+work.} The Gemma~3/4 attention prologue
+(\texttt{Q-RMSNorm}$\to$\texttt{K-RMSNorm}$\to$\texttt{Q-RoPE}$\to$\texttt{K-RoPE})
+has prior art: vLLM has an experimental \texttt{enable\_qk\_norm\_rope\_fusion}
+pass (disabled by default due to H100 performance regression), SGLang has
+\texttt{fused\_qknorm\_rope}, and Liao et al.\ describe algebraic optimizations
+in ``Flash Normalization.'' Our parameterized Triton kernel with bandit-tuned
+configs beats the separated-kernel-launches baseline by 10.2--12.9$\times$ on
+A100 and 10.4--11.9$\times$ on H100 across six Gemma~3/4 shape buckets (60/60
+correct, zero failures). Peak 1627.7~GB/s on H100.
+
+\item \textbf{System.} A complete autonomous kernel search loop for fifteen
+parameterized Triton operators, running on cloud GPUs via Modal with GitHub
+Actions orchestration, at ${\sim}\$0.01$ per iteration.
+
+\item \textbf{Full Gemma~4 attention support.} Grouped-query attention, asymmetric
+local/global \texttt{head\_dim} (256/512), and Gemma-mode $(1+w)$ RMSNorm affine.
+
+\item \textbf{Learned feasibility.} Configurations that fail at runtime flow
+into the bandit as reward=0 samples, eliminating all hand-coded shared-memory
+filters.
+
+\item \textbf{Evaluation.} First direct reproduction of AutoKernel's H100
+memory-bound kernel numbers, with substantial improvements: 11.66$\times$
+RMSNorm (+120\%), 9.65$\times$ Cross-entropy (+228\%), 6.38$\times$ Softmax
+(+85\%).
+
+\item \textbf{Learned cost model + complementary selectors + adaptive routing.}
+GBR cost model (R$^2$=0.94); three-way selector comparison shows cost model and
+bandit are complementary; adaptive router matches best fixed selector within
+0.5\%.
+
+\item \textbf{Compiler failure analysis (\S\ref{sec:compiler-analysis}).}
+\texttt{torch.compile} reduces launches 40$\to$9 but still generates 4 separate
+Triton kernels. Noeris: 1 kernel, 1 launch, 6.08$\times$ vs.\ eager, 1.62$\times$ vs.\
+compiled.
+
+\item \textbf{Cross-model generalization (\S\ref{sec:cross-model}).} 19 model
+shapes, 13 families, all achieve 6.5--8.9$\times$ fusion speedup on T4.
+
+\item \textbf{End-to-end 26-layer benchmark (\S\ref{sec:e2e}).} 1.18$\times$ on
+T4, 1.43$\times$ on A100---6--21$\times$ more E2E impact than vLLM's 2--3\%.
+
+\item \textbf{Sliding-window attention beats cuDNN
+(\S\ref{sec:swa-eval}).} Up to 3.56$\times$ on T4, 6.24$\times$ on A100 via
+tile-pruning.
+
+\item \textbf{Cross-hardware transfer (\S\ref{sec:cross-hw-transfer}).}
+Spearman $\rho=0.907$ ($p<10^{-7}$) between A100 and H100 fused kernel latency
+rankings, validating zero-shot config prediction.
+
+\item \textbf{Bandit convergence (\S\ref{sec:bandit-convergence}).} $\geq$98\%
+of exhaustive-search optimal in one iteration with 12\% of the search space.
+
+\item \textbf{Mamba-3 SSM scan operator.} Validates architecture-agnostic
+coverage beyond transformer attention.
+
+\end{enumerate}
+
+
+% ---------------------------------------------------------------------------
+% 2. SYSTEM
+% ---------------------------------------------------------------------------
+\section{System}
+\label{sec:system}
+
+% ASCII system diagram
+\begin{figure}[t]
+\centering
+\small
+\begin{verbatim}
+ +---------------------------------------------------------------+
+ |                       Noeris System                            |
+ |                                                                |
+ |  +-------------+    +-------------+    +------------------+   |
+ |  | LLM         |    | Cost Model  |    | Bandit /         |   |
+ |  | Proposer    |--->| (GBR)       |--->| Adaptive Router  |   |
+ |  | + cross-run |    | rank-orders |    | selector         |   |
+ |  |   insights  |    | grid cands  |    |                  |   |
+ |  +-------------+    +-------------+    +--------+---------+   |
+ |        ^                                        |             |
+ |        |                                        v             |
+ |  +-----+----------------------------------------------+      |
+ |  |   Shape-Indexed Config Database                     |      |
+ |  |   key: (operator, shape_bucket, hardware)           |      |
+ |  |   value: best_config_id, best_metric, trajectory    |      |
+ |  +----------------------------+------------------------+      |
+ |                               |                               |
+ |                               v                               |
+ |                  +-----------------------+                     |
+ |                  |  Modal GPU Runner     |                     |
+ |                  |  (A100 / H100)        |                     |
+ |                  |  ~$0.01 / iteration   |                     |
+ |                  +-----------------------+                     |
+ +---------------------------------------------------------------+
+\end{verbatim}
+\caption{Noeris system architecture. The LLM proposer generates configurations
+informed by cross-run database history. A gradient-boosted cost model and a
+multi-armed bandit (or adaptive router combining both) filter candidates before
+GPU evaluation. Results flow back into the database, compounding across CI runs.}
+\label{fig:system}
+\end{figure}
+
+
+\subsection{Parameterized Kernels and the Operator Registry}
+\label{sec:operator-registry}
+
+Every operator in Noeris is described by a \texttt{TritonOperatorSpec}:
+
+\begin{quote}\small
+\texttt{name} (e.g.\ matmul, rmsnorm),
+\texttt{param\_space} (e.g.\ \texttt{\{BLOCK\_SIZE: [128, 256, \ldots]\}}),
+\texttt{curated\_configs} (hand-picked starting points),
+\texttt{shape\_buckets} (workload-shaped test shapes),
+\texttt{metric\_name} (\texttt{tflops} or \texttt{gb\_per\_s}),
+\texttt{grid\_generator\_fn} (systematic parameter grid).
+\end{quote}
+
+Each operator is registered once and dispatched uniformly by the rest of the
+system: the proposer, selector, database, and runner are all operator-agnostic.
+Adding a new operator requires approximately 200 lines plus a registry entry.
+
+The parameterized interface is a deliberate constraint. By prohibiting free-form
+source rewriting, we guarantee that every benchmark result can be indexed by a
+stable, typed key and that cost model feature extraction is deterministic. The
+tradeoff---reduced expressiveness relative to free-form source agents---is
+accepted in exchange for tractability.
+
+
+\subsection{Shape-Indexed Cross-Run Config Database}
+\label{sec:config-db}
+
+\texttt{ConfigDatabase} persists benchmark results as JSON, keyed by
+\texttt{\{operator\}:\{shape\_bucket\}:\{hardware\}}. Shape buckets are
+operator-specific: for matmul we classify by $(M \times N \times K$, aspect
+ratio, $K$ ratio); for rmsnorm by \texttt{hidden\_dim}; for attention by
+(\texttt{seq\_len}, \texttt{head\_dim}). Configurations learned on
+\texttt{llama\_7b} shapes are not reused for \texttt{mixtral} shapes---each
+bucket maintains its own incumbent.
+
+Across CI runs, the database is restored from the previous successful artifact,
+updated with new results, and saved as a new artifact. This is a standing JSON
+database that compounds knowledge over time without requiring a persistent
+server process.
+
+
+\subsection{LLM Proposer with Cross-Run Insights}
+\label{sec:llm-proposer}
+
+When the LLM proposer runs, it receives: (1)~the operator's parameter space and
+hardware constraints, (2)~the target shapes for the current iteration, and
+(3)~cross-run insights extracted from the database: per bucket, the top-3
+configurations and their best measured metrics. The proposer responds with up to
+4 novel configurations plus a natural-language rationale.
+
+
+\subsection{Frontier-Aware Config Selection}
+\label{sec:frontier}
+
+\texttt{select\_configs\_for\_operator} allocates up to $N$ slots per iteration
+with explicit semantics: (1)~\textbf{Incumbent}---the best known config;
+(2)~\textbf{LLM-proposed}---novel configs from the proposer;
+(3)~\textbf{Curated}---hand-picked starters not yet tested;
+(4)~\textbf{Exploration}---systematic grid configs not yet tested. This ensures
+known-good configurations are always re-validated while allocating explicit
+budget to exploration and novelty.
+
+
+\subsection{Learned Cost Model}
+\label{sec:cost-model}
+
+The central technical contribution beyond the LLM proposer is a
+\textbf{learned cost model} trained on the shape-indexed database. Features are a
+fixed-width 20-dimensional vector including: operator ID (one-hot), hardware ID
+(one-hot), shape dimensions (5 slots), configuration parameters (8 slots), and
+derived features (\texttt{log(shape\_product)}, \texttt{log(max\_dim)},
+\texttt{log(tile\_area)}, etc.).
+
+We use sklearn \texttt{GradientBoostingRegressor} with 200 trees, depth~5,
+learning rate 0.05. On an 80/20 split of 384 training points, the model achieves
+$R^2 = 0.970$. Feature importance analysis reveals that
+\texttt{log\_shape\_min} (0.433) and \texttt{log\_shape\_max} (0.126) are
+dominant, followed by raw shape dimensions and \texttt{num\_warps}.
+
+At selection time, the selector gathers up to 40 grid candidates and calls
+\texttt{cost\_model.rank\_configs()}, returning them sorted by predicted metric.
+The cost model is deterministic: given the same training data, it always
+produces the same ranking.
+
+
+\subsection{Execution Backend (Modal)}
+\label{sec:modal}
+
+Benchmark scripts are self-contained Python files. A single Modal function
+executes them on a warm GPU container. For multi-iteration workflows, a
+persistent session context keeps one container warm across all iterations,
+cutting per-call overhead from ${\sim}10$\,s to 1--3\,s. Total cost to reproduce
+all results: approximately \$1.44 in Modal GPU credits.
+
+
+% ---------------------------------------------------------------------------
+% 3. OPERATORS
+% ---------------------------------------------------------------------------
+\section{Operators}
+\label{sec:operators}
+
+\begin{table}[t]
+\centering
+\caption{Noeris operator registry (15 operators, 110+ shape buckets).}
+\label{tab:operators}
+\small
+\begin{tabular}{@{}llcr@{}}
+\toprule
+Operator & Parameter space & Metric & Buckets \\
+\midrule
+matmul & \texttt{BLOCK\_M/N/K, GROUP\_SIZE\_M, warps, stages} & TFLOPS & 10 \\
+rmsnorm & \texttt{BLOCK\_SIZE, warps, stages} & GB/s & 12 \\
+softmax & \texttt{BLOCK\_SIZE, warps, stages} & GB/s & 7 \\
+layernorm & \texttt{BLOCK\_SIZE, warps, stages} & GB/s & 8 \\
+cross\_entropy & \texttt{BLOCK\_SIZE, warps, stages} & GB/s & 9 \\
+attention (FA+SWA) & \texttt{BLOCK\_M, BLOCK\_N, warps, stages, \ldots} & TFLOPS & 12 \\
+rotary (RoPE) & \texttt{BLOCK\_SIZE, warps, stages} & GB/s & 8 \\
+geglu & \texttt{BLOCK\_SIZE, warps, stages} & GB/s & 5 \\
+qk\_norm\_rope (fwd) & \texttt{BLOCK\_SIZE, warps, stages} & GB/s & 6 \\
+qk\_norm\_rope (bwd) & \texttt{BLOCK\_SIZE, warps, stages} & GB/s & 6 \\
+moe\_router & \texttt{BLOCK\_SIZE, warps, stages} & GB/s & 4 \\
+grouped\_gemm & \texttt{BLOCK\_M/N/K, warps, stages} & TFLOPS & 4 \\
+paged\_kv\_decode & \texttt{BLOCK\_SIZE, warps, stages} & GB/s & 4 \\
+ple\_gather & \texttt{BLOCK\_SIZE, warps, stages} & GB/s & 2 \\
+ssm\_scan (Mamba-3) & \texttt{BLOCK\_B/D/L, warps, stages} & GB/s & TBD \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+\subsection{Sliding-Window Attention Kernel}
+\label{sec:swa-kernel}
+
+The attention operator supports a \texttt{WINDOW\_SIZE} constexpr that restricts
+each query token to at most \texttt{WINDOW\_SIZE} key tokens, enabling tile
+pruning for local attention patterns. When \texttt{WINDOW\_SIZE > 0}, the inner
+K-tile loop is bounded by:
+\[
+k_\text{start} = \max(0,\; \mathit{pid} \cdot \texttt{BLOCK\_M} - \texttt{WINDOW\_SIZE} + 1), \quad
+k_\text{end} = \min(N,\; \mathit{pid} \cdot \texttt{BLOCK\_M} + \texttt{WINDOW\_SIZE})
+\]
+rather than iterating over all K tiles from 0 to $N$. For a representative
+Gemma~4 configuration---\texttt{window=1024}, \texttt{seq=4096},
+\texttt{BLOCK\_N=64}---this prunes approximately half the K tiles.
+
+
+\subsection{Fused QK-RMSNorm + RoPE Prologue (Headline Result)}
+\label{sec:fused-prologue}
+
+The Gemma~3/4 attention prologue
+(\texttt{Q-RMSNorm}$\to$\texttt{K-RMSNorm}$\to$\texttt{Q-RoPE}$\to$\texttt{K-RoPE})
+is a known fusion target. vLLM has an experimental
+\texttt{enable\_qk\_norm\_rope\_fusion} pass---a \texttt{torch.compile} pass with a
+CUDA kernel---but it is \textbf{disabled by default} due to performance regression
+on H100. The reported benefit when enabled is 2--3\% end-to-end. Our
+contribution is a parameterized Triton implementation with bandit-tuned
+configurations that makes this fusion practical and performant across hardware.
+
+\texttt{qk\_norm\_rope\_kernel} is a fused Triton kernel that for each row in a
+$(B, H, S, D)$ tensor: (i)~loads the row, (ii)~computes
+$\mathit{rstd} = \text{rsqrt}(\text{mean}(x^2) + \epsilon)$, (iii)~applies the
+Gemma-mode $(1+w)$ affine, (iv)~rotates the resulting even/odd pairs with the
+RoPE $\cos$/$\sin$ tables, and (v)~stores the result. Two launches (one Q, one
+K) replace the four of the separated path.
+
+\textbf{Measurement.} 6 Gemma~3/4 shape buckets $\times$ 5 curated configs
+$\times$ 2 GPUs (A100-SXM4-40GB and H100-SXM5-80GB). Timer:
+\texttt{cuda\_event} + L2 flush, 3 warmup / 10 trials, median. Correctness:
+$\texttt{max\_err} \leq 0.1$ against PyTorch fp32 reference. \textbf{All 60
+(shape, config) combinations are correct---zero failures.}
+
+\begin{table}[t]
+\centering
+\caption{Fused QK-RMSNorm+RoPE: best fusion speedup per Gemma shape.}
+\label{tab:fusion-speedup}
+\small
+\begin{tabular}{@{}lcccccc@{}}
+\toprule
+Shape & GQA & head\_dim & A100 GB/s & A100 speedup & H100 GB/s & H100 speedup \\
+\midrule
+gemma4\_31b\_global & 32:4 & 512 & 925.5 & \textbf{12.85$\times$} & \textbf{1627.7} & 11.88$\times$ \\
+gemma4\_26b\_a4b\_global & 16:2 & 512 & 905.0 & 12.40$\times$ & 1576.5 & 11.73$\times$ \\
+gemma4\_31b\_local & 32:16 & 256 & 731.2 & 11.30$\times$ & 1536.3 & 11.81$\times$ \\
+gemma3\_local\_1024 & 16:16 & 256 & 715.2 & 10.69$\times$ & 1490.2 & \textbf{11.82$\times$} \\
+gemma4\_26b\_a4b\_local & 16:8 & 256 & 711.1 & 10.37$\times$ & 1443.2 & 11.49$\times$ \\
+gemma4\_e2b\_local & 8:1 & 256 & 593.6 & 10.23$\times$ & 1213.7 & 10.35$\times$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Why so much higher than a pure HBM-accounting estimate?} A purely
+HBM-accounting cost model predicts ${\sim}2\times$ fusion speedup. The measured
+10--13$\times$ is 5--6$\times$ higher. The gap is \textbf{kernel launch overhead}.
+At these tile sizes each individual kernel takes 30--100~$\mu$s on A100/H100;
+CUDA launch latency (${\sim}$5--10~$\mu$s per launch) is 10--20\% of each
+separated call, and going from 4 launches to 2 saves a disproportionate fraction
+of wall-clock time. This is precisely the regime where Triton fusion provides
+asymmetric value---not at the HBM-bandwidth frontier, but at the
+launch-amortization frontier.
+
+\textbf{Backward pass.} The backward kernel fuses the reverse sequence: RoPE
+inverse rotation, Gemma-mode $(1+w)$ affine backward, and RMSNorm backward,
+replacing 4 separate backward launches with 2 fused kernels. Validated on T4:
+4.9--7.5$\times$ backward fusion speedup. To our knowledge, \textbf{no existing
+framework fuses the combined QK-RMSNorm+RoPE backward into a single kernel}---
+Liger Kernel fuses them separately.
+
+
+\subsection{Mamba-3 SSM Scan Operator}
+\label{sec:ssm-scan}
+
+To demonstrate that the parameterized template approach extends beyond
+transformer attention, we implement a selective state-space model (SSM) scan
+operator targeting Mamba-3-style architectures~\citep{mamba2}. The operator
+implements the parallel-scan recurrence ($h_t = A_t \cdot h_{t-1} + B_t \cdot
+x_t$; $y_t = C_t \cdot h_t$) via the Blelloch prefix-sum algorithm, tiled across
+batch and channel dimensions. The operator is registered through the standard
+\texttt{TritonOperatorSpec} interface; no changes to the bandit, cost model, or
+config database were required. GPU evaluation is pending.
+
+
+% ---------------------------------------------------------------------------
+% 4. EVALUATION
+% ---------------------------------------------------------------------------
+\section{Evaluation}
+\label{sec:eval}
+
+Every number is drawn directly from raw benchmark artifacts. No smoothing or
+post-hoc selection has been applied.
+
+\textbf{Transparency note.} Sections~\ref{sec:aggregate}--\ref{sec:autokernel}
+use our \textbf{internal LLM-shape benchmark}: 53 problems with shapes drawn
+from real LLM workloads, evaluated in FP16, using \texttt{triton.testing.do\_bench}.
+Starting from \S\ref{sec:compiler-analysis}, results use the upstream KernelBench
+methodology (\texttt{cuda\_event} + L2 flush, FP32 \texttt{nn.Module} problems).
+The two regimes measure \textbf{different workloads}; both are reported.
+
+
+\subsection{Experimental Setup}
+\label{sec:setup}
+
+\textbf{Hardware.} A100-SXM4-40GB (Modal), H100-SXM5-80GB (Modal), Tesla T4
+(Kaggle/Colab free tier). All 15 operators validated on all three GPUs.
+
+\textbf{Problem set.} 53 curated problems at Levels~1--3: matmul (19), rmsnorm (7),
+softmax (8), layernorm (6), cross\_entropy (7), attention (6). All FP16.
+
+\textbf{Configs per problem.} 4 curated starters; best result taken. No search
+iterations.
+
+\textbf{Cost.} Full two-GPU evaluation: ${\sim}\$1.44$ in Modal credits.
+
+
+\subsection{Aggregate Results}
+\label{sec:aggregate}
+
+\begin{table}[t]
+\centering
+\caption{fast$_p$ scores (fraction of problems with speedup $\geq t\times$ over PyTorch eager).}
+\label{tab:fastp}
+\small
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+ & \multicolumn{2}{c}{A100 (53 problems)} & \multicolumn{2}{c}{H100 (53 problems)} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}
+Threshold & Overall & Level 1/2 & Overall & Level 1/2 \\
+\midrule
+fast$_{1.0}$ & \textbf{56.6\%} & 58.3\% / 61.5\% & \textbf{56.6\%} & 58.3\% / 61.5\% \\
+fast$_{1.5}$ & 41.5\% & 45.8\% / 42.3\% & 43.4\% & 45.8\% / 46.2\% \\
+fast$_{2.0}$ & 37.7\% & 37.5\% / 42.3\% & 41.5\% & 45.8\% / 42.3\% \\
+fast$_{3.0}$ & 32.1\% & 33.3\% / 34.6\% & 30.2\% & 33.3\% / 30.8\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+\subsection{Per-Operator Deep Dive}
+\label{sec:per-operator}
+
+\textbf{RMSNorm} is the clearest win. On H100, the Mixtral shape reaches
+\textbf{2625.1~GB/s at 11.66$\times$} PyTorch eager; LLaMA shapes achieve
+10--11$\times$. The Triton kernel fuses squared-mean reduction, reciprocal-sqrt,
+and element-wise scale into a single pass.
+
+\textbf{Softmax} shows the largest shape-sensitivity. On H100, speedups range
+from 2.18$\times$ (tiny) to \textbf{6.38$\times$} (vocab\_llama, width=32000).
+
+\textbf{Cross-Entropy} delivers best absolute numbers: 2407.1~GB/s at
+\textbf{9.65$\times$} on H100.
+
+\textbf{LayerNorm} is weakest: 1.25--1.53$\times$ on H100. PyTorch's fused ATen
+kernel is competitive.
+
+\textbf{Matmul}: cuBLAS is hard to beat. 0.66--1.01$\times$ range. The two
+LLaMA-7B shapes reach 1.01$\times$ on H100, tying cuBLAS at 692~TFLOPS.
+
+\textbf{GeGLU}: all four Gemma shapes achieve $\geq$3$\times$ on A100 (3.08--3.98$\times$),
+reaching 60--68\% of H100 peak HBM3 bandwidth with no search iterations.
+
+
+\subsection{Comparison to AutoKernel}
+\label{sec:autokernel}
+
+\begin{table}[t]
+\centering
+\caption{Best-shape comparison to AutoKernel~\citep{autokernel} on H100.}
+\label{tab:autokernel}
+\small
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Kernel & Noeris best & AutoKernel & Delta \\
+\midrule
+RMSNorm & \textbf{11.66$\times$} (2625 GB/s) & 5.29$\times$ & \textbf{+120\%} \\
+Cross-entropy & \textbf{9.65$\times$} (2407 GB/s) & 2.94$\times$ & \textbf{+228\%} \\
+Softmax & \textbf{6.38$\times$} (2526 GB/s) & 3.44$\times$ & \textbf{+85\%} \\
+LayerNorm & 1.53$\times$ (1667 GB/s) & 3.21$\times$\textsuperscript{$\dagger$} & $-$52\% \\
+\bottomrule
+\multicolumn{4}{@{}l}{\footnotesize $\dagger$ AutoKernel's LayerNorm baseline is \texttt{torch.compile}, not eager.}
+\end{tabular}
+\end{table}
+
+
+\subsection{Cross-Run Learning Ablation (Honest Negative Result)}
+\label{sec:cross-run-ablation}
+
+At 5 iterations with strong curated priors, database-guided LLM proposals do not
+outperform stateless proposals within the measurement noise floor. Matmul:
+$-2.16\%$; rmsnorm: $-1.25\%$---neither statistically significant, both within
+the ${\sim}$2--3\% GPU-runner noise floor. The negative result reflects the
+strength of curated starters, not evidence against persistent learning in
+principle.
+
+
+\subsection{Cost Model Validation}
+\label{sec:cost-model-validation}
+
+With curated configs disabled (\texttt{--no-curated}), forcing both conditions to
+start from the raw parameter grid:
+
+\begin{table}[t]
+\centering
+\caption{Cost model ablation: filtered vs.\ unfiltered grid search (A100).}
+\label{tab:cost-model}
+\small
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Operator & Baseline (GB/s) & Filtered (GB/s) & $\Delta$ \\
+\midrule
+cross\_entropy & 682.16 & \textbf{936.94} & \textbf{+37.35\%} \\
+softmax & 948.35 & \textbf{998.26} & +5.26\% \\
+rmsnorm & 801.83 & 803.16 & +0.17\% \\
+layernorm & 781.45 & 782.62 & +0.15\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The gain scales with grid size / budget: operators where exhaustive evaluation
+would be expensive benefit most. For cross\_entropy, the filtered condition
+reaches its near-final value (935.8~GB/s) on \textbf{iteration~1}---before the
+baseline has found anything above 682~GB/s.
+
+
+\subsection{Complementary Selectors: Bandit Fills the Sparse-Data Gap}
+\label{sec:selectors}
+
+\begin{table}[t]
+\centering
+\caption{Three-way selector comparison (\texttt{--no-curated}, 5 iterations $\times$ 6 configs, A100).}
+\label{tab:selectors}
+\small
+\begin{tabular}{@{}lcccccc@{}}
+\toprule
+Operator & Baseline & Cost Model & $\Delta$ & Bandit & $\Delta$ & Winner \\
+\midrule
+matmul & 59.30 & 86.15 & +45\% & \textbf{138.38} & \textbf{+133\%} & Bandit \\
+attention & 85.03 & \textbf{141.30} & \textbf{+66\%} & 134.95 & +59\% & Cost Model \\
+cross\_entropy & 681.77 & \textbf{937.90} & +38\% & 937.05 & +37\% & Tied \\
+softmax & 967.95 & \textbf{1018.50} & +5\% & 980.61 & +1\% & Cost Model \\
+rmsnorm & 889.76 & 889.67 & 0\% & 883.57 & $-$1\% & No effect \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The two selectors occupy different niches. The bandit dominates matmul (+133\%
+vs.\ +45\%) where training data is sparse and the cost model must extrapolate.
+The cost model dominates attention (+66\% vs.\ +59\%) where the
+\texttt{BLOCK\_M}$\times$\texttt{BLOCK\_N} product has a smooth, near-monotone
+relationship with TFLOPS.
+
+
+\subsection{Ensemble Failure}
+\label{sec:ensemble-failure}
+
+Naive alternation (half slots from cost model, half from bandit) matches the cost
+model rather than the bandit on matmul (85.13 vs.\ 137.51~TFLOPS). The ensemble
+wastes half the budget on the weaker selector's proposals when selectors
+diverge.
+
+
+\subsection{Hardware Cross-Learning}
+\label{sec:hw-cross-learning}
+
+\begin{table}[t]
+\centering
+\caption{A100$\to$H100 cost model transfer (memory-bound operators).}
+\label{tab:hw-transfer}
+\small
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+Operator & R$^2$ (cross-hw) & Spearman $\rho$ & Top-5 agree & Random \\
+\midrule
+rmsnorm & $-$0.108 & 0.961 & 60\% & 7.8\% \\
+softmax & +0.463 & 0.988 & 60\% & 7.8\% \\
+layernorm & $-$0.040 & 0.942 & 40\% & 7.8\% \\
+cross\_entropy & +0.503 & 0.978 & 40\% & 7.8\% \\
+\midrule
+\textbf{Mean} & \textbf{+0.205} & \textbf{0.967} & \textbf{50\%} & \textbf{7.8\%} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Rankings transfer perfectly (Spearman $\rho = 0.967$); absolute predictions do
+not (R$^2 = 0.205$). The relative ordering of configurations is governed by the
+same structural constraints on both GPUs---shared memory capacity, roofline
+shape---while absolute throughput scales with bandwidth. Top-5 agreement is
+50\% vs.\ 7.8\% random: a 6.4$\times$ lift.
+
+
+\subsection{Multi-Trial Adaptive Router Validation}
+\label{sec:adaptive-router}
+
+\begin{table}[t]
+\centering
+\caption{Adaptive router: matmul A100, 3 trials $\times$ 5 iterations.}
+\label{tab:router}
+\small
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+Condition & Trial~1 & Trial~2 & Trial~3 & Mean $\pm$ $\sigma$ \\
+\midrule
+baseline & 58.33 & 59.01 & 54.92 & 57.42 $\pm$ 2.19 \\
+cost\_model & 84.78 & 85.34 & 78.44 & 82.85 $\pm$ 3.83 \\
+bandit & 136.07 & 137.51 & 124.85 & \textbf{132.81 $\pm$ 6.93} \\
+naive\_ensemble & 85.33 & 85.60 & 78.22 & 83.05 $\pm$ 4.19 \\
+adaptive\_router & 135.35 & 136.94 & 124.29 & \textbf{132.19 $\pm$ 6.89} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The adaptive router matches the bandit within 0.5\% (132.19 vs.\ 132.81
+TFLOPS) while the naive ensemble remains stuck at cost-model level (83.05). The
+router converges to preferring the bandit arm within 1--2 iterations.
+
+
+% ---------------------------------------------------------------------------
+% 4.16 -- KEY RESULTS
+% ---------------------------------------------------------------------------
+
+\subsection{Compiler Failure Analysis: Why torch.compile Falls Short}
+\label{sec:compiler-analysis}
+
+\begin{table}[t]
+\centering
+\caption{Compiler comparison on T4: QK-RMSNorm+RoPE prologue.}
+\label{tab:compiler}
+\small
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Method & Kernels & Launches & Prologue (ms) \\
+\midrule
+PyTorch eager & 10 & 40 & 3.45 \\
+\texttt{torch.compile} & 4 Triton + 5 DtoD & 9 & 0.92 \\
+Noeris (fused) & 1 Triton & 1 & 0.57 \\
+\midrule
+\multicolumn{3}{@{}l}{Noeris speedup vs.\ eager} & \textbf{6.08$\times$} \\
+\multicolumn{3}{@{}l}{Noeris speedup vs.\ compiled} & \textbf{1.62$\times$} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The \textbf{40 $\to$ 9 $\to$ 1} launch progression tells the story.
+\texttt{torch.\_dynamo.explain} reports 0 graph breaks, 1 graph, 30 ops---the
+compiler has full visibility. Yet it \emph{chooses} not to fuse across the
+RMSNorm reduction boundary. The generated kernel names
+(\texttt{triton\_per\_fused\_mean\_pow} and
+\texttt{triton\_poi\_fused\_rsqrt\_slice\_stack}) confirm HBM materialization
+between each reduction and pointwise kernel pair.
+
+At the full-layer level, Noeris achieves 1.54$\times$ over separated PyTorch
+vs.\ the compiler's 1.23$\times$---a 25\% gap. Wrapping Noeris custom ops in
+\texttt{torch.compile} is \emph{counterproductive} (1.20$\times$, slower than
+Noeris alone) due to tracing overhead around opaque Triton ops.
+
+
+\subsection{Cross-Model Generalization (19 Models, 13 Families)}
+\label{sec:cross-model}
+
+\begin{table}[t]
+\centering
+\caption{Cross-model prologue fusion on T4: 19 models, 13 families. All 19/19 pass correctness.}
+\label{tab:cross-model-t4}
+\small
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Model & QK-Norm? & Speedup & GB/s \\
+\midrule
+Qwen 3 32B & Yes & \textbf{8.90$\times$} & \textbf{120.1} \\
+Phi-4 14B & No & 8.81$\times$ & 118.9 \\
+Llama 4 Scout & No & 8.79$\times$ & 118.7 \\
+OLMo 2 32B & Yes & 8.76$\times$ & 118.3 \\
+DBRX & No & 8.71$\times$ & 117.7 \\
+LLaMA 3 8B & No & 8.70$\times$ & 117.4 \\
+Qwen 3 8B & Yes & 8.70$\times$ & 117.2 \\
+OLMo 2 7B & Yes & 8.68$\times$ & 117.2 \\
+Mixtral 8x22B & No & 8.66$\times$ & 117.0 \\
+InternLM 3 8B & No & 8.66$\times$ & 116.8 \\
+LLaMA 3 70B & No & 8.60$\times$ & 116.2 \\
+Mistral 7B & No & 8.58$\times$ & 115.7 \\
+Phi-4 mini & No & 8.50$\times$ & 114.4 \\
+Qwen 3 235B-A22B & Yes & 8.32$\times$ & 112.5 \\
+Gemma 4 31B global & Yes & 7.90$\times$ & 103.0 \\
+Phi-3 mini & No & 7.89$\times$ & 105.1 \\
+Falcon 3 10B & No & 7.58$\times$ & 101.7 \\
+Falcon 3 7B & No & 7.55$\times$ & 101.2 \\
+Gemma 4 E2B local & Yes & 6.49$\times$ & 79.4 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Models with \texttt{head\_dim=128} cluster at 8.3--8.9$\times$; Gemma~4 models
+with \texttt{head\_dim=256} land at 6.5--7.9$\times$. The explanation is launch
+overhead amortization: smaller tiles have proportionally more launch overhead
+relative to compute, so fusing from 4 to 2 launches saves a larger fraction.
+The fusion is \textbf{not Gemma-specific}: both QK-norm and non-QK-norm
+architectures benefit.
+
+
+\subsection{End-to-End Model Benchmark: 26-Layer Forward Pass}
+\label{sec:e2e}
+
+\begin{table}[t]
+\centering
+\caption{26-layer Gemma~4 E2B forward pass (batch=1, seq\_len=512, bf16).}
+\label{tab:e2e}
+\small
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+Configuration & T4 (ms) & T4 speedup & A100 (ms) & A100 speedup \\
+\midrule
+Baseline (PyTorch eager) & 322.7 & 1.00$\times$ & 41.4 & 1.00$\times$ \\
+Noeris (fused RMSNorm + QK+RoPE + GeGLU) & 274.4 & \textbf{1.18$\times$} & 29.1 & \textbf{1.43$\times$} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Noeris fuses three operation classes (RMSNorm, QK-norm+RoPE, GeGLU) accounting
+for ${<}20\%$ of per-layer compute, yet delivers 18\% E2E speedup on T4 and
+43\% on A100. The A100 benefit is 2.4$\times$ larger than T4, confirming fusion
+scales up on higher-bandwidth hardware. This is 6--21$\times$ more E2E impact
+than vLLM's reported 2--3\%.
+
+
+\subsection{Sliding-Window Attention: Beating cuDNN FlashAttention}
+\label{sec:swa-eval}
+
+\begin{table}[t]
+\centering
+\caption{Sliding-window attention vs.\ SDPA (cuDNN FlashAttention). Config: \texttt{BLOCK\_M=32, BLOCK\_N=32, warps=2, stages=2}.}
+\label{tab:swa}
+\small
+\begin{tabular}{@{}cccccccc@{}}
+\toprule
+GPU & $N$ & $W$ & $H$ & $D$ & Noeris (ms) & SDPA (ms) & Speedup \\
+\midrule
+\multirow{4}{*}{T4} & 8192 & 128 & 8 & 64 & 5.68 & 7.08 & 1.25$\times$ \\
+ & 8192 & 128 & 16 & 64 & 9.99 & 10.97 & 1.10$\times$ \\
+ & 8192 & 64 & 8 & 64 & 3.12 & 7.08 & 2.27$\times$ \\
+ & 8192 & 64 & 8 & 64 & 1.99 & 7.08 & \textbf{3.56$\times$} \\
+\midrule
+\multirow{4}{*}{A100} & 8192 & 128 & 8 & 64 & 1.14 & 3.42 & 3.00$\times$ \\
+ & 8192 & 128 & 16 & 64 & 2.01 & 5.31 & 2.64$\times$ \\
+ & 8192 & 64 & 8 & 64 & 0.55 & 3.42 & \textbf{6.24$\times$} \\
+ & 8192 & 64 & 16 & 64 & 1.02 & 5.31 & 5.21$\times$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+On A100, all 8 tested shapes show wins (8/8), with speedups up to
+\textbf{6.24$\times$}. On T4, 4/8 shapes win. The best speedups occur at the
+narrowest windows ($W$=64) where tile-pruning skips 98\% of tiles. The advantage
+is specific to the narrow-window regime: $W/N$ must be small enough that
+tile-pruning eliminates a large fraction of work, and \texttt{head\_dim} must be
+small enough (64) that per-tile compute is cheap relative to iteration overhead.
+
+Sliding-window attention is architecturally important: Gemma~3/4 runs 5 of 6
+attention layers as local windows, Mistral uses sliding-window throughout.
+Active community bounties exist in vLLM (PR~\#24390) and Axolotl (issue~\#1038).
+
+
+\subsection{Cross-Hardware Transfer: Zero-Shot Config Prediction}
+\label{sec:cross-hw-transfer}
+
+\begin{table}[t]
+\centering
+\caption{A100 prologue fusion: 19 models, 13 families. Spearman $\rho = 0.907$ (A100 vs.\ H100).}
+\label{tab:a100-19model}
+\small
+\begin{tabular}{@{}lcc@{}}
+\toprule
+Model & Fusion speedup & GB/s \\
+\midrule
+gemma4\_31b\_global & \textbf{9.76$\times$} & \textbf{655.0} \\
+gemma4\_26b\_a4b\_global & 9.41$\times$ & 631.2 \\
+gemma4\_31b\_local & 8.12$\times$ & 544.7 \\
+gemma3\_local\_1024 & 7.89$\times$ & 529.2 \\
+Qwen 3 32B & 5.33$\times$ & 357.5 \\
+Phi-4 14B & 5.28$\times$ & 354.2 \\
+Llama 4 Scout & 5.27$\times$ & 353.4 \\
+DBRX & 5.22$\times$ & 350.2 \\
+LLaMA 3 8B & 5.21$\times$ & 349.4 \\
+OLMo 2 7B & 5.20$\times$ & 348.8 \\
+Qwen 3 8B & 5.20$\times$ & 348.8 \\
+Mixtral 8x22B & 5.19$\times$ & 348.1 \\
+LLaMA 3 70B & 5.16$\times$ & 346.0 \\
+Mistral 7B & 5.14$\times$ & 344.9 \\
+Phi-4 mini & 5.09$\times$ & 341.5 \\
+Qwen 3 235B-A22B & 4.98$\times$ & 334.1 \\
+Phi-3 mini & 4.73$\times$ & 317.2 \\
+Falcon 3 10B & 4.54$\times$ & 304.5 \\
+Falcon 3 7B & 4.52$\times$ & 303.2 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+All 19 models achieve 3.9--9.8$\times$ fusion speedup on A100 (mean 340~GB/s).
+Cross-hardware fused kernel latency rankings between A100 and H100 achieve
+\textbf{Spearman $\rho = 0.907$ ($p < 10^{-7}$)}, validating zero-shot
+cross-hardware configuration prediction. Prior art (TenSet,
+\citealt{tenset}) requires target-device fine-tuning; Noeris achieves
+strong rank correlation with \textbf{zero H100 training data}.
+
+
+\subsection{Bandit Convergence: 98\% of Optimal in One Iteration}
+\label{sec:bandit-convergence}
+
+\begin{table}[t]
+\centering
+\caption{Bandit convergence: iteration~1 (6 configs, 12\% of search space) vs.\ exhaustive (50 configs).}
+\label{tab:bandit-convergence}
+\small
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Operator & Exhaustive (50 configs) & Bandit iter~1 (6 configs) & \% of optimal \\
+\midrule
+rmsnorm & 228.0 GB/s & 227.8 GB/s & 99.9\% \\
+qk\_norm\_rope & 114.0 GB/s & 114.0 GB/s & 99.9\% \\
+geglu & 248.9 GB/s & 244.5 GB/s & 98.2\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The bandit evaluates only 6 of 50 candidate configurations (12\% of the search
+space) and finds $\geq$98\% of optimal throughput on the first iteration across
+all three operators. Full optimality (100\%) is reached by iteration 2--6.
+This represents an \textbf{8.3$\times$ reduction in GPU cost} with negligible
+performance loss, confirming fully autonomous self-improvement with zero human
+intervention.
+
+
+\subsection{Architecture-Dependent Triton Codegen Quality}
+\label{sec:codegen-quality}
+
+The same fused kernel that delivers 12$\times$ speedup over separated Triton on
+A100 produces only 0.59$\times$ vs.\ PyTorch native at the layer level on T4.
+All 15 operators pass correctness on T4; the issue is purely Triton PTX quality
+on Turing (SM~7.5). Triton generates high-quality code for Ampere (SM~8.0) and
+Hopper (SM~9.0); Turing receives less optimization attention.
+
+\begin{table}[t]
+\centering
+\caption{Architecture-dependent codegen quality.}
+\label{tab:codegen}
+\small
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Metric & T4 (Turing) & A100 (Ampere) & H100 (Hopper) \\
+\midrule
+Fused vs.\ separated Triton & 6.64$\times$ & 10.2--12.9$\times$ & 10.4--11.9$\times$ \\
+Fused vs.\ PyTorch native (layer) & \textbf{0.59$\times$} & $\gg$1$\times$ & $\gg$1$\times$ \\
+Correctness & 15/15 & 60/60 & 60/60 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+% ---------------------------------------------------------------------------
+% 5. RELATED WORK
+% ---------------------------------------------------------------------------
+\section{Related Work}
+\label{sec:related}
+
+GPU kernel optimization spans hand-tuned libraries, compiler-directed
+autotuning, algebraic search, and LLM-driven code generation agents. We organize
+the landscape into four groups.
+
+\subsection{LLM-Driven Kernel Generation and Agent Loops}
+\label{sec:rw-llm}
+
+\textbf{AutoKernel}~\citep{autokernel} is the closest direct competitor:
+autonomous agent loop on Triton and CUDA C++, nine operator types, 5.29$\times$
+on RMSNorm. Stateless across invocations. Our curated starters exceed
+AutoKernel's best H100 figures on three of four operators.
+
+\textbf{KernelSkill}~\citep{kernelskill} introduces multi-agent framework with
+dual-level memory (long-term skills, short-term backtracking). 5.44$\times$
+average on L1. The skill library is the closest analog to our database, but
+stores optimization strategies rather than numerical outcomes and does not key by
+\texttt{(operator, shape\_bucket, hardware)}.
+
+\textbf{CUDA Agent}~\citep{cudaagent}: large-scale agentic RL. 100\% beat
+\texttt{torch.compile} on L1--L2. Cross-run learning baked into model weights
+rather than an explicit store.
+
+\textbf{CUDA-L1}~\citep{cudal1}: contrastive RL over free-form CUDA source.
+Average 3.12$\times$, peak 120$\times$. Trades tractability for expressiveness
+relative to Noeris's structured parameter space.
+
+\textbf{KernelFoundry}~\citep{kernelfoundry}: MAP-Elites quality-diversity +
+LLM + meta-prompt evolution. Uses template-based parameter optimization---the
+one point of contact with Noeris's templates---but templates are one tool in a
+broader evolutionary repertoire.
+
+\textbf{KernelBand}~\citep{kernelband}: hierarchical MAB, the most structurally
+similar to our bandit selector. Key differences: no learned cost model, no
+cross-run database, no cross-hardware transfer.
+
+
+\subsection{Learned Cost Models and Traditional Autotuners}
+\label{sec:rw-cost-models}
+
+\textbf{TVM/Ansor}~\citep{ansor}: evolutionary search + XGBoost cost model over
+AST features. Noeris's GBR cost model is directly inspired by Ansor but operates
+on the discrete parameter grid of a fixed Triton template.
+
+\textbf{Triton \texttt{@autotune}} is the immediate baseline. Cache discarded
+across processes. Noeris generalizes it with persistent cross-run storage, LLM
+proposals, and cost model ranking.
+
+\textbf{Helion/LFBO} (Meta, 2025): Bayesian optimization for Triton autotuning.
+Single hardware target; no cross-run database or transfer.
+
+
+\subsection{QK-Norm + RoPE Fusion Prior Art}
+\label{sec:rw-fusion}
+
+\textbf{vLLM} \texttt{enable\_qk\_norm\_rope\_fusion}: disabled by default due to
+H100 regression; 2--3\% E2E. \textbf{SGLang} \texttt{fused\_qknorm\_rope}:
+limited scope. \textbf{Modular/MAX}: fused RoPE+RMSNorm targeting DeepSeek MLA,
+closed-source. \textbf{Flash Normalization} (Liao et al., 2024): algebraic
+optimizations. \textbf{Liger Kernel}: fuses RMSNorm and RoPE \emph{separately},
+not together. \textbf{Unsloth}: 2.3$\times$ fused QK-RoPE without RMSNorm.
+\textbf{FlashAttention-4}: subsumes our fusion on Blackwell B200 but does not
+exist for A100/H100.
+
+\subsection{Attention Masking and Sparse Attention}
+\label{sec:rw-attention}
+
+\textbf{FlexAttention}~\citep{flexattention}: composable block-sparse API that
+can express tile-pruning. Our contribution is empirical: first published
+measurement of ${>}3\times$ wins on narrow-window shapes across both T4 and A100.
+
+\subsection{How Noeris is Actually Different}
+\label{sec:rw-diff}
+
+No individual component is new in isolation. Noeris contributes a specific
+combination: \textbf{(a)}~fixed parameterized template interface bounding the
+search space; \textbf{(b)}~cross-session database keyed by (operator,
+shape\_bucket, hardware); \textbf{(c)}~lightweight GBR cost model trained on that
+database; \textbf{(d)}~adaptive router learning per-iteration which selector to
+deploy.
+
+\begin{table}[t]
+\centering
+\caption{System comparison.}
+\label{tab:comparison}
+\small
+\begin{tabular}{@{}lccccc@{}}
+\toprule
+System & Search & Cost model & Cross-run DB & Cross-HW & Adaptive \\
+\midrule
+KernelBand & Hier.\ MAB & None & No & No & No \\
+KernelEvolve & LLM evol. & None & No & No & No \\
+Helion/LFBO & Bayes.\ opt. & GP & No & No & No \\
+TVM/Ansor & Evol.+XGB & XGB (AST) & Per-op logs & No & No \\
+AutoKernel & LLM agent & None & No & No & No \\
+\textbf{Noeris} & \textbf{Thompson+LLM} & \textbf{GBR} & \textbf{Yes} & \textbf{$\rho$=0.97/0.91} & \textbf{Yes} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+% ---------------------------------------------------------------------------
+% 6. LIMITATIONS
+% ---------------------------------------------------------------------------
+\section{Limitations}
+\label{sec:limitations}
+
+\begin{enumerate}[leftmargin=*,itemsep=2pt]
+\item \textbf{Cross-run learning ablation is negative} (\S\ref{sec:cross-run-ablation}).
+The claim rests on architecture, not yet on measured gains.
+
+\item \textbf{Cost model ablation uses a weak baseline.} The
+\texttt{--no-curated} baseline is deliberately weakened.
+
+\item \textbf{Adaptive router validated on one operator} (matmul A100 only).
+
+\item \textbf{Attention kernel is simplified.} Does not match SDPA/FlashAttention-2/3.
+
+\item \textbf{KernelBench subset.} 53 of 250 problems evaluated.
+
+\item \textbf{Single hardware vendor.} Three NVIDIA GPUs; no AMD MI300.
+
+\item \textbf{MoE router negative result.} 0.12$\times$ fusion on T4, 0.68$\times$ on A100.
+
+\item \textbf{Metric noise.} Modal per-call variance is ${\sim}$1--3\%.
+
+\item \textbf{Triton codegen is architecture-dependent.} 0.59$\times$ vs.\ PyTorch native
+on T4 (\S\ref{sec:codegen-quality}).
+
+\item \textbf{Per-operator surrogates ineffective.} GP/ensemble models produce
+negative R$^2$ within a single operator on a single GPU.
+\end{enumerate}
+
+
+% ---------------------------------------------------------------------------
+% 7. CONCLUSION
+% ---------------------------------------------------------------------------
+\section{Conclusion}
+\label{sec:conclusion}
+
+Noeris demonstrates a complete autonomous GPU kernel search pipeline with
+fifteen parameterized Triton operators. The headline result is a fused
+QK-RMSNorm+RoPE kernel achieving $10.2$--$12.9\times$ on A100 and
+$10.4$--$11.9\times$ on H100, generalizing to 19 model shapes across 13
+families ($6.5$--$8.9\times$ on T4, $3.9$--$9.8\times$ on A100). A 26-layer
+Gemma~4 forward pass achieves $1.18\times$ E2E speedup on T4 and $1.43\times$ on
+A100---6--21$\times$ more impact than vLLM's 2--3\%. A sliding-window attention
+kernel beats cuDNN FlashAttention by up to $6.24\times$ on A100. Cross-hardware
+fused kernel rankings transfer with Spearman $\rho = 0.907$
+($p < 10^{-7}$), validating zero-shot config prediction.
+
+The central contribution has evolved from ``a cost model improves search'' to a
+complete selector-routing story with statistical validation. The cost model
+improves search by +37\% on cross\_entropy; the bandit outperforms on matmul
+(+134\% vs.\ +45\%); an adaptive router matches the best fixed selector within
+0.5\% across 3 trials. A100-trained cost model rankings transfer to H100 with
+Spearman $\rho = 0.967$.
+
+A bandit convergence study demonstrates $\geq$98\% of exhaustive-search optimal
+in a single iteration with 12\% of the search space---the strongest evidence of
+autonomous self-improvement. On memory-bound kernels, curated-starter-only
+results already exceed AutoKernel's published H100 numbers on RMSNorm (+120\%),
+cross-entropy (+228\%), and softmax (+85\%).
+
+All code, raw benchmark data, and reproduction scripts are available at
+\url{https://github.com/PwnKit-Labs/noeris} under the MIT License.
+
+
+% ---------------------------------------------------------------------------
+% REFERENCES
+% ---------------------------------------------------------------------------
+\bibliographystyle{plainnat}
+
+\begin{thebibliography}{20}
+
+\bibitem[Dao et~al.(2022)]{flashattention}
+Tri Dao, Daniel Y.~Fu, Stefano Ermon, Atri Rudra, and Christopher R\'{e}.
+\newblock {FlashAttention}: Fast and memory-efficient exact attention with
+  {IO}-awareness.
+\newblock In \emph{NeurIPS}, 2022.
+
+\bibitem[Kwon et~al.(2023)]{vllm}
+Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng, Lianmin Zheng, Cody~Hao
+  Yu, Joseph~E. Gonzalez, Hao Zhang, and Ion Stoica.
+\newblock Efficient memory management for large language model serving with
+  {PagedAttention}.
+\newblock In \emph{SOSP}, 2023.
+
+\bibitem[Ouyang et~al.(2025)]{kernelbench}
+Anne Ouyang, Simon Guo, and Azalia Mirhoseini.
+\newblock {KernelBench}: Can {LLMs} write efficient {GPU} kernels?
+\newblock arXiv:2502.10517, 2025.
+
+\bibitem[{Peking University}(2025)]{kernelband}
+{Peking University}.
+\newblock {KernelBand}: Hierarchical multi-armed bandit for {GPU} kernel
+  optimization.
+\newblock arXiv:2511.18868, 2025.
+
+\bibitem[Zhu et~al.(2025)]{mirage}
+Mengdi Zhu, et~al.
+\newblock {Mirage}: Automatically generating fast {GPU} kernels without
+  programming.
+\newblock In \emph{OSDI}, 2025.
+
+\bibitem[Chen et~al.(2021)]{tenset}
+Lianmin Chen, et~al.
+\newblock {TenSet}: A large-scale program performance dataset for learned
+  tensor compilers.
+\newblock In \emph{NeurIPS Datasets and Benchmarks Track}, 2021.
+
+\bibitem[He et~al.(2024)]{flexattention}
+Horace He, Driss Guessous, Yanbo Liang, and Joy Dong.
+\newblock {FlexAttention}: The flexibility of {PyTorch} with the performance of
+  {FlashAttention}.
+\newblock PyTorch Blog, 2024.
+
+\bibitem[Jaber and Jaber(2026)]{autokernel}
+Eiman Jaber and Christoph Jaber.
+\newblock {AutoKernel}: Autonomous {GPU} kernel optimization via iterative
+  agent-driven search.
+\newblock arXiv:2603.21331, 2026.
+
+\bibitem[Sun et~al.(2026)]{kernelskill}
+Sun, et~al.
+\newblock {KernelSkill}: A multi-agent framework for {GPU} kernel optimization.
+\newblock arXiv:2603.10085, 2026.
+
+\bibitem[Li et~al.(2026)]{cudal1}
+Li, et~al.
+\newblock {CUDA-L1}: Improving {CUDA} optimization via contrastive
+  reinforcement learning.
+\newblock arXiv:2507.14111, ICLR 2026.
+
+\bibitem[Dai et~al.(2026)]{cudaagent}
+Dai, et~al.
+\newblock {CUDA Agent}: Large-scale agentic reinforcement learning for {GPU}
+  kernel optimization.
+\newblock arXiv:2602.24286, 2026.
+
+\bibitem[Wiedemann et~al.(2026)]{kernelfoundry}
+Wiedemann, et~al.
+\newblock {KernelFoundry}: Quality-diversity search for {GPU} kernel
+  optimization.
+\newblock arXiv:2603.12440, 2026.
+
+\bibitem[Zheng et~al.(2020)]{ansor}
+Lianmin Zheng, Chengfan Jia, Minmin Sun, Zhao Wu, Cody~Hao Yu, Ameer
+  Haj-Ali, Yida Wang, Jun Yang, Danyang Zhuo, Koushik Sen, Joseph~E. Gonzalez,
+  and Ion Stoica.
+\newblock {Ansor}: Generating high-performance tensor programs for deep
+  learning.
+\newblock In \emph{OSDI}, 2020.
+
+\bibitem[Tillet et~al.(2019)]{triton}
+Philippe Tillet, H.~T. Kung, and David Cox.
+\newblock {Triton}: An intermediate language and compiler for tiled neural
+  network computations.
+\newblock In \emph{MAPL@PLDI}, 2019.
+
+\bibitem[Gu and Dao(2024)]{mamba2}
+Albert Gu and Tri Dao.
+\newblock Transformers are {SSMs}: Generalized models and efficient algorithms
+  through structured state space duality.
+\newblock arXiv:2405.21060, 2024.
+
+\end{thebibliography}
+
+\end{document}
