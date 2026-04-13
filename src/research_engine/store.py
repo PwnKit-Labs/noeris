@@ -472,6 +472,11 @@ class JsonFileRunStore:
             lines.append(
                 f"- Sources with timestamps: `{freshness.get('source_count_with_timestamps', 0)}`"
             )
+            if freshness.get("bucket_counts"):
+                bucket_bits = ", ".join(
+                    f"{key}={value}" for key, value in freshness["bucket_counts"].items()
+                )
+                lines.append(f"- Buckets: `{bucket_bits}`")
             if freshness.get("newest_source_id"):
                 lines.append(
                     f"- Newest source: `{freshness['newest_source_id']}` at `{freshness['newest_updated_at']}`"
@@ -487,7 +492,7 @@ class JsonFileRunStore:
                 lines.append(
                     f"- `{item['source_id']}` | score=`{item['score']:.3f}` | "
                     f"confidence=`{item['confidence']}` | contradictions=`{item['contradiction_count']}` | "
-                    f"updated_at=`{item['updated_at'] or 'unknown'}` | "
+                    f"staleness=`{item['staleness_label']}` | updated_at=`{item['updated_at'] or 'unknown'}` | "
                     f"title={item['title']}"
                 )
             lines.append("")
@@ -592,12 +597,17 @@ def _summarize_source_freshness(sources: list[ResearchSource]) -> dict[str, obje
         }
     newest_source_id, newest_updated_at = max(dated, key=lambda item: item[1] or "")
     oldest_source_id, oldest_updated_at = min(dated, key=lambda item: item[1] or "")
+    bucket_counts = {"fresh": 0, "recent": 0, "aging": 0, "stale": 0}
+    for _, updated_at in dated:
+        bucket = _staleness_label(updated_at=updated_at, newest_updated_at=newest_updated_at)
+        bucket_counts[bucket] = bucket_counts.get(bucket, 0) + 1
     return {
         "source_count_with_timestamps": len(dated),
         "newest_source_id": newest_source_id,
         "newest_updated_at": newest_updated_at,
         "oldest_source_id": oldest_source_id,
         "oldest_updated_at": oldest_updated_at,
+        "bucket_counts": bucket_counts,
     }
 
 
@@ -634,6 +644,10 @@ def _rank_sources_for_history(
         if source.updated_at and newest_ts:
             freshness_bonus = 0.2 if source.updated_at == newest_ts else 0.1
         contradiction_penalty = min(0.15 * contradiction_counts.get(source.identifier, 0), 0.3)
+        staleness_label = _staleness_label(
+            updated_at=source.updated_at,
+            newest_updated_at=newest_ts,
+        )
         scores.append(
             {
                 "source_id": source.identifier,
@@ -641,7 +655,35 @@ def _rank_sources_for_history(
                 "confidence": confidence,
                 "updated_at": source.updated_at,
                 "contradiction_count": contradiction_counts.get(source.identifier, 0),
+                "staleness_label": staleness_label,
                 "score": round(confidence_weight + freshness_bonus - contradiction_penalty, 3),
             }
         )
     return sorted(scores, key=lambda item: (-item["score"], item["source_id"]))
+
+
+def _staleness_label(*, updated_at: str | None, newest_updated_at: str | None) -> str:
+    if not updated_at or not newest_updated_at:
+        return "unknown"
+    if updated_at == newest_updated_at:
+        return "fresh"
+    try:
+        updated_dt = _parse_iso_datetime(updated_at)
+        newest_dt = _parse_iso_datetime(newest_updated_at)
+    except ValueError:
+        return "recent"
+    delta_days = max((newest_dt - updated_dt).total_seconds() / 86400.0, 0.0)
+    if delta_days <= 1:
+        return "fresh"
+    if delta_days <= 7:
+        return "recent"
+    if delta_days <= 30:
+        return "aging"
+    return "stale"
+
+
+def _parse_iso_datetime(value: str):
+    from datetime import datetime
+
+    normalized = value.replace("Z", "+00:00")
+    return datetime.fromisoformat(normalized)
