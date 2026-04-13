@@ -47,6 +47,7 @@ from . import triton_ple_fusion  # noqa: F401  (registers ple_fusion)
 from . import triton_kv_shared_attention  # noqa: F401  (registers kv_shared_attention)
 from . import triton_ssm_scan  # noqa: F401  (registers ssm_scan)
 from .triton_operators import REGISTRY as TRITON_OPERATORS  # noqa: F401
+from .patch import patch  # noqa: F401  (drop-in model accelerator)
 
 __all__ = [
     "ArxivAtomSourceProvider",
@@ -72,4 +73,5 @@ __all__ = [
     "render_github_env_setup",
     "UrllibHttpClient",
     "VerificationReport",
+    "patch",
 ]
