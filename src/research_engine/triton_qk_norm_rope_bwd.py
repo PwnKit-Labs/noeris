@@ -511,6 +511,170 @@ if __name__ == "__main__":
 '''
 
 
+# ---------------------------------------------------------------------------
+# Compiled backward kernel + launcher (mirrors the forward pattern)
+# ---------------------------------------------------------------------------
+
+_triton_qk_bwd_available = False
+_qk_norm_rope_bwd_kernel_compiled = None
+
+
+def _ensure_triton_qk_norm_rope_bwd():
+    global _triton_qk_bwd_available, _qk_norm_rope_bwd_kernel_compiled
+    if _qk_norm_rope_bwd_kernel_compiled is not None:
+        return
+    try:
+        import triton
+        import triton.language as tl
+
+        @triton.jit
+        def _qk_norm_rope_bwd_kernel(
+            x_ptr, scale_ptr, cos_ptr, sin_ptr,
+            dout_ptr,
+            dx_ptr, dscale_ptr,
+            row_stride,
+            heads, seq_len, head_dim,
+            eps,
+            BLOCK_SIZE: tl.constexpr,
+        ):
+            pid = tl.program_id(0)
+            s_idx = pid % seq_len
+
+            x_base = x_ptr + pid * row_stride
+            dout_base = dout_ptr + pid * row_stride
+            dx_base = dx_ptr + pid * row_stride
+
+            half = head_dim // 2
+            offs = tl.arange(0, BLOCK_SIZE)
+            mask = offs < half
+
+            # Recompute forward intermediates
+            x_even = tl.load(x_base + 2 * offs, mask=mask, other=0.0).to(tl.float32)
+            x_odd = tl.load(x_base + 2 * offs + 1, mask=mask, other=0.0).to(tl.float32)
+
+            sum_sq = tl.sum(x_even * x_even, axis=0) + tl.sum(x_odd * x_odd, axis=0)
+            mean_sq = sum_sq / head_dim
+            rstd = 1.0 / tl.sqrt(mean_sq + eps)
+
+            x_norm_even = x_even * rstd
+            x_norm_odd = x_odd * rstd
+
+            s_even = tl.load(scale_ptr + 2 * offs, mask=mask, other=0.0).to(tl.float32)
+            s_odd = tl.load(scale_ptr + 2 * offs + 1, mask=mask, other=0.0).to(tl.float32)
+
+            cos_row = cos_ptr + s_idx * half
+            sin_row = sin_ptr + s_idx * half
+            c = tl.load(cos_row + offs, mask=mask, other=1.0).to(tl.float32)
+            sn = tl.load(sin_row + offs, mask=mask, other=0.0).to(tl.float32)
+
+            dout_even = tl.load(dout_base + 2 * offs, mask=mask, other=0.0).to(tl.float32)
+            dout_odd = tl.load(dout_base + 2 * offs + 1, mask=mask, other=0.0).to(tl.float32)
+
+            # Undo RoPE
+            dx_scaled_even = dout_even * c + dout_odd * sn
+            dx_scaled_odd = -dout_even * sn + dout_odd * c
+
+            # Undo affine
+            dx_norm_even = dx_scaled_even * (1.0 + s_even)
+            dx_norm_odd = dx_scaled_odd * (1.0 + s_odd)
+
+            # dscale accumulation
+            dscale_local_even = dx_scaled_even * x_norm_even
+            dscale_local_odd = dx_scaled_odd * x_norm_odd
+            tl.atomic_add(dscale_ptr + 2 * offs, dscale_local_even, mask=mask)
+            tl.atomic_add(dscale_ptr + 2 * offs + 1, dscale_local_odd, mask=mask)
+
+            # RMSNorm backward
+            dot_even = tl.sum(dx_norm_even * x_norm_even, axis=0)
+            dot_odd = tl.sum(dx_norm_odd * x_norm_odd, axis=0)
+            dot_prod = (dot_even + dot_odd) / head_dim
+
+            dx_even = (dx_norm_even - x_norm_even * dot_prod) * rstd
+            dx_odd = (dx_norm_odd - x_norm_odd * dot_prod) * rstd
+
+            tl.store(dx_base + 2 * offs, dx_even.to(tl.float16), mask=mask)
+            tl.store(dx_base + 2 * offs + 1, dx_odd.to(tl.float16), mask=mask)
+
+        _qk_norm_rope_bwd_kernel_compiled = _qk_norm_rope_bwd_kernel
+        _triton_qk_bwd_available = True
+    except ImportError:
+        _triton_qk_bwd_available = False
+
+
+def apply_qk_norm_rope_bwd(dout_q, dout_k, q, k, cos, sin, q_scale, k_scale, config=None, eps=1e-6):
+    """Launch backward kernel for Q and K.
+
+    Args:
+        dout_q: (B, H, S, D) fp16 upstream gradient for Q.
+        dout_k: (B, H_kv, S, D) fp16 upstream gradient for K.
+        q: (B, H, S, D) fp16 original Q input (for recomputation).
+        k: (B, H_kv, S, D) fp16 original K input (for recomputation).
+        cos: (S, D/2) fp32 RoPE cosines.
+        sin: (S, D/2) fp32 RoPE sines.
+        q_scale: (D,) fp32 learnable Q scale.
+        k_scale: (D,) fp32 learnable K scale.
+        config: Triton config dict. Defaults to first curated config.
+        eps: Epsilon for RMSNorm.
+
+    Returns:
+        (dq, dk, dq_scale, dk_scale) tuple.
+    """
+    import torch
+    import triton
+
+    _ensure_triton_qk_norm_rope_bwd()
+    if not _triton_qk_bwd_available:
+        raise RuntimeError("Triton not available")
+
+    if config is None:
+        config = QK_NORM_ROPE_CURATED_CONFIGS[0]
+
+    B, H, S, D = q.shape
+    _, H_kv, _, _ = k.shape
+
+    dq = torch.empty_like(q)
+    dk = torch.empty_like(k)
+    dq_scale = torch.zeros((D,), device=q.device, dtype=torch.float32)
+    dk_scale = torch.zeros((D,), device=k.device, dtype=torch.float32)
+
+    q_flat = q.reshape(B * H * S, D).contiguous()
+    dout_q_flat = dout_q.reshape(B * H * S, D).contiguous()
+    dq_flat = dq.reshape(B * H * S, D)
+
+    k_flat = k.reshape(B * H_kv * S, D).contiguous()
+    dout_k_flat = dout_k.reshape(B * H_kv * S, D).contiguous()
+    dk_flat = dk.reshape(B * H_kv * S, D)
+
+    half = D // 2
+    BLOCK_SIZE = max(config["BLOCK_SIZE"], triton.next_power_of_2(half))
+    cos_c = cos.contiguous()
+    sin_c = sin.contiguous()
+
+    # Q backward
+    _qk_norm_rope_bwd_kernel_compiled[(B * H * S,)](
+        q_flat, q_scale, cos_c, sin_c,
+        dout_q_flat,
+        dq_flat, dq_scale,
+        D, H, S, D, eps,
+        BLOCK_SIZE=BLOCK_SIZE,
+        num_warps=config["num_warps"],
+        num_stages=config["num_stages"],
+    )
+
+    # K backward
+    _qk_norm_rope_bwd_kernel_compiled[(B * H_kv * S,)](
+        k_flat, k_scale, cos_c, sin_c,
+        dout_k_flat,
+        dk_flat, dk_scale,
+        D, H_kv, S, D, eps,
+        BLOCK_SIZE=BLOCK_SIZE,
+        num_warps=config["num_warps"],
+        num_stages=config["num_stages"],
+    )
+
+    return dq, dk, dq_scale, dk_scale
+
+
 QK_NORM_ROPE_BWD_SPEC = register_operator(TritonOperatorSpec(
     name="qk_norm_rope_bwd",
     param_space=QK_NORM_ROPE_PARAM_SPACE,

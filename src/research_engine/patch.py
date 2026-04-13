@@ -31,6 +31,7 @@ from .triton_qk_norm_rope import (
     apply_qk_norm_rope as _triton_qk_norm_rope,
     QK_NORM_ROPE_CURATED_CONFIGS,
 )
+from .autograd_functions import FusedRMSNorm, FusedGeGLU, FusedQKNormRoPE
 
 # Optional adaptive config selector — falls back to curated defaults
 try:
@@ -140,7 +141,10 @@ def _get_config(operator_name: str, default_configs: list[dict]) -> dict[str, in
 # ---------------------------------------------------------------------------
 
 def _make_rmsnorm_forward(module, affine_mode: int, config: dict, device: str):
-    """Create a replacement forward() for an RMSNorm module."""
+    """Create a replacement forward() for an RMSNorm module.
+
+    Uses FusedRMSNorm autograd.Function so backward passes work for training.
+    """
     import torch
 
     weight = module.weight
@@ -153,7 +157,7 @@ def _make_rmsnorm_forward(module, affine_mode: int, config: dict, device: str):
         # Ensure fp16 for kernel; cast back afterward
         x_fp16 = x.half() if x.dtype != torch.float16 else x
         w_fp16 = weight.half() if weight.dtype != torch.float16 else weight
-        y = _triton_rmsnorm(x_fp16, w_fp16, config=config, eps=eps, affine_mode=affine_mode)
+        y = FusedRMSNorm.apply(x_fp16, w_fp16, eps, affine_mode, config)
         y = y.reshape(orig_shape)
         if orig_dtype != torch.float16:
             y = y.to(orig_dtype)
@@ -208,7 +212,7 @@ def _make_geglu_forward(mlp_module, config: dict, device: str):
         up_2d = up.reshape(-1, orig_shape[-1])
         gate_fp16 = gate_2d.half() if gate_2d.dtype != torch.float16 else gate_2d
         up_fp16 = up_2d.half() if up_2d.dtype != torch.float16 else up_2d
-        fused = _triton_geglu(gate_fp16, up_fp16, config=config)
+        fused = FusedGeGLU.apply(gate_fp16, up_fp16, config)
         fused = fused.reshape(orig_shape)
         if gate.dtype != torch.float16:
             fused = fused.to(gate.dtype)
