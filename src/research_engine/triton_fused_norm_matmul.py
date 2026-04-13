@@ -207,11 +207,11 @@ def _ensure_triton_fused_norm_linear():
         def _fused_rmsnorm_linear_kernel(
             x_ptr,          # (M, K) input activations
             w_ptr,          # (K,) RMSNorm affine weight
-            linear_ptr,     # (N, K) linear weight (row-major, i.e. out_features x in_features)
+            linear_ptr,     # (K, N) pre-transposed linear weight (contiguous)
             out_ptr,        # (M, N) output
             M, N, K,
             stride_xm, stride_xk,
-            stride_ln, stride_lk,      # linear weight strides
+            stride_lk, stride_ln,      # linear weight strides: (K, N) layout
             stride_om, stride_on,
             eps,
             BLOCK_M: tl.constexpr,
@@ -229,6 +229,11 @@ def _ensure_triton_fused_norm_linear():
             - Pass 2: iterate over K in BLOCK_K chunks. For each chunk, load
               x, normalize in registers using rstd, apply affine weight, and
               accumulate the dot product with the linear weight tile.
+
+            The linear weight is passed in (K, N) layout (pre-transposed in
+            the launcher) so that the tile load is contiguous and no tl.trans()
+            is needed.  This avoids Turing (T4) compatibility issues with
+            tl.trans inside tl.dot.
 
             When BLOCK_K >= K the loop bodies execute exactly once, collapsing
             to the optimal single-pass case.
@@ -269,7 +274,7 @@ def _ensure_triton_fused_norm_linear():
             # Pass 2: fused norm + matmul accumulation.
             # For each K-chunk:
             #   x_normed = x_chunk * rstd * affine_weight
-            #   acc += x_normed @ linear_weight_chunk.T
+            #   acc += x_normed @ linear_weight_chunk
             # ---------------------------------------------------------------
             acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
 
@@ -293,15 +298,13 @@ def _ensure_triton_fused_norm_linear():
                     # Gemma mode: y = x * rstd * (1 + w)
                     x_normed = x_normed * (1.0 + w_tile[None, :])
 
-                # Load linear weight tile in natural (BLOCK_N, BLOCK_K) layout,
-                # then transpose for the dot product.
-                # linear_ptr is (N, K) row-major, so linear[n, k] = linear_ptr + n * stride_ln + k * stride_lk
-                l_ptrs = linear_ptr + offs_n[:, None] * stride_ln + offs_k[None, :] * stride_lk
-                l_tile = tl.load(l_ptrs, mask=mask_n[:, None] & mask_k[None, :], other=0.0)
-                # l_tile is (BLOCK_N, BLOCK_K); transpose to (BLOCK_K, BLOCK_N) for matmul
+                # Load linear weight tile: (BLOCK_K, BLOCK_N) from (K, N) layout
+                # linear_ptr is pre-transposed to (K, N) contiguous in the launcher
+                l_ptrs = linear_ptr + offs_k[:, None] * stride_lk + offs_n[None, :] * stride_ln
+                l_tile = tl.load(l_ptrs, mask=mask_k[:, None] & mask_n[None, :], other=0.0)
 
                 # Dot product: (BLOCK_M, BLOCK_K) @ (BLOCK_K, BLOCK_N) -> (BLOCK_M, BLOCK_N)
-                acc += tl.dot(x_normed.to(tl.float16), tl.trans(l_tile.to(tl.float16)))
+                acc += tl.dot(x_normed.to(tl.float16), l_tile.to(tl.float16))
 
             # Store output tile
             out_ptrs = out_ptr + offs_m[:, None] * stride_om + offs_n[None, :] * stride_on
@@ -349,6 +352,11 @@ def fused_rmsnorm_linear(x, rmsnorm_weight, linear_weight, eps=1e-6, affine_mode
 
     out = torch.empty((M, N), device=x.device, dtype=x.dtype)
 
+    # Pre-transpose linear weight to (K, N) contiguous layout.
+    # This avoids tl.trans() in the kernel, which can miscompile on Turing (T4).
+    # The transpose copy is a one-time O(NK) memcpy — negligible vs the O(MNK) matmul.
+    linear_t = linear_weight.t().contiguous()  # (K, N)
+
     BLOCK_M = config["BLOCK_M"]
     BLOCK_N = config["BLOCK_N"]
     BLOCK_K = config["BLOCK_K"]
@@ -356,10 +364,10 @@ def fused_rmsnorm_linear(x, rmsnorm_weight, linear_weight, eps=1e-6, affine_mode
     grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
 
     _fused_norm_linear_kernel_compiled[grid](
-        x, rmsnorm_weight, linear_weight, out,
+        x, rmsnorm_weight, linear_t, out,
         M, N, K,
         x.stride(0), x.stride(1),
-        linear_weight.stride(0), linear_weight.stride(1),
+        linear_t.stride(0), linear_t.stride(1),
         out.stride(0), out.stride(1),
         eps,
         BLOCK_M=BLOCK_M,
@@ -408,11 +416,11 @@ import triton.language as tl
 def fused_rmsnorm_linear_kernel(
     x_ptr,          # (M, K) input activations
     w_ptr,          # (K,) RMSNorm affine weight
-    linear_ptr,     # (N, K) linear weight
+    linear_ptr,     # (K, N) pre-transposed linear weight (contiguous)
     out_ptr,        # (M, N) output
     M, N, K,
     stride_xm, stride_xk,
-    stride_ln, stride_lk,
+    stride_lk, stride_ln,     # linear weight strides: (K, N) layout
     stride_om, stride_on,
     eps,
     BLOCK_M: tl.constexpr,
@@ -426,6 +434,10 @@ def fused_rmsnorm_linear_kernel(
     - Pass 1: compute rstd per row (iterate over K in BLOCK_K chunks).
     - Pass 2: for each K-chunk, normalize x in registers and accumulate
       the dot product with the linear weight.
+
+    The linear weight is passed pre-transposed as (K, N) contiguous so that
+    tile loads are coalesced and no tl.trans() is needed.  This avoids Turing
+    (T4) miscompilation of tl.trans inside tl.dot.
     """
     pid_m = tl.program_id(0)
     pid_n = tl.program_id(1)
@@ -463,10 +475,12 @@ def fused_rmsnorm_linear_kernel(
         else:
             x_normed = x_normed * (1.0 + w_tile[None, :])
 
-        l_ptrs = linear_ptr + offs_n[:, None] * stride_ln + offs_k[None, :] * stride_lk
-        l_tile = tl.load(l_ptrs, mask=mask_n[:, None] & mask_k[None, :], other=0.0)
+        # Load linear weight tile: (BLOCK_K, BLOCK_N) from (K, N) contiguous layout
+        l_ptrs = linear_ptr + offs_k[:, None] * stride_lk + offs_n[None, :] * stride_ln
+        l_tile = tl.load(l_ptrs, mask=mask_k[:, None] & mask_n[None, :], other=0.0)
 
-        acc += tl.dot(x_normed.to(tl.float16), tl.trans(l_tile.to(tl.float16)))
+        # Dot product: (BLOCK_M, BLOCK_K) @ (BLOCK_K, BLOCK_N) -> (BLOCK_M, BLOCK_N)
+        acc += tl.dot(x_normed.to(tl.float16), l_tile.to(tl.float16))
 
     out_ptrs = out_ptr + offs_m[:, None] * stride_om + offs_n[None, :] * stride_on
     tl.store(out_ptrs, acc.to(tl.float16), mask=mask_m[:, None] & mask_n[None, :])
@@ -480,15 +494,18 @@ def fused_rmsnorm_linear(x, rmsnorm_weight, linear_weight, config, eps=1e-6, aff
     M, K = x.shape
     N = linear_weight.shape[0]
     out = torch.empty((M, N), device=x.device, dtype=x.dtype)
+    # Pre-transpose to (K, N) contiguous — avoids tl.trans() in the kernel
+    # which can miscompile on Turing (T4).
+    linear_t = linear_weight.t().contiguous()  # (K, N)
     BLOCK_M = config["BLOCK_M"]
     BLOCK_N = config["BLOCK_N"]
     BLOCK_K = config["BLOCK_K"]
     grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
     fused_rmsnorm_linear_kernel[grid](
-        x, rmsnorm_weight, linear_weight, out,
+        x, rmsnorm_weight, linear_t, out,
         M, N, K,
         x.stride(0), x.stride(1),
-        linear_weight.stride(0), linear_weight.stride(1),
+        linear_t.stride(0), linear_t.stride(1),
         out.stride(0), out.stride(1),
         eps,
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,

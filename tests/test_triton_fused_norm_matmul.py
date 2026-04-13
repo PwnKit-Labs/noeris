@@ -81,12 +81,15 @@ class TestBenchmarkScriptKernel(unittest.TestCase):
             shapes=[FUSED_NORM_LINEAR_SHAPE_BUCKETS[0]],
         )
 
-    def test_kernel_uses_tl_trans_for_weight(self) -> None:
-        """Weight tile must be loaded in natural (N, K) layout and transposed
-        via tl.trans() — not via a transposed pointer pattern which may produce
-        wrong results on some Triton versions / hardware."""
+    def test_kernel_uses_pretransposed_weight(self) -> None:
+        """Weight must be pre-transposed to (K, N) in the launcher and loaded
+        directly as (BLOCK_K, BLOCK_N) — no tl.trans() needed.  This avoids
+        Turing (T4) miscompilation of tl.trans inside tl.dot."""
         script = self._script()
-        self.assertIn("tl.trans(", script)
+        # The kernel should NOT call tl.trans in the dot product line
+        self.assertNotIn("tl.dot(x_normed.to(tl.float16), tl.trans(", script)
+        # The launcher should pre-transpose the weight
+        self.assertIn("linear_weight.t().contiguous()", script)
 
     def test_kernel_has_two_pass_structure(self) -> None:
         script = self._script()
