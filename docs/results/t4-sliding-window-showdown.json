@@ -1,0 +1,530 @@
+{
+  "benchmark": "sliding_window_showdown",
+  "gpu": "Tesla T4",
+  "pytorch": "2.10.0+cu128",
+  "triton": "3.6.0",
+  "cuda": "12.8",
+  "any_noeris_win": true,
+  "results": [
+    {
+      "shape": "n8192_w128",
+      "B": 1,
+      "H": 8,
+      "S": 8192,
+      "D": 64,
+      "W": 128,
+      "skip_ratio_pct": 96.1,
+      "sdpa_causal_ms": 7.0832,
+      "sdpa_mask_ms": 19.3001,
+      "best_noeris_ms": 5.6793,
+      "best_noeris_config": "m32_n32_w2_s2",
+      "noeris_wins": true,
+      "speedup_vs_sdpa": 1.247,
+      "noeris_configs": [
+        {
+          "config": "m32_n32_w2_s2",
+          "ms": 5.6793,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m32_n64_w2_s2",
+          "ms": null,
+          "correct": false,
+          "max_err": 1.29492
+        },
+        {
+          "config": "m64_n32_w2_s2",
+          "ms": null,
+          "correct": false,
+          "max_err": 0.9834
+        },
+        {
+          "config": "m64_n64_w2_s1",
+          "ms": 23.6985,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m16_n32_w2_s2",
+          "ms": null,
+          "correct": false,
+          "max_err": 0.97852
+        },
+        {
+          "config": "m64_n32_w4_s2",
+          "ms": null,
+          "correct": false,
+          "max_err": 0.9834
+        },
+        {
+          "config": "m32_n64_w4_s2",
+          "ms": null,
+          "correct": false,
+          "max_err": 1.29492
+        },
+        {
+          "config": "m64_n64_w4_s2",
+          "ms": 8.0404,
+          "correct": true,
+          "max_err": 0.00049
+        }
+      ]
+    },
+    {
+      "shape": "n8192_w256",
+      "B": 1,
+      "H": 8,
+      "S": 8192,
+      "D": 64,
+      "W": 256,
+      "skip_ratio_pct": 93.1,
+      "sdpa_causal_ms": 6.1236,
+      "sdpa_mask_ms": 19.3312,
+      "best_noeris_ms": 9.8297,
+      "best_noeris_config": "m32_n32_w2_s2",
+      "noeris_wins": false,
+      "speedup_vs_sdpa": 0.623,
+      "noeris_configs": [
+        {
+          "config": "m32_n32_w2_s2",
+          "ms": 9.8297,
+          "correct": true,
+          "max_err": 0.00098
+        },
+        {
+          "config": "m32_n64_w2_s2",
+          "ms": null,
+          "correct": false,
+          "max_err": 1.1543
+        },
+        {
+          "config": "m64_n32_w2_s2",
+          "ms": null,
+          "correct": false,
+          "max_err": 1.01758
+        },
+        {
+          "config": "m64_n64_w2_s1",
+          "ms": 35.141,
+          "correct": true,
+          "max_err": 0.00098
+        },
+        {
+          "config": "m16_n32_w2_s2",
+          "ms": null,
+          "correct": false,
+          "max_err": 1.02344
+        },
+        {
+          "config": "m64_n32_w4_s2",
+          "ms": null,
+          "correct": false,
+          "max_err": 1.01758
+        },
+        {
+          "config": "m32_n64_w4_s2",
+          "ms": null,
+          "correct": false,
+          "max_err": 1.1543
+        },
+        {
+          "config": "m64_n64_w4_s2",
+          "ms": 11.8456,
+          "correct": true,
+          "max_err": 0.00098
+        }
+      ]
+    },
+    {
+      "shape": "n4096_w128",
+      "B": 1,
+      "H": 8,
+      "S": 4096,
+      "D": 64,
+      "W": 128,
+      "skip_ratio_pct": 92.4,
+      "sdpa_causal_ms": 1.194,
+      "sdpa_mask_ms": 5.0316,
+      "best_noeris_ms": 1.5144,
+      "best_noeris_config": "m32_n32_w2_s2",
+      "noeris_wins": false,
+      "speedup_vs_sdpa": 0.788,
+      "noeris_configs": [
+        {
+          "config": "m32_n32_w2_s2",
+          "ms": 1.5144,
+          "correct": true,
+          "max_err": 0.00098
+        },
+        {
+          "config": "m32_n64_w2_s2",
+          "ms": null,
+          "correct": false,
+          "max_err": 0.88965
+        },
+        {
+          "config": "m64_n32_w2_s2",
+          "ms": null,
+          "correct": false,
+          "max_err": 0.63086
+        },
+        {
+          "config": "m64_n64_w2_s1",
+          "ms": 11.9153,
+          "correct": true,
+          "max_err": 0.00098
+        },
+        {
+          "config": "m16_n32_w2_s2",
+          "ms": null,
+          "correct": false,
+          "max_err": 2.04883
+        },
+        {
+          "config": "m64_n32_w4_s2",
+          "ms": null,
+          "correct": false,
+          "max_err": 0.63086
+        },
+        {
+          "config": "m32_n64_w4_s2",
+          "ms": null,
+          "correct": false,
+          "max_err": 0.88965
+        },
+        {
+          "config": "m64_n64_w4_s2",
+          "ms": 3.2282,
+          "correct": true,
+          "max_err": 0.00098
+        }
+      ]
+    },
+    {
+      "shape": "n4096_w256",
+      "B": 1,
+      "H": 8,
+      "S": 4096,
+      "D": 64,
+      "W": 256,
+      "skip_ratio_pct": 86.5,
+      "sdpa_causal_ms": 1.2472,
+      "sdpa_mask_ms": 5.063,
+      "best_noeris_ms": 2.4582,
+      "best_noeris_config": "m32_n32_w2_s2",
+      "noeris_wins": false,
+      "speedup_vs_sdpa": 0.507,
+      "noeris_configs": [
+        {
+          "config": "m32_n32_w2_s2",
+          "ms": 2.4582,
+          "correct": true,
+          "max_err": 0.00098
+        },
+        {
+          "config": "m32_n64_w2_s2",
+          "ms": null,
+          "correct": false,
+          "max_err": 1.21289
+        },
+        {
+          "config": "m64_n32_w2_s2",
+          "ms": null,
+          "correct": false,
+          "max_err": 0.5293
+        },
+        {
+          "config": "m64_n64_w2_s1",
+          "ms": 17.5438,
+          "correct": true,
+          "max_err": 0.00098
+        },
+        {
+          "config": "m16_n32_w2_s2",
+          "ms": null,
+          "correct": false,
+          "max_err": 0.85742
+        },
+        {
+          "config": "m64_n32_w4_s2",
+          "ms": null,
+          "correct": false,
+          "max_err": 0.5293
+        },
+        {
+          "config": "m32_n64_w4_s2",
+          "ms": null,
+          "correct": false,
+          "max_err": 1.21289
+        },
+        {
+          "config": "m64_n64_w4_s2",
+          "ms": 5.1075,
+          "correct": true,
+          "max_err": 0.00098
+        }
+      ]
+    },
+    {
+      "shape": "n4096_w256_d128",
+      "B": 1,
+      "H": 8,
+      "S": 4096,
+      "D": 128,
+      "W": 256,
+      "skip_ratio_pct": 86.5,
+      "sdpa_causal_ms": 2.712,
+      "sdpa_mask_ms": 7.3814,
+      "best_noeris_ms": 15.5439,
+      "best_noeris_config": "m32_n32_w2_s2",
+      "noeris_wins": false,
+      "speedup_vs_sdpa": 0.174,
+      "noeris_configs": [
+        {
+          "config": "m32_n32_w2_s2",
+          "ms": 15.5439,
+          "correct": true,
+          "max_err": 0.00098
+        },
+        {
+          "config": "m32_n64_w2_s2",
+          "ms": null,
+          "correct": false,
+          "max_err": 1.02734
+        },
+        {
+          "config": "m64_n32_w2_s2",
+          "ms": null,
+          "correct": false,
+          "max_err": 0.49976
+        },
+        {
+          "config": "m64_n64_w2_s1",
+          "ms": 44.8529,
+          "correct": true,
+          "max_err": 0.00098
+        },
+        {
+          "config": "m16_n32_w2_s2",
+          "ms": null,
+          "correct": false,
+          "max_err": 1.24609
+        },
+        {
+          "config": "m64_n32_w4_s2",
+          "ms": null,
+          "correct": false,
+          "max_err": 0.49976
+        },
+        {
+          "config": "m32_n64_w4_s2",
+          "ms": null,
+          "correct": false,
+          "max_err": 1.02734
+        },
+        {
+          "config": "m64_n64_w4_s2",
+          "ms": 32.2759,
+          "correct": true,
+          "max_err": 0.00098
+        }
+      ]
+    },
+    {
+      "shape": "n8192_w256_d128",
+      "B": 1,
+      "H": 4,
+      "S": 8192,
+      "D": 128,
+      "W": 256,
+      "skip_ratio_pct": 93.1,
+      "sdpa_causal_ms": 5.5207,
+      "sdpa_mask_ms": 16.5524,
+      "best_noeris_ms": 14.9975,
+      "best_noeris_config": "m32_n32_w2_s2",
+      "noeris_wins": false,
+      "speedup_vs_sdpa": 0.368,
+      "noeris_configs": [
+        {
+          "config": "m32_n32_w2_s2",
+          "ms": 14.9975,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m32_n64_w2_s2",
+          "ms": null,
+          "correct": false,
+          "max_err": 1.08887
+        },
+        {
+          "config": "m64_n32_w2_s2",
+          "ms": null,
+          "correct": false,
+          "max_err": 0.65576
+        },
+        {
+          "config": "m64_n64_w2_s1",
+          "ms": 45.3305,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m16_n32_w2_s2",
+          "ms": null,
+          "correct": false,
+          "max_err": 0.92285
+        },
+        {
+          "config": "m64_n32_w4_s2",
+          "ms": null,
+          "correct": false,
+          "max_err": 0.65576
+        },
+        {
+          "config": "m32_n64_w4_s2",
+          "ms": null,
+          "correct": false,
+          "max_err": 1.08887
+        },
+        {
+          "config": "m64_n64_w4_s2",
+          "ms": 32.6656,
+          "correct": true,
+          "max_err": 0.00049
+        }
+      ]
+    },
+    {
+      "shape": "n4096_w128_h32",
+      "B": 1,
+      "H": 32,
+      "S": 4096,
+      "D": 64,
+      "W": 128,
+      "skip_ratio_pct": 92.4,
+      "sdpa_causal_ms": 5.7733,
+      "sdpa_mask_ms": 17.5202,
+      "best_noeris_ms": 11.0093,
+      "best_noeris_config": "m32_n32_w2_s2",
+      "noeris_wins": false,
+      "speedup_vs_sdpa": 0.524,
+      "noeris_configs": [
+        {
+          "config": "m32_n32_w2_s2",
+          "ms": 11.0093,
+          "correct": true,
+          "max_err": 0.00098
+        },
+        {
+          "config": "m32_n64_w2_s2",
+          "ms": null,
+          "correct": false,
+          "max_err": 1.15234
+        },
+        {
+          "config": "m64_n32_w2_s2",
+          "ms": null,
+          "correct": false,
+          "max_err": 1.07715
+        },
+        {
+          "config": "m64_n64_w2_s1",
+          "ms": 47.3743,
+          "correct": true,
+          "max_err": 0.00098
+        },
+        {
+          "config": "m16_n32_w2_s2",
+          "ms": null,
+          "correct": false,
+          "max_err": 1.5752
+        },
+        {
+          "config": "m64_n32_w4_s2",
+          "ms": null,
+          "correct": false,
+          "max_err": 1.07715
+        },
+        {
+          "config": "m32_n64_w4_s2",
+          "ms": null,
+          "correct": false,
+          "max_err": 1.15234
+        },
+        {
+          "config": "m64_n64_w4_s2",
+          "ms": 12.5125,
+          "correct": true,
+          "max_err": 0.00098
+        }
+      ]
+    },
+    {
+      "shape": "n8192_w128_h16",
+      "B": 1,
+      "H": 16,
+      "S": 8192,
+      "D": 64,
+      "W": 128,
+      "skip_ratio_pct": 96.1,
+      "sdpa_causal_ms": 10.9732,
+      "sdpa_mask_ms": 37.286,
+      "best_noeris_ms": 9.9913,
+      "best_noeris_config": "m32_n32_w2_s2",
+      "noeris_wins": true,
+      "speedup_vs_sdpa": 1.098,
+      "noeris_configs": [
+        {
+          "config": "m32_n32_w2_s2",
+          "ms": 9.9913,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m32_n64_w2_s2",
+          "ms": null,
+          "correct": false,
+          "max_err": 1.50781
+        },
+        {
+          "config": "m64_n32_w2_s2",
+          "ms": null,
+          "correct": false,
+          "max_err": 1.36816
+        },
+        {
+          "config": "m64_n64_w2_s1",
+          "ms": 47.4936,
+          "correct": true,
+          "max_err": 0.00049
+        },
+        {
+          "config": "m16_n32_w2_s2",
+          "ms": null,
+          "correct": false,
+          "max_err": 1.0127
+        },
+        {
+          "config": "m64_n32_w4_s2",
+          "ms": null,
+          "correct": false,
+          "max_err": 1.36816
+        },
+        {
+          "config": "m32_n64_w4_s2",
+          "ms": null,
+          "correct": false,
+          "max_err": 1.50781
+        },
+        {
+          "config": "m64_n64_w4_s2",
+          "ms": 12.5514,
+          "correct": true,
+          "max_err": 0.00049
+        }
+      ]
+    }
+  ]
+}
