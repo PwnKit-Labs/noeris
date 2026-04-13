@@ -165,8 +165,8 @@ Paper draft: [`docs/paper/noeris.md`](docs/paper/noeris.md). arXiv preprint comi
 
 ```bibtex
 @misc{noeris2026,
-  title   = {Noeris: Parameterized GPU Kernel Search with LLM Proposals and Learned Cost Models},
-  author  = {PwnKit Labs},
+  title   = {One Kernel Is All You Need: Architecture-Agnostic GPU Kernel Autotuning Across Transformers and State-Space Models},
+  author  = {Doruk Tan Ozturk},
   year    = {2026},
   url     = {https://github.com/PwnKit-Labs/noeris}
 }

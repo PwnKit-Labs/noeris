@@ -1,4 +1,4 @@
-# Noeris: Parameterized GPU Kernel Search with LLM Proposals and Learned Cost Models
+# One Kernel Is All You Need: Architecture-Agnostic GPU Kernel Autotuning Across Transformers and State-Space Models
 
 **Draft — work in progress.** Not yet submitted.
 
