@@ -1,154 +1,165 @@
-# X/Twitter Thread v2 — Fused QK-RMSNorm+RoPE
+# X/Twitter Thread v2 — Noeris Launch
 
-_Draft 2026-04-12. 11 tweets. Tone: honest, technical, inviting scrutiny._
+_Draft 2026-04-12. 12 tweets. Tone: confident, honest, inviting scrutiny._
 
 ---
 
 **1/**
 
-Every LLM inference engine launches ~40 CUDA kernels for the attention prologue where 1 will do.
+I wrote a Triton kernel that beats cuDNN FlashAttention on sliding-window attention.
 
-PyTorch eager: 40 launches
-torch.compile (Inductor): 9 launches
-Noeris fused Triton: 1 launch
+6.24x on A100. 3.56x on T4. 8 out of 8 shapes win on A100.
 
-Prologue speedup: 6.77x on T4, 10-13x on A100/H100.
-Full-layer speedup: 1.54x on T4.
-Peak throughput: 1,627 GB/s on H100 (49% of HBM3 peak).
+To my knowledge, this is the first Triton kernel to beat cuDNN on sliding-window attention. The trick: compile-time tile-pruning skips 96-98% of the tiles cuDNN computes densely. ~160 lines of Triton.
 
-Here's how.
+Corrections welcome if I'm wrong on the novelty claim.
 
-> [SCREENSHOT: side-by-side kernel launch counts — 40 / 9 / 1. Include a simple bar chart or table.]
+> [SCREENSHOT: Table 13 from paper — A100 and T4 sliding-window results side by side, showing N/W/H/D/speedup/tile skip ratio]
 
 ---
 
 **2/**
 
-The attention prologue — RMSNorm on Q, RMSNorm on K, RoPE on Q, RoPE on K — is tiny per-op but runs every single layer. In PyTorch eager it's 40 kernel launches because each elementwise op, each reduction, each broadcast is its own dispatch.
+How it works: Gemma 3/4 runs 5 of 6 attention layers as 1024-token local windows. At W=64 and N=8192, each query touches 64 of 8192 key positions. cuDNN FlashAttention computes the full causal triangle — it doesn't exploit the window constraint at tile level.
 
-torch.compile sees the full graph (0 graph breaks!) and gets it down to 9. But Inductor still splits at the RMSNorm reduction boundary — it emits 4 separate Triton kernels because it won't fuse across a row-wise reduce.
+Our kernel's compile-time tile bounds restrict the K-tile loop to only the overlapping tiles. At these parameters, 98% of cuDNN's work is wasted.
 
-We fuse across the reduction in registers. 1 kernel. Load once, norm once, rotate once, store once.
-
-> [SCREENSHOT: torch.compile graph with 0 graph breaks but 4 output kernels annotated]
+The win is specific: long sequences, small windows, small head_dim. At W=1024 or head_dim=256, cuDNN wins. I'm explicit about this because the result is not "Triton beats cuDNN on attention" — it's "workload-specific pruning beats dense iteration in its weak regime."
 
 ---
 
 **3/**
 
-Measured on A100 and H100 across all Gemma 3/4 shape buckets (60 configs, 60 correct):
+But the bigger story is the system that found this kernel.
 
-A100: 10.2-12.9x prologue speedup, peak 925 GB/s
-H100: 10.4-11.9x prologue speedup, peak 1,627 GB/s (49% HBM3 peak)
-T4: 6.77x prologue speedup, 1.54x full-layer speedup
+Noeris is an autonomous kernel search system I've been building. 20 parameterized Triton operators. One consistent interface. Every benchmark result persists in a shape-indexed database keyed by (operator, shape, hardware).
 
-The HBM cost model predicts ~2x (half the memory traffic). Measured 10-13x. The gap is kernel launch overhead — at sub-100 us per op, the 5-10 us CUDA dispatch latency is 10-20% of each call. Fusing 40 launches into 1 eliminates almost all of it.
+The operator list: RMSNorm, LayerNorm, softmax, cross-entropy, RoPE, fused QK-RMSNorm+RoPE (forward + backward), attention (GQA + sliding-window + QK-norm + K=V sharing), GeGLU, MoE router, grouped GEMM, PLE gather, paged-KV decode, fused norm+matmul, matmul.
 
-> [SCREENSHOT: results table — shape, GQA ratio, GB/s, fusion speedup for A100 and H100]
+> [SCREENSHOT: operator table from paper showing all 20 operators with their parameter spaces and metrics]
 
 ---
 
 **4/**
 
-The ecosystem status on this fusion:
+The headline fusion kernel: QK-RMSNorm+RoPE.
 
-vLLM: has it (`enable_qk_norm_rope_fusion`). Disabled by default — H100 perf regression.
-SGLang: has it (`fused_qknorm_rope`). Limited scope.
-TensorRT-LLM: no Gemma support at all.
-FlashInfer: no fusion (P0 issue filed upstream).
-HuggingFace Transformers: no fusion.
-llama.cpp: no fusion.
+Every LLM inference engine launches ~40 CUDA kernels for the attention prologue. torch.compile gets it to 9. Noeris: 1.
 
-This is not "nobody thought of it." vLLM's team recognized the opportunity and built a solution. The problem is making it actually fast across hardware — which is an autotuning problem, not an algorithm problem.
+40 → 9 → 1.
+
+torch.compile sees the full graph (0 graph breaks!) but Inductor splits at the RMSNorm reduction boundary — it emits 4 separate Triton kernels because it won't fuse across a row-wise reduce. We fuse across the reduction in registers.
+
+Load once, norm once, rotate once, store once.
+
+> [SCREENSHOT: bar chart — 40 / 9 / 1 kernel launches, with torch.compile graph annotation showing the 4 output kernels and the reduction boundary split]
 
 ---
 
 **5/**
 
-Why vLLM's fusion regresses on H100: their kernel assigns 1 attention head per warp. At batch size, the grid explodes — you end up with thousands of blocks fighting for SMs.
+Prologue fusion results:
 
-Our approach: parameterized Triton kernel where heads-per-warp is a tunable. A bandit search over the config space finds that packing multiple heads per warp is critical on H100 but not on A100. Hardware-specific configs, discovered automatically.
+A100: 10.2-12.9x
+H100: 10.4-11.9x, peak 1,627 GB/s (49% HBM3 peak)
+T4: 6-9x
 
-The bandit finds configs 22-167% better than hand-tuned starting points. On T4 it discovered that `num_warps=1` with small block sizes dominates — a config that wasn't in our curated starter list at all.
+HBM cost model predicts ~2x. Measured 10-13x. The gap is launch overhead — at sub-100us per op, the 5-10us CUDA dispatch latency eats 10-20% of each call. Fusing 40 launches into 1 eliminates almost all of it.
+
+19 models. 13 families. Zero failures. Gemma, LLaMA 3/4, Qwen 3, Mistral, Mixtral, Phi-3/4, Falcon 3, DBRX, OLMo 2, InternLM 3. All 6-9x fusion speedup.
+
+> [SCREENSHOT: Table 14 — A100 19-model fusion speedup table, sorted by speedup descending]
 
 ---
 
 **6/**
 
-Critical Gemma gotcha that bit us and will bite you:
+The vLLM situation, because credit matters:
 
-Gemma's RMSNorm uses `y = x * rstd * (1 + weight)`, NOT the standard `y = x * rstd * weight`.
+vLLM has `enable_qk_norm_rope_fusion`. It exists. Their team recognized the opportunity and built a solution. But it's disabled by default — H100 perf regression (issue #34391). Reported benefit: 2-3% E2E.
 
-If your fused kernel uses the standard form while the trained weights assume `(1+w)`, outputs are silently wrong by ~10x in magnitude. No NaN, no crash, just confidently wrong inference. HuggingFace has `Gemma4RMSNorm` for this. vLLM has a separate `GemmaRMSNorm` CustomOp.
-
-We handle it as a kernel parameter: one flag toggles standard vs. Gemma-mode affine. Works on LLaMA, Mistral, Phi-3, Qwen, and Gemma — not a Gemma-specific kernel.
+The problem isn't the idea. The problem is making it fast across hardware. That's an autotuning problem. Their kernel uses 1 head per warp — at batch size, the grid explodes on H100. Our bandit discovered that packing multiple heads per warp is critical on H100 but not on A100. Hardware-specific configs, found automatically.
 
 ---
 
 **7/**
 
-torch.compile deserves more credit than it gets here. It sees the full fusion opportunity — 0 graph breaks across the entire prologue. The issue is narrow: Inductor's fusion heuristics split at reduction boundaries. It emits 4 Triton kernels where the math allows 1.
+End-to-end: 1.18x on a full 26-layer Gemma 4 forward pass. 322.7ms → 274.4ms.
 
-This is a known limitation, not a bug. Inductor is optimizing for the general case. A hand-written Triton kernel can fuse across the reduction because we know the row fits in registers for these head dimensions (256 / 512). Inductor can't assume that.
+The fused operations (RMSNorm, QK-norm+RoPE, GeGLU) account for less than 20% of per-layer compute. 18% E2E improvement from fusing the minority of the workload. That's 6-9x more E2E impact than vLLM's 2-3%.
+
+The matmuls and SDPA run identical PyTorch code in both configurations. This is purely the fusion wins compounding across 26 layers.
 
 ---
 
 **8/**
 
-"Cool kernel, but does it only work on Gemma?"
+Two things nobody else exploits at kernel level (to my knowledge):
 
-19 models. 13 families. Zero failures. ALL show 6.5-8.9x fusion speedup on T4.
+**K=V sharing.** Gemma 4's global attention layers have K=V — literally the same tensor. Nobody exploits this in the attention kernel. We do: halve the KV-cache reads.
 
-Best result: Qwen 3 32B at 8.9x (120 GB/s). Qwen uses QK-norm natively — exactly our prime target.
+**PLE fusion.** Gemma 4 E2B/E4B uses per-layer embeddings — a gather operation every layer. We fuse the PLE gather into the operator pipeline instead of launching it as a separate kernel.
 
-Tested on: Gemma 4, LLaMA 3/4, Qwen 3, Mistral, Mixtral, Phi-3/4, Falcon 3, DBRX, OLMo 2, InternLM 3.
-
-head_dim=128 models hit 8.3-8.9x. head_dim=256 models hit 6.5-7.9x — the extra dimension means fewer blocks, so launch overhead amortizes less aggressively. Still a massive win.
-
-This is not a one-off hack for one architecture. One parameterized Triton kernel, one autotuner, every model that does QK-norm + RoPE.
+Also shipped: fused norm+matmul. RMSNorm fused with the subsequent linear projection. To my knowledge, the first Triton implementation — Mirage (OSDI 2025) showed the algebraic insight, we provide the portable kernel.
 
 ---
 
 **9/**
 
-What this is NOT:
+Cross-hardware transfer: the search infrastructure result that matters most for practicality.
 
-- Not "10x faster than vLLM end-to-end." This is prologue-only. Full model inference has 100+ layers of optimization beyond this kernel.
-- Not production-deployed. Correct, fast, reproducible — but not wired into a serving stack yet.
-- Not magic on all GPUs. T4 (Turing) sees 6.77x prologue fusion benefit but Triton codegen quality on SM 7.5 means absolute throughput trails PyTorch native CUDA. Honest negative result, fully documented.
+Train the cost model on A100 data only. Use it to predict A100 configs from T4 measurements: Spearman rho = 0.907 (p < 1e-7). Zero-shot. No target-device fine-tuning.
+
+The A100-trained cost model's operator-level rankings transfer to H100 with rho = 0.967.
+
+This means you can tune on cheap hardware and transfer. TenSet (Chen et al. 2021) requires target-device fine-tuning. We don't.
+
+> [SCREENSHOT: Table 8 — cross-hardware transfer showing per-operator Spearman rho values, R^2 vs Spearman gap]
 
 ---
 
 **10/**
 
-This kernel came out of Noeris, an autonomous kernel search system I've been building:
+What this is NOT:
 
-- 9 parameterized Triton operators
-- Shape-indexed cross-run config database
-- Learned cost model (R^2 = 0.94)
-- Multi-armed bandit config selector with meta-bandit router
-- Cross-hardware transfer correlation: Spearman 0.967 (A100 to H100)
-- Backward pass fusion for training, not just inference
-
-The fused QK-RMSNorm+RoPE kernel is the system's headline result. But the real contribution is the search infrastructure that found it.
+- Not "6x faster than cuDNN on all attention." The sliding-window win is specific to narrow-window, long-sequence, small head_dim. I'm explicit about where cuDNN still wins.
+- Not "13x faster inference." The prologue fusion is prologue-only. Full model E2E is 1.18x.
+- Not production-deployed. Correct, fast, reproducible — but not wired into a serving stack yet.
+- Not magic on T4. Triton codegen on Turing (SM 7.5) has a 3-5x per-op overhead vs PyTorch native. The fusion wins are real, the absolute throughput is not.
 
 ---
 
 **11/**
 
+The system behind this:
+
+- 20 parameterized Triton operators, 110 shape buckets, 606 unit tests
+- Shape-indexed cross-run config database
+- Gradient-boosted cost model (R^2 = 0.94)
+- Multi-armed bandit + adaptive meta-bandit router
+- Cross-hardware transfer: rho = 0.907 (A100 configs from T4 data)
+- Backward pass fusion for training, not just inference
+- ~$0.01 per search iteration on Modal
+
+The fused kernels are the headline. But the real contribution is the search infrastructure that found them.
+
+---
+
+**12/**
+
 Open source, MIT license.
 
-Reproduce in ~3 min on Modal (~$0.20):
+Reproduce the sliding-window result in ~3 min on Modal (~$0.20):
 ```
 git clone https://github.com/PwnKit-Labs/noeris
 pip install -e . modal numpy scikit-learn
-python scripts/smoke_modal.py --full --h100 --qk-only --write-results
+python scripts/smoke_modal.py --full --a100 --write-results
 ```
 
-Paper draft, full data, and kernel source all in the repo.
+Paper draft, full data, kernel source all in the repo. Every number in this thread has a reproduction script.
 
-Questions welcome. Corrections especially welcome — if the numbers are wrong or the framing is unfair to prior art, I want to know.
+Questions welcome. Corrections especially welcome — if the numbers are wrong, the novelty claims are overstated, or the framing is unfair to prior art, I want to know.
 
 github.com/PwnKit-Labs/noeris
 
-> [SCREENSHOT: repo README or paper abstract]
+> [SCREENSHOT: repo README header or paper abstract]
