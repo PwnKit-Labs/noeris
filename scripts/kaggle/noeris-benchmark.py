@@ -1,12 +1,42 @@
 #!/usr/bin/env python3
 """Noeris GPU benchmark on Kaggle T4.
 
-Validates all 15 operators + runs bandit search on key operators.
+Toggle phases via NOERIS_PHASES env var (comma-separated, e.g. "1,6,8").
+Default: all phases. Set NOERIS_PHASES=fast for just validation + new stuff.
+
 Push via: KAGGLE_API_TOKEN=... kaggle kernels push -p scripts/kaggle/
 """
 import subprocess
 import sys
 import os
+import shutil
+
+# ============================================================================
+# Phase toggle: set NOERIS_PHASES env var to pick which phases run
+# Examples:
+#   NOERIS_PHASES=1,8,9      -> validation + adaptive + LLM dry run
+#   NOERIS_PHASES=fast        -> 1,6,7,8,9 (skip slow bandit/bombshell)
+#   NOERIS_PHASES=all         -> everything (default)
+#   NOERIS_PHASES=new         -> 8,9 only (just the new stuff)
+# ============================================================================
+PHASE_PRESETS = {
+    "all": {1, 2, 3, 4, 5, 6, 7, 8, 9},
+    "fast": {1, 6, 7, 8, 9},
+    "new": {8, 9},
+    "paper": {1, 4, 5, 6, 7},
+    "search": {1, 2, 3},
+}
+
+phases_env = os.environ.get("NOERIS_PHASES", "all").strip().lower()
+if phases_env in PHASE_PRESETS:
+    ACTIVE_PHASES = PHASE_PRESETS[phases_env]
+else:
+    ACTIVE_PHASES = {int(p.strip()) for p in phases_env.split(",") if p.strip().isdigit()}
+
+if not ACTIVE_PHASES:
+    ACTIVE_PHASES = PHASE_PRESETS["all"]
+
+print(f"Active phases: {sorted(ACTIVE_PHASES)}")
 
 # Clone and install noeris
 subprocess.run(["git", "clone", "--depth", "1",
@@ -15,82 +45,90 @@ subprocess.run(["git", "clone", "--depth", "1",
 subprocess.check_call([sys.executable, "-m", "pip", "install",
                        "-e", "/tmp/noeris", "numpy", "scikit-learn", "-q"])
 
-print("=" * 60)
-print("PHASE 1: Validate all 15 operators")
-print("=" * 60)
-subprocess.run([sys.executable, "/tmp/noeris/scripts/colab_validate_all.py"])
+# ============================================================================
+# Phases
+# ============================================================================
 
-print("\n" + "=" * 60)
-print("PHASE 2: Bandit search on key operators (3 iter × 8 configs)")
-print("=" * 60)
-for op in ["qk_norm_rope", "rmsnorm", "softmax", "geglu", "cross_entropy",
-           "layernorm", "rotary", "qk_norm_rope_bwd"]:
-    print(f"\n--- {op} ---")
+if 1 in ACTIVE_PHASES:
+    print("\n" + "=" * 60)
+    print("PHASE 1: Validate all operators")
+    print("=" * 60)
+    subprocess.run([sys.executable, "/tmp/noeris/scripts/colab_validate_all.py"])
+
+if 2 in ACTIVE_PHASES:
+    print("\n" + "=" * 60)
+    print("PHASE 2: Bandit search on key operators (3 iter x 8 configs)")
+    print("=" * 60)
+    for op in ["qk_norm_rope", "rmsnorm", "softmax", "geglu", "cross_entropy",
+               "layernorm", "rotary", "qk_norm_rope_bwd"]:
+        print(f"\n--- {op} ---")
+        subprocess.run([sys.executable, "/tmp/noeris/scripts/colab_iterate.py",
+                        "--operator", op, "--iterations", "3",
+                        "--configs-per-iter", "8", "--shapes", "standard"])
+
+if 3 in ACTIVE_PHASES:
+    print("\n" + "=" * 60)
+    print("PHASE 3: Attention decode search")
+    print("=" * 60)
     subprocess.run([sys.executable, "/tmp/noeris/scripts/colab_iterate.py",
-                    "--operator", op, "--iterations", "3",
-                    "--configs-per-iter", "8", "--shapes", "standard"])
+                    "--operator", "attention_decode", "--iterations", "3",
+                    "--configs-per-iter", "8", "--shapes", "full"])
+
+if 4 in ACTIVE_PHASES:
+    print("\n" + "=" * 60)
+    print("PHASE 4: Bombshell benchmark (full layer + T4 shootout)")
+    print("=" * 60)
+    subprocess.run([sys.executable, "/tmp/noeris/scripts/colab_bombshell.py"])
+
+if 5 in ACTIVE_PHASES:
+    print("\n" + "=" * 60)
+    print("PHASE 5: Compiler failure analysis (torch.compile vs Noeris)")
+    print("=" * 60)
+    subprocess.run([sys.executable, "/tmp/noeris/scripts/compiler_analysis.py"])
+
+if 6 in ACTIVE_PHASES:
+    print("\n" + "=" * 60)
+    print("PHASE 6: Multi-model fusion benchmark (19 models)")
+    print("=" * 60)
+    subprocess.run([sys.executable, "/tmp/noeris/scripts/multi_model_fusion_benchmark.py"])
+
+if 7 in ACTIVE_PHASES:
+    print("\n" + "=" * 60)
+    print("PHASE 7: End-to-end 26-layer Gemma 4 forward pass")
+    print("=" * 60)
+    subprocess.run([sys.executable, "/tmp/noeris/scripts/end_to_end_layer_stack.py"])
+
+if 8 in ACTIVE_PHASES:
+    print("\n" + "=" * 60)
+    print("PHASE 8: Adaptive config benchmark")
+    print("=" * 60)
+    subprocess.run([sys.executable, "/tmp/noeris/scripts/adaptive_benchmark.py"])
+
+if 9 in ACTIVE_PHASES:
+    print("\n" + "=" * 60)
+    print("PHASE 9: LLM kernel search (dry run)")
+    print("=" * 60)
+    subprocess.run([sys.executable, "/tmp/noeris/scripts/llm_kernel_search.py",
+                    "--operator", "rmsnorm", "--dry-run", "--variants", "3"])
 
 print("\n" + "=" * 60)
-print("PHASE 3: Attention decode search")
-print("=" * 60)
-subprocess.run([sys.executable, "/tmp/noeris/scripts/colab_iterate.py",
-                "--operator", "attention_decode", "--iterations", "3",
-                "--configs-per-iter", "8", "--shapes", "full"])
-
-print("\n" + "=" * 60)
-print("PHASE 4: Bombshell benchmark (full layer + T4 shootout)")
-print("=" * 60)
-subprocess.run([sys.executable, "/tmp/noeris/scripts/colab_bombshell.py"])
-
-print("\n" + "=" * 60)
-print("PHASE 5: Compiler failure analysis (torch.compile vs Noeris)")
-print("=" * 60)
-subprocess.run([sys.executable, "/tmp/noeris/scripts/compiler_analysis.py"])
-
-print("\n" + "=" * 60)
-print("PHASE 6: Multi-model fusion benchmark (LLaMA/Mistral/Phi-3)")
-print("=" * 60)
-subprocess.run([sys.executable, "/tmp/noeris/scripts/multi_model_fusion_benchmark.py"])
-
-print("\n" + "=" * 60)
-print("PHASE 7: End-to-end 26-layer Gemma 4 forward pass")
-print("=" * 60)
-subprocess.run([sys.executable, "/tmp/noeris/scripts/end_to_end_layer_stack.py"])
-
-print("\n" + "=" * 60)
-print("PHASE 8: Adaptive config benchmark")
-print("=" * 60)
-subprocess.run([sys.executable, "/tmp/noeris/scripts/adaptive_benchmark.py"])
-
-print("\n" + "=" * 60)
-print("PHASE 9: LLM kernel search (dry run)")
-print("=" * 60)
-subprocess.run([sys.executable, "/tmp/noeris/scripts/llm_kernel_search.py",
-                "--operator", "rmsnorm", "--dry-run", "--variants", "3"])
-
-print("\n" + "=" * 60)
-print("DONE — Results in /tmp/noeris/.noeris/colab-configs.json")
+print(f"DONE — Ran phases {sorted(ACTIVE_PHASES)}")
 print("=" * 60)
 
+# ============================================================================
 # Copy results to Kaggle output
-import shutil
-if os.path.exists("/tmp/noeris/.noeris/colab-configs.json"):
-    shutil.copy("/tmp/noeris/.noeris/colab-configs.json", "/kaggle/working/colab-configs.json")
-    print("Config DB saved to /kaggle/working/colab-configs.json")
-if os.path.exists("/tmp/noeris/colab_validation_results.json"):
-    shutil.copy("/tmp/noeris/colab_validation_results.json", "/kaggle/working/validation_results.json")
-if os.path.exists("/tmp/noeris/bombshell_results.json"):
-    shutil.copy("/tmp/noeris/bombshell_results.json", "/kaggle/working/bombshell_results.json")
-    print("Bombshell results saved to /kaggle/working/bombshell_results.json")
-if os.path.exists("/tmp/noeris/compiler_analysis_results.json"):
-    shutil.copy("/tmp/noeris/compiler_analysis_results.json", "/kaggle/working/compiler_analysis_results.json")
-    print("Compiler analysis saved to /kaggle/working/compiler_analysis_results.json")
-if os.path.exists("/tmp/noeris/end_to_end_results.json"):
-    shutil.copy("/tmp/noeris/end_to_end_results.json", "/kaggle/working/end_to_end_results.json")
-    print("End-to-end results saved to /kaggle/working/end_to_end_results.json")
-if os.path.exists("/tmp/noeris/adaptive_benchmark_results.json"):
-    shutil.copy("/tmp/noeris/adaptive_benchmark_results.json", "/kaggle/working/adaptive_benchmark_results.json")
-    print("Adaptive benchmark saved to /kaggle/working/adaptive_benchmark_results.json")
-if os.path.exists("/tmp/noeris/multi_model_results.json"):
-    shutil.copy("/tmp/noeris/multi_model_results.json", "/kaggle/working/multi_model_results.json")
-    print("Multi-model results saved to /kaggle/working/multi_model_results.json")
+# ============================================================================
+RESULT_FILES = {
+    "/tmp/noeris/.noeris/colab-configs.json": "colab-configs.json",
+    "/tmp/noeris/colab_validation_results.json": "validation_results.json",
+    "/tmp/noeris/bombshell_results.json": "bombshell_results.json",
+    "/tmp/noeris/compiler_analysis_results.json": "compiler_analysis_results.json",
+    "/tmp/noeris/end_to_end_results.json": "end_to_end_results.json",
+    "/tmp/noeris/adaptive_benchmark_results.json": "adaptive_benchmark_results.json",
+    "/tmp/noeris/multi_model_results.json": "multi_model_results.json",
+}
+
+for src, dst in RESULT_FILES.items():
+    if os.path.exists(src):
+        shutil.copy(src, f"/kaggle/working/{dst}")
+        print(f"Saved {dst}")
