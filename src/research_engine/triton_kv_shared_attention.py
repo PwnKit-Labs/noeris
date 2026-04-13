@@ -70,6 +70,7 @@ def _indent(code: str, n: int = 4) -> str:
 
 
 def generate_kv_shared_benchmark_script(
+    configs: list[dict[str, int]] | None = None,
     shapes: list[dict[str, Any]] | None = None,
     warmup: int = 50,
     rep: int = 200,
@@ -80,7 +81,14 @@ def generate_kv_shared_benchmark_script(
       - Projection latency: 3 matmuls (Q+K+V) vs 2 matmuls (Q+KV)
       - Full attention path: proj + SDPA
       - KV cache memory savings
+
+    Args:
+        configs: Tunable config dicts (unused — no Triton params yet).
+        shapes: Shape dicts to benchmark. Defaults to GEMMA4_GLOBAL_SHAPES.
+        warmup: Number of warmup iterations for CUDA timer.
+        rep: Number of timed repetitions for CUDA timer.
     """
+    # configs is accepted for API compatibility but unused (no tunable params).
     shapes = shapes or GEMMA4_GLOBAL_SHAPES
 
     shapes_json = json.dumps(shapes, indent=4)
