@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Noeris mark">
+  <rect width="128" height="128" rx="28" fill="#0f172a"/>
+  <path d="M34 93V35h14l32 38V35h14v58H80L48 55v38H34z" fill="#f8fafc"/>
+  <circle cx="96" cy="34" r="8" fill="#f59e0b"/>
+</svg>
