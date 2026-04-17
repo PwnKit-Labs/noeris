@@ -1,0 +1,103 @@
+{
+  "operator": "attention",
+  "hardware": "NVIDIA A100-SXM4-40GB",
+  "best_config_id": "m32_n64_w4_s3",
+  "best_avg_tflops": 35.98,
+  "configs_tested": 30,
+  "target_shapes": [
+    "gemma4_qknorm",
+    "gemma4_qknorm_global"
+  ],
+  "total_shape_results": 60,
+  "total_failures": 6,
+  "qknorm_top_configs_per_shape": {
+    "gemma4_qknorm": [
+      {
+        "config_id": "m32_n32_w4_s2",
+        "tflops": 27.69,
+        "correct": true,
+        "max_err": 0.00098
+      },
+      {
+        "config_id": "m32_n64_w4_s3",
+        "tflops": 25.95,
+        "correct": true,
+        "max_err": 0.00098
+      },
+      {
+        "config_id": "m32_n32_w2_s3",
+        "tflops": 18.36,
+        "correct": true,
+        "max_err": 0.00098
+      },
+      {
+        "config_id": "m64_n128_w8_s2",
+        "tflops": 17.76,
+        "correct": true,
+        "max_err": 0.00195
+      },
+      {
+        "config_id": "m32_n64_w8_s2",
+        "tflops": 17.75,
+        "correct": true,
+        "max_err": 0.00098
+      }
+    ],
+    "gemma4_qknorm_global": [
+      {
+        "config_id": "m32_n64_w4_s3",
+        "tflops": 46.0,
+        "correct": true,
+        "max_err": 0.00195
+      },
+      {
+        "config_id": "m32_n32_w4_s2",
+        "tflops": 38.71,
+        "correct": true,
+        "max_err": 0.00098
+      },
+      {
+        "config_id": "m64_n128_w8_s2",
+        "tflops": 36.47,
+        "correct": true,
+        "max_err": 0.00195
+      },
+      {
+        "config_id": "m32_n64_w8_s2",
+        "tflops": 33.81,
+        "correct": true,
+        "max_err": 0.00098
+      },
+      {
+        "config_id": "m32_n32_w2_s3",
+        "tflops": 32.29,
+        "correct": true,
+        "max_err": 0.00098
+      }
+    ]
+  },
+  "previous_best_baseline": {
+    "gemma4_qknorm": {
+      "config_id": "m64_n64_w4_s2",
+      "tflops": 4.62
+    },
+    "gemma4_qknorm_global": {
+      "config_id": "m64_n64_w4_s2",
+      "tflops": 18.65
+    }
+  },
+  "delta_vs_baseline": {
+    "gemma4_qknorm": {
+      "new_best": "m32_n32_w4_s2 @ 27.69 TFLOPS",
+      "delta_tflops": "+23.07 (+499.4%)"
+    },
+    "gemma4_qknorm_global": {
+      "new_best": "m32_n64_w4_s3 @ 46.00 TFLOPS",
+      "delta_tflops": "+27.35 (+146.6%)"
+    }
+  },
+  "notes": [
+    "v3 targets only qknorm buckets with configs-per-run=30 to directly test larger-tile pool coverage.",
+    "Selector: Thompson-sampling bandit, no LLM proposer for this rerun."
+  ]
+}

@@ -12,6 +12,11 @@ Canonical latest artifacts (current public references):
   - `docs/results/gemma4-layer-bench-deeper-fusion-a100-after-policy-routing-sanity.json`
   - `docs/results/gemma4-layer-bench-deeper-fusion-h100-after-policy-routing-sanity.json`
 
+Targeted QK-norm attention reruns:
+
+- `docs/results/bandit-qknorm-attention-a100-v3.json`
+- `docs/results/bandit-qknorm-attention-a100-v3.md`
+
 Reproducible benchmark-pack command:
 
 ```bash
