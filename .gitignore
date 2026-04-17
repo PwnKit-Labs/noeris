@@ -2,7 +2,14 @@
 __pycache__/
 *.pyc
 .venv/
+.venv311/
 dist/
 build/
 .noeris/
 .omx/
+
+# LaTeX build artifacts
+docs/paper/*.aux
+docs/paper/*.log
+docs/paper/*.out
+docs/paper/noeris-submission.pdf
