@@ -17,6 +17,10 @@ Targeted QK-norm attention reruns:
 - `docs/results/bandit-qknorm-attention-a100-v3.json`
 - `docs/results/bandit-qknorm-attention-a100-v3.md`
 
+FP8 baseline probes:
+
+- `docs/results/fp8-hopper-probe.json`
+
 Reproducible benchmark-pack command:
 
 ```bash
