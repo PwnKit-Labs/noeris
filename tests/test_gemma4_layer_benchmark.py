@@ -81,34 +81,29 @@ class Gemma4LayerBenchmarkTests(unittest.TestCase):
         self.assertIn("_noeris_fused_norm_linear_raw", script)
 
     def test_benchmark_script_t4_friendly_attn_config(self) -> None:
-        """Benchmark script carries both local and global attention configs."""
+        """Benchmark script imports the shared attention routing helper."""
         script = generate_gemma4_layer_benchmark_script()
         self.assertIn("attention_config_for_shape", script)
-        self.assertIn('"BLOCK_M": 32', script)
-        self.assertIn('"BLOCK_N": 64', script)
-        self.assertIn('"BLOCK_M": 64', script)
+        self.assertIn("from research_engine.gemma4_routing_policy import", script)
 
     def test_benchmark_script_uses_retuned_31b_fused_norm_linear_config(self) -> None:
         script = generate_gemma4_layer_benchmark_script()
-        self.assertIn('_FUSED_NORM_LINEAR_CONFIG_31B = {"BLOCK_M": 128, "BLOCK_N": 256, "BLOCK_K": 64, "num_warps": 8, "num_stages": 3}', script)
+        self.assertIn("fused_norm_linear_config_for_shape", script)
 
     def test_benchmark_script_uses_retuned_global_attention_config(self) -> None:
         script = generate_gemma4_layer_benchmark_script()
-        self.assertIn('_ATTN_CONFIG_GLOBAL = {"BLOCK_M": 32, "BLOCK_N": 32, "num_warps": 4, "num_stages": 2}', script)
+        self.assertIn("attention_config_for_shape", script)
 
     def test_benchmark_script_uses_retuned_geglu_config(self) -> None:
         script = generate_gemma4_layer_benchmark_script()
-        self.assertIn('_GEGLU_CONFIG = {"BLOCK_SIZE": 128, "num_warps": 16, "num_stages": 1}', script)
+        self.assertIn("geglu_config_for_ffn_dim", script)
 
     def test_benchmark_script_has_hardware_shape_policy_helpers(self) -> None:
         script = generate_gemma4_layer_benchmark_script()
-        self.assertIn("def gpu_family_name():", script)
-        self.assertIn("def fused_norm_linear_profile", script)
-        self.assertIn("def attention_profile", script)
-        self.assertIn("def geglu_profile", script)
-        self.assertIn("_ATTN_CONFIG_POLICY", script)
-        self.assertIn("_GEGLU_CONFIG_POLICY", script)
-        self.assertIn("_FUSED_NORM_LINEAR_CONFIG_POLICY", script)
+        self.assertIn("from research_engine.gemma4_routing_policy import", script)
+        self.assertIn("fused_norm_linear_config_for_shape", script)
+        self.assertIn("attention_config_for_shape", script)
+        self.assertIn("geglu_config_for_ffn_dim", script)
 
     def test_configs_have_required_fields(self) -> None:
         """Each config has all required layer dimension fields."""

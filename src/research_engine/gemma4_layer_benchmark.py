@@ -108,6 +108,13 @@ from research_engine.triton_qk_norm_rope import apply_qk_norm_rope as _noeris_qk
 from research_engine.triton_geglu import geglu as _noeris_geglu_raw
 from research_engine.triton_attention_v2 import flash_attn_v2 as _noeris_flash_attn_raw
 from research_engine.triton_fused_norm_matmul import fused_rmsnorm_linear as _noeris_fused_norm_linear_raw
+from research_engine.gemma4_routing_policy import (
+    RMSNORM_CONFIG as _RMSNORM_CONFIG,
+    QK_NORM_ROPE_CONFIG as _QK_NORM_ROPE_CONFIG,
+    fused_norm_linear_config_for_shape,
+    attention_config_for_shape,
+    geglu_config_for_ffn_dim,
+)
 
 
 LAYER_CONFIGS = json.loads({configs_json!r})
@@ -117,103 +124,9 @@ LAYER_CONFIGS = json.loads({configs_json!r})
 # Noeris operator wrappers (delegate to installed Triton kernels)
 # =============================================================================
 
-# Benchmark configs for the currently tested Gemma layer shapes.
-_RMSNORM_CONFIG = {{"BLOCK_SIZE": 128, "num_warps": 4, "num_stages": 1}}
-_QK_NORM_ROPE_CONFIG = {{"BLOCK_SIZE": 128, "num_warps": 4, "num_stages": 1}}
-_GEGLU_CONFIG = {{"BLOCK_SIZE": 128, "num_warps": 16, "num_stages": 1}}
-_FUSED_NORM_LINEAR_CONFIG_PREFILL = {{"BLOCK_M": 128, "BLOCK_N": 256, "BLOCK_K": 64, "num_warps": 8, "num_stages": 3}}
-_FUSED_NORM_LINEAR_CONFIG_31B = {{"BLOCK_M": 128, "BLOCK_N": 256, "BLOCK_K": 64, "num_warps": 8, "num_stages": 3}}
-_ATTN_CONFIG_LOCAL = {{"BLOCK_M": 64, "BLOCK_N": 64, "num_warps": 4, "num_stages": 3}}
-_ATTN_CONFIG_GLOBAL = {{"BLOCK_M": 32, "BLOCK_N": 32, "num_warps": 4, "num_stages": 2}}
-
-_FUSED_NORM_LINEAR_CONFIG_POLICY = {{
-    "default": {{
-        "31b_prefill": _FUSED_NORM_LINEAR_CONFIG_31B,
-        "prefill": _FUSED_NORM_LINEAR_CONFIG_PREFILL,
-        "decode": None,
-    }},
-    "a100": {{
-        "31b_prefill": _FUSED_NORM_LINEAR_CONFIG_31B,
-        "prefill": _FUSED_NORM_LINEAR_CONFIG_PREFILL,
-        "decode": None,
-    }},
-    "h100": {{
-        "31b_prefill": _FUSED_NORM_LINEAR_CONFIG_31B,
-        "prefill": _FUSED_NORM_LINEAR_CONFIG_PREFILL,
-        "decode": None,
-    }},
-}}
-
-_ATTN_CONFIG_POLICY = {{
-    "default": {{
-        "31b_global": _ATTN_CONFIG_GLOBAL,
-        "local": _ATTN_CONFIG_LOCAL,
-    }},
-    "a100": {{
-        "31b_global": _ATTN_CONFIG_GLOBAL,
-        "local": _ATTN_CONFIG_LOCAL,
-    }},
-    "h100": {{
-        "31b_global": _ATTN_CONFIG_GLOBAL,
-        "local": _ATTN_CONFIG_LOCAL,
-    }},
-}}
-
-_GEGLU_CONFIG_POLICY = {{
-    "default": {{
-        "31b": _GEGLU_CONFIG,
-        "default": _GEGLU_CONFIG,
-    }},
-    "a100": {{
-        "31b": _GEGLU_CONFIG,
-        "default": _GEGLU_CONFIG,
-    }},
-    "h100": {{
-        "31b": _GEGLU_CONFIG,
-        "default": _GEGLU_CONFIG,
-    }},
-}}
-
-
-def gpu_family_name():
-    name = torch.cuda.get_device_name(0).upper()
-    if "H100" in name:
-        return "h100"
-    if "A100" in name:
-        return "a100"
-    return "default"
-
-
-def fused_norm_linear_profile(m, n, k):
-    if m >= 1024 and k >= 4096:
-        return "31b_prefill"
-    if m >= 1024:
-        return "prefill"
-    return "decode"
-
-
-def attention_profile(head_dim, window_size):
-    if head_dim >= 512 and window_size <= 0:
-        return "31b_global"
-    return "local"
-
-
-def geglu_profile(ffn_dim):
-    if ffn_dim >= 21504:
-        return "31b"
-    return "default"
-
 def noeris_rmsnorm(x, w, eps=1e-6):
     """RMSNorm via the canonical Triton kernel (Gemma affine_mode=1)."""
     return _noeris_rmsnorm_raw(x, w, _RMSNORM_CONFIG, eps=eps, affine_mode=1)
-
-
-def fused_norm_linear_config_for_shape(m, n, k):
-    """Select fused-norm-linear config via hardware+shape policy."""
-    gpu = gpu_family_name()
-    profile = fused_norm_linear_profile(m, n, k)
-    policy = _FUSED_NORM_LINEAR_CONFIG_POLICY.get(gpu, _FUSED_NORM_LINEAR_CONFIG_POLICY["default"])
-    return policy.get(profile, None)
 
 
 def noeris_fused_norm_linear(x, w, linear_weight, eps=1e-6, linear_weight_is_pretransposed=False):
@@ -241,19 +154,8 @@ def noeris_qk_norm_rope(q, k, q_scale, k_scale, cos, sin):
 
 def noeris_geglu(gate, up):
     """Fused GeGLU via the canonical Triton kernel."""
-    gpu = gpu_family_name()
-    profile = geglu_profile(gate.shape[1])
-    policy = _GEGLU_CONFIG_POLICY.get(gpu, _GEGLU_CONFIG_POLICY["default"])
-    config = policy.get(profile, _GEGLU_CONFIG)
+    config = geglu_config_for_ffn_dim(gate.shape[1])
     return _noeris_geglu_raw(gate, up, config)
-
-
-def attention_config_for_shape(head_dim, window_size):
-    """Select attention config via hardware+shape policy."""
-    gpu = gpu_family_name()
-    profile = attention_profile(head_dim, window_size)
-    policy = _ATTN_CONFIG_POLICY.get(gpu, _ATTN_CONFIG_POLICY["default"])
-    return policy.get(profile, _ATTN_CONFIG_LOCAL)
 
 
 def noeris_attention(Q, K, V, num_kv_heads, window_size=-1, is_causal=True):
