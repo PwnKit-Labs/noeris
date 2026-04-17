@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from pathlib import Path
 
 from .modal_runner import (
     BatchBenchmarkResult,
@@ -86,10 +87,12 @@ class ModalBenchmarkSession:
         gpu: str = "A100",
         timeout_seconds: int = 600,
         max_cost_usd: float = 1.00,
+        local_source_dir: str | None = None,
     ) -> None:
         self.gpu = gpu
         self.timeout_seconds = timeout_seconds
         self.max_cost_usd = max_cost_usd
+        self.local_source_dir = local_source_dir
         self._cost_per_sec = GPU_COST_PER_SEC.get(gpu, GPU_COST_PER_SEC["A100"])
         self._cumulative_cost = 0.0
         self._app = None
@@ -104,14 +107,27 @@ class ModalBenchmarkSession:
         image = modal.Image.debian_slim(python_version="3.11").pip_install(
             "torch", "triton",
         )
+        remote_pythonpath = ""
+        if self.local_source_dir:
+            source_dir = Path(self.local_source_dir).resolve()
+            image = image.add_local_dir(str(source_dir), remote_path="/root/src/research_engine")
+            remote_pythonpath = "/root/src"
 
         timeout_s = self.timeout_seconds
 
         @app.function(gpu=gpu_type, image=image, timeout=timeout_s, serialized=True)
         def run_benchmark_script(script: str) -> dict:
+            import os
             import subprocess
             import sys
             import tempfile
+
+            env = os.environ.copy()
+            if remote_pythonpath:
+                current = env.get("PYTHONPATH", "")
+                env["PYTHONPATH"] = (
+                    f"{remote_pythonpath}:{current}" if current else remote_pythonpath
+                )
 
             with tempfile.NamedTemporaryFile(
                 mode="w", suffix=".py", delete=False,
@@ -123,6 +139,7 @@ class ModalBenchmarkSession:
                     capture_output=True,
                     text=True,
                     timeout=timeout_s - 60,
+                    env=env,
                 )
             return {
                 "stdout": result.stdout,

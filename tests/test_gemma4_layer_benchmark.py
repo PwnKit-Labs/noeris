@@ -58,11 +58,9 @@ class Gemma4LayerBenchmarkTests(unittest.TestCase):
         self.assertIn("pytorch_step_times", script)
         # Ensure all major steps are individually timed
         for key in [
-            "1_pre_attn_rmsnorm",
-            "2_qkv_proj",
+            "1_2_pre_attn_norm_qkv_fused",
             "4_attention",
-            "6_pre_mlp_rmsnorm",
-            "7a_gate_up_proj",
+            "6_7a_pre_mlp_norm_gateup_fused",
             "7c_down_proj",
         ]:
             self.assertIn(key, script, f"Missing per-step key: {key}")
@@ -70,19 +68,47 @@ class Gemma4LayerBenchmarkTests(unittest.TestCase):
     def test_benchmark_script_uses_all_noeris_kernels(self) -> None:
         """Generated script wires all 4 Noeris kernels into the fused path."""
         script = generate_gemma4_layer_benchmark_script()
-        self.assertIn("noeris_rmsnorm", script)
+        self.assertIn("noeris_fused_norm_linear", script)
         self.assertIn("noeris_qk_norm_rope", script)
         self.assertIn("noeris_attention", script)
         self.assertIn("noeris_geglu", script)
         # Verify the attention wrapper calls flash_attn
         self.assertIn("_noeris_flash_attn_raw", script)
 
-    def test_benchmark_script_t4_friendly_attn_config(self) -> None:
-        """Attention config uses small blocks suitable for T4 with large head_dim."""
+    def test_benchmark_script_imports_fused_norm_linear(self) -> None:
         script = generate_gemma4_layer_benchmark_script()
-        # BLOCK_M and BLOCK_N should be 32 for T4 compatibility
+        self.assertIn("triton_fused_norm_matmul", script)
+        self.assertIn("_noeris_fused_norm_linear_raw", script)
+
+    def test_benchmark_script_t4_friendly_attn_config(self) -> None:
+        """Benchmark script carries both local and global attention configs."""
+        script = generate_gemma4_layer_benchmark_script()
+        self.assertIn("attention_config_for_shape", script)
         self.assertIn('"BLOCK_M": 32', script)
-        self.assertIn('"BLOCK_N": 32', script)
+        self.assertIn('"BLOCK_N": 64', script)
+        self.assertIn('"BLOCK_M": 64', script)
+
+    def test_benchmark_script_uses_retuned_31b_fused_norm_linear_config(self) -> None:
+        script = generate_gemma4_layer_benchmark_script()
+        self.assertIn('_FUSED_NORM_LINEAR_CONFIG_31B = {"BLOCK_M": 128, "BLOCK_N": 256, "BLOCK_K": 64, "num_warps": 8, "num_stages": 3}', script)
+
+    def test_benchmark_script_uses_retuned_global_attention_config(self) -> None:
+        script = generate_gemma4_layer_benchmark_script()
+        self.assertIn('_ATTN_CONFIG_GLOBAL = {"BLOCK_M": 32, "BLOCK_N": 32, "num_warps": 4, "num_stages": 2}', script)
+
+    def test_benchmark_script_uses_retuned_geglu_config(self) -> None:
+        script = generate_gemma4_layer_benchmark_script()
+        self.assertIn('_GEGLU_CONFIG = {"BLOCK_SIZE": 128, "num_warps": 16, "num_stages": 1}', script)
+
+    def test_benchmark_script_has_hardware_shape_policy_helpers(self) -> None:
+        script = generate_gemma4_layer_benchmark_script()
+        self.assertIn("def gpu_family_name():", script)
+        self.assertIn("def fused_norm_linear_profile", script)
+        self.assertIn("def attention_profile", script)
+        self.assertIn("def geglu_profile", script)
+        self.assertIn("_ATTN_CONFIG_POLICY", script)
+        self.assertIn("_GEGLU_CONFIG_POLICY", script)
+        self.assertIn("_FUSED_NORM_LINEAR_CONFIG_POLICY", script)
 
     def test_configs_have_required_fields(self) -> None:
         """Each config has all required layer dimension fields."""
@@ -102,6 +128,7 @@ class Gemma4LayerBenchmarkTests(unittest.TestCase):
         script = generate_gemma4_layer_benchmark_script()
         self.assertIn("max_err", script)
         self.assertIn("correct", script)
+        self.assertIn("step_max_errs", script)
 
 
 if __name__ == "__main__":

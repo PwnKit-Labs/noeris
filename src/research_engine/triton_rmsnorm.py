@@ -192,11 +192,17 @@ def generate_rmsnorm_grid(
 
 _triton_available = False
 _rmsnorm_kernel_compiled = None
+_rmsnorm_strided_kernel_compiled = None
+_rmsnorm_nchw_dim1_kernel_compiled = None
 
 
 def _ensure_triton_rmsnorm():
-    global _triton_available, _rmsnorm_kernel_compiled
-    if _rmsnorm_kernel_compiled is not None:
+    global _triton_available, _rmsnorm_kernel_compiled, _rmsnorm_strided_kernel_compiled, _rmsnorm_nchw_dim1_kernel_compiled
+    if (
+        _rmsnorm_kernel_compiled is not None
+        and _rmsnorm_strided_kernel_compiled is not None
+        and _rmsnorm_nchw_dim1_kernel_compiled is not None
+    ):
         return
     try:
         import triton
@@ -227,7 +233,76 @@ def _ensure_triton_rmsnorm():
                 y = x * rstd * (1.0 + w)
             tl.store(y_ptr + offs, y.to(tl.float16), mask=mask)
 
+        @triton.jit
+        def _rmsnorm_strided_kernel(
+            x_ptr, w_ptr, y_ptr,
+            outer_stride,
+            norm_stride,
+            n_norm,
+            eps,
+            BLOCK_SIZE: tl.constexpr,
+        ):
+            """RMSNorm over a strided axis without materializing a permute."""
+            pid = tl.program_id(0)
+            base = x_ptr + pid * outer_stride
+            y_base = y_ptr + pid * outer_stride
+            offs = tl.arange(0, BLOCK_SIZE)
+            mask = offs < n_norm
+            x = tl.load(base + offs * norm_stride, mask=mask, other=0.0).to(tl.float32)
+            mean_sq = tl.sum(x * x, axis=0) / n_norm
+            rstd = 1.0 / tl.sqrt(mean_sq + eps)
+            w = tl.load(w_ptr + offs, mask=mask, other=0.0).to(tl.float32)
+            y = x * rstd * w
+            tl.store(y_base + offs * norm_stride, y.to(tl.float16), mask=mask)
+
+        @triton.jit
+        def _rmsnorm_nchw_dim1_kernel(
+            x_ptr, w_ptr, y_ptr,
+            batch_stride,
+            channel_stride,
+            hw_size,
+            eps,
+            BLOCK_HW: tl.constexpr,
+            CHANNELS: tl.constexpr,
+        ):
+            """RMSNorm for contiguous NCHW tensors normalized over C."""
+            hw_pid = tl.program_id(0)
+            batch_pid = tl.program_id(1)
+
+            hw_offsets = hw_pid * BLOCK_HW + tl.arange(0, BLOCK_HW)
+            mask = hw_offsets < hw_size
+
+            x_batch = x_ptr + batch_pid * batch_stride
+            y_batch = y_ptr + batch_pid * batch_stride
+            sum_sq = tl.zeros((BLOCK_HW,), dtype=tl.float32)
+
+            for c in range(CHANNELS):
+                x_vals = tl.load(
+                    x_batch + c * channel_stride + hw_offsets,
+                    mask=mask,
+                    other=0.0,
+                ).to(tl.float32)
+                sum_sq += x_vals * x_vals
+
+            rstd = tl.rsqrt(sum_sq / CHANNELS + eps)
+
+            for c in range(CHANNELS):
+                x_vals = tl.load(
+                    x_batch + c * channel_stride + hw_offsets,
+                    mask=mask,
+                    other=0.0,
+                ).to(tl.float32)
+                w_val = tl.load(w_ptr + c).to(tl.float32)
+                y_vals = x_vals * rstd * w_val
+                tl.store(
+                    y_batch + c * channel_stride + hw_offsets,
+                    y_vals.to(tl.float16),
+                    mask=mask,
+                )
+
         _rmsnorm_kernel_compiled = _rmsnorm_kernel
+        _rmsnorm_strided_kernel_compiled = _rmsnorm_strided_kernel
+        _rmsnorm_nchw_dim1_kernel_compiled = _rmsnorm_nchw_dim1_kernel
         _triton_available = True
     except ImportError:
         _triton_available = False
@@ -269,6 +344,65 @@ def rmsnorm(x, w, config=None, eps=1e-6, affine_mode=0):
         AFFINE_MODE=affine_mode,
         num_warps=config["num_warps"],
         num_stages=config["num_stages"],
+    )
+    return y
+
+
+def rmsnorm_strided(x, w, *, outer_stride: int, norm_stride: int, n_norm: int, eps=1e-6):
+    """RMSNorm over a non-contiguous axis.
+
+    Typical upstream use is NCHW tensors normalized along C:
+    `outer_stride=1`, `norm_stride=H*W`, `n_norm=C`, grid=`B*H*W`.
+    """
+    import torch
+    import triton
+
+    _ensure_triton_rmsnorm()
+    if not _triton_available:
+        raise RuntimeError("Triton not available")
+
+    y = torch.empty_like(x)
+    block_size = triton.next_power_of_2(n_norm)
+    n_outer = x.numel() // n_norm
+    _rmsnorm_strided_kernel_compiled[(n_outer,)](
+        x, w, y,
+        outer_stride, norm_stride, n_norm, eps,
+        BLOCK_SIZE=block_size,
+        num_warps=min(4, max(1, block_size // 32)),
+        num_stages=1,
+    )
+    return y
+
+
+def rmsnorm_nchw_dim1(x, w, *, eps=1e-6, block_hw: int = 256):
+    """RMSNorm on a contiguous NCHW tensor normalized over the C dimension."""
+    import torch
+    import triton
+
+    _ensure_triton_rmsnorm()
+    if not _triton_available:
+        raise RuntimeError("Triton not available")
+
+    if x.ndim != 4:
+        raise ValueError(f"expected 4D NCHW tensor, got shape={tuple(x.shape)!r}")
+
+    batch, channels, height, width = x.shape
+    if channels != w.numel():
+        raise ValueError(f"weight length {w.numel()} does not match channels {channels}")
+
+    y = torch.empty_like(x)
+    hw_size = height * width
+    grid = (triton.cdiv(hw_size, block_hw), batch)
+    _rmsnorm_nchw_dim1_kernel_compiled[grid](
+        x, w, y,
+        x.stride(0),
+        x.stride(1),
+        hw_size,
+        eps,
+        BLOCK_HW=block_hw,
+        CHANNELS=channels,
+        num_warps=4 if block_hw <= 256 else 8,
+        num_stages=1,
     )
     return y
 

@@ -177,7 +177,7 @@ def _ensure_triton_softmax():
             denom = tl.sum(exp_x, axis=0)
             y = exp_x / denom
 
-            tl.store(y_ptr + offs, y.to(tl.float16), mask=mask)
+            tl.store(y_ptr + offs, y.to(x_ptr.dtype.element_ty), mask=mask)
 
         _softmax_kernel_compiled = _softmax_kernel
         _triton_softmax_available = True
@@ -189,13 +189,13 @@ def softmax(x, config=None, softcap=0.0):
     """Module-level Softmax launcher. Requires CUDA GPU.
 
     Args:
-        x: (n_rows, n_cols) fp16 tensor.
+        x: (n_rows, n_cols) tensor.
         config: Triton config dict with BLOCK_SIZE, num_warps, num_stages.
             Defaults to the first curated config.
         softcap: If > 0, applies softcap pre-step (Gemma 4 31B style).
 
     Returns:
-        (n_rows, n_cols) fp16 output tensor.
+        Same-shape output tensor with the same dtype as `x`.
     """
     import torch
     import triton

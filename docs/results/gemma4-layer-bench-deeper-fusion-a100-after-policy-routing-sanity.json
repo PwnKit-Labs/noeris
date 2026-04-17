@@ -1,0 +1,30 @@
+{
+  "hardware": {
+    "gpu": "NVIDIA A100-SXM4-40GB",
+    "cuda_version": "13.0",
+    "python": "3.11.12"
+  },
+  "layer_results": [
+    {
+      "name": "gemma4_31b_local",
+      "layer_speedup": 1.1408,
+      "noeris_fused_ms": 11.7166,
+      "pytorch_separated_ms": 13.3663,
+      "correct": true
+    },
+    {
+      "name": "gemma4_31b_global",
+      "layer_speedup": 1.0699,
+      "noeris_fused_ms": 14.5684,
+      "pytorch_separated_ms": 15.5873,
+      "correct": true
+    },
+    {
+      "name": "gemma4_e2b_local",
+      "layer_speedup": 1.8525,
+      "noeris_fused_ms": 2.8457,
+      "pytorch_separated_ms": 5.2716,
+      "correct": true
+    }
+  ]
+}

@@ -8,12 +8,15 @@ from pathlib import Path
 from tests import _pathfix  # noqa: F401
 
 from research_engine.triton_kernels import (
+    MATMUL_FAMILY_CONFIGS,
     MATMUL_SHAPE_BUCKETS,
     TRITON_MATMUL_CURATED_CONFIGS,
     ConfigDatabase,
     config_id,
     generate_config_grid,
     generate_triton_benchmark_script,
+    matmul_family_key,
+    routed_matmul_config,
     select_configs_for_run,
     shape_bucket_key,
 )
@@ -48,6 +51,33 @@ class ShapeBucketTests(unittest.TestCase):
 
     def test_tall_skinny(self) -> None:
         self.assertEqual(shape_bucket_key(8192, 1024, 1024), "tall_skinny")
+
+
+class MatmulFamilyRoutingTests(unittest.TestCase):
+    def test_routes_square_dense_family(self) -> None:
+        self.assertEqual(matmul_family_key(4096, 4096, 4096), "square_dense")
+
+    def test_routes_irregular_masked_family(self) -> None:
+        self.assertEqual(matmul_family_key(8205, 5921, 2949), "irregular_masked")
+
+    def test_routes_small_k_family(self) -> None:
+        self.assertEqual(matmul_family_key(32768, 32768, 64), "small_k")
+
+    def test_routes_tall_skinny_family(self) -> None:
+        self.assertEqual(matmul_family_key(32768, 32, 32768), "tall_skinny")
+
+    def test_routes_large_k_family(self) -> None:
+        self.assertEqual(matmul_family_key(256, 256, 524288), "large_k")
+
+    def test_routed_config_matches_family_defaults(self) -> None:
+        cfg = routed_matmul_config(32768, 32768, 64)
+        self.assertEqual(cfg, MATMUL_FAMILY_CONFIGS["small_k"])
+        self.assertTrue(cfg["OUTPUT_FP32"])
+
+    def test_large_k_family_uses_splitk(self) -> None:
+        cfg = routed_matmul_config(256, 256, 524288)
+        self.assertEqual(cfg, MATMUL_FAMILY_CONFIGS["large_k"])
+        self.assertEqual(cfg["SPLIT_K"], 32)
 
 
 class ConfigGridTests(unittest.TestCase):

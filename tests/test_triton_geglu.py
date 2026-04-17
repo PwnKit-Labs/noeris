@@ -10,6 +10,7 @@ from research_engine.triton_operators import REGISTRY
 from research_engine.triton_geglu import (
     GEGLU_CURATED_CONFIGS,
     GEGLU_SHAPE_BUCKETS,
+    geglu,
     geglu_config_id,
     geglu_shape_bucket_key,
     geglu_shared_memory_check,
@@ -179,6 +180,8 @@ class TestBenchmarkScript(unittest.TestCase):
     def test_script_contains_kernel_definition(self) -> None:
         script = self._make_script()
         self.assertIn("def geglu_kernel(", script)
+        self.assertIn("stride_gate_row", script)
+        self.assertIn("stride_up_row", script)
 
     def test_script_contains_tanh_gelu_approximation(self) -> None:
         script = self._make_script()
@@ -204,6 +207,34 @@ class TestBenchmarkScript(unittest.TestCase):
     def test_script_correctness_threshold_is_1e2(self) -> None:
         script = self._make_script()
         self.assertIn("1e-2", script)
+
+
+class TestGpuCorrectness(unittest.TestCase):
+    def test_geglu_matches_reference_for_noncontiguous_views(self) -> None:
+        try:
+            import torch
+            if not torch.cuda.is_available():
+                self.skipTest("No CUDA device")
+        except ImportError:
+            self.skipTest("PyTorch not installed")
+
+        try:
+            import triton  # noqa: F401
+        except ImportError:
+            self.skipTest("Triton not available")
+
+        torch.manual_seed(0)
+        n_rows, ffn_dim = 8, 128
+        packed = torch.randn((n_rows, ffn_dim * 2), device="cuda", dtype=torch.float16)
+        gate = packed[:, :ffn_dim]
+        up = packed[:, ffn_dim:]
+        self.assertFalse(gate.is_contiguous())
+        self.assertFalse(up.is_contiguous())
+
+        ref = torch.nn.functional.gelu(up.to(torch.float32), approximate="tanh").to(torch.float16) * gate
+        out = geglu(gate, up, GEGLU_CURATED_CONFIGS[0])
+        max_err = (out.to(torch.float32) - ref.to(torch.float32)).abs().max().item()
+        self.assertLess(max_err, 1e-2)
 
 
 if __name__ == "__main__":

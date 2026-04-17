@@ -1,0 +1,93 @@
+{
+  "hardware": {
+    "gpu": "NVIDIA A100-SXM4-40GB",
+    "cuda_version": "13.0",
+    "python": "3.11.12"
+  },
+  "layer_results": [
+    {
+      "name": "gemma4_31b_local",
+      "noeris_fused_ms": 11.9368,
+      "pytorch_separated_ms": 13.5332,
+      "layer_speedup": 1.1337,
+      "correct": true,
+      "max_err": 0.011719,
+      "noeris_step_times": {
+        "1_2_pre_attn_norm_qkv_fused": 2.8754,
+        "3_qk_norm_rope_fused": 0.2468,
+        "4_attention_flash": 0.8468,
+        "5_attn_out_proj": 1.0015,
+        "6_7a_pre_mlp_norm_gateup_fused": 5.6873,
+        "7b_geglu_fused": 0.3052,
+        "7c_down_proj": 1.8412
+      },
+      "pytorch_step_times": {
+        "1_pre_attn_rmsnorm": 0.4096,
+        "2_qkv_proj": 1.7029,
+        "3_qk_norm_rope_4ops": 1.9241,
+        "4_attention_sdpa": 2.2303,
+        "5_attn_out_proj": 0.7772,
+        "6_pre_mlp_rmsnorm": 1.2063,
+        "7a_gate_up_proj": 3.6833,
+        "7b_geglu_separated": 0.9861,
+        "7c_down_proj": 1.9036
+      }
+    },
+    {
+      "name": "gemma4_31b_global",
+      "noeris_fused_ms": 14.7364,
+      "pytorch_separated_ms": 15.7123,
+      "layer_speedup": 1.0662,
+      "correct": true,
+      "max_err": 0.007812,
+      "noeris_step_times": {
+        "1_2_pre_attn_norm_qkv_fused": 2.8652,
+        "3_qk_norm_rope_fused": 0.2529,
+        "4_attention_flash": 2.8938,
+        "5_attn_out_proj": 1.9907,
+        "6_7a_pre_mlp_norm_gateup_fused": 6.7103,
+        "7b_geglu_fused": 0.3144,
+        "7c_down_proj": 1.9476
+      },
+      "pytorch_step_times": {
+        "1_pre_attn_rmsnorm": 0.4096,
+        "2_qkv_proj": 2.0234,
+        "3_qk_norm_rope_4ops": 2.7443,
+        "4_attention_sdpa": 2.5006,
+        "5_attn_out_proj": 1.5114,
+        "6_pre_mlp_rmsnorm": 2.0306,
+        "7a_gate_up_proj": 3.7427,
+        "7b_geglu_separated": 0.9923,
+        "7c_down_proj": 1.9005
+      }
+    },
+    {
+      "name": "gemma4_e2b_local",
+      "noeris_fused_ms": 2.8826,
+      "pytorch_separated_ms": 5.4876,
+      "layer_speedup": 1.9037,
+      "correct": true,
+      "max_err": 0.007812,
+      "noeris_step_times": {
+        "1_2_pre_attn_norm_qkv_fused": 0.384,
+        "3_qk_norm_rope_fused": 0.1413,
+        "4_attention_flash": 0.4137,
+        "5_attn_out_proj": 0.2683,
+        "6_7a_pre_mlp_norm_gateup_fused": 1.3537,
+        "7b_geglu_fused": 0.172,
+        "7c_down_proj": 0.4332
+      },
+      "pytorch_step_times": {
+        "1_pre_attn_rmsnorm": 0.257,
+        "2_qkv_proj": 0.2765,
+        "3_qk_norm_rope_4ops": 0.8612,
+        "4_attention_sdpa": 2.8815,
+        "5_attn_out_proj": 0.2181,
+        "6_pre_mlp_rmsnorm": 0.4895,
+        "7a_gate_up_proj": 0.7424,
+        "7b_geglu_separated": 0.6001,
+        "7c_down_proj": 0.4137
+      }
+    }
+  ]
+}

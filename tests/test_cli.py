@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 from tests import _pathfix  # noqa: F401
 
-from research_engine.cli import main
+from research_engine.cli import _parse_operator_shape, build_parser, main
 from research_engine.llm import LlmConfigurationError
 from research_engine.models import ResearchSource
 
@@ -242,6 +242,58 @@ class CliTests(unittest.TestCase):
         self.assertIn("added_candidates", payload["frontier_delta"])
         self.assertIn("added_pareto_candidates", payload["frontier_delta"])
         self.assertIn("workload_changes", payload["frontier_delta"])
+
+    def test_triton_iterate_parser_accepts_fused_norm_linear(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args([
+            "triton-iterate",
+            "--operator",
+            "fused_norm_linear",
+        ])
+        self.assertEqual(args.command, "triton-iterate")
+        self.assertEqual(args.operator, "fused_norm_linear")
+
+    def test_triton_iterate_parser_accepts_attention_v2(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args([
+            "triton-iterate",
+            "--operator",
+            "attention_v2",
+        ])
+        self.assertEqual(args.command, "triton-iterate")
+        self.assertEqual(args.operator, "attention_v2")
+
+    def test_parse_operator_shape_supports_fused_norm_linear(self) -> None:
+        self.assertEqual(
+            _parse_operator_shape("fused_norm_linear", "2048x2560x1536"),
+            {"M": 2048, "N": 2560, "K": 1536},
+        )
+
+    def test_parse_operator_shape_supports_attention_v2_metadata(self) -> None:
+        self.assertEqual(
+            _parse_operator_shape(
+                "attention_v2",
+                "1x32x4096x512",
+                {
+                    "num_kv_heads": 4,
+                    "is_causal": True,
+                    "window_size": -1,
+                    "use_qk_norm": True,
+                    "shared_kv": False,
+                },
+            ),
+            {
+                "batch": 1,
+                "heads": 32,
+                "seq_len": 4096,
+                "head_dim": 512,
+                "num_kv_heads": 4,
+                "is_causal": True,
+                "window_size": -1,
+                "use_qk_norm": True,
+                "shared_kv": False,
+            },
+        )
 
     def test_sources_command_aggregates_provider_results(self) -> None:
         with (

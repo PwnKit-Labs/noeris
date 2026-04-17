@@ -1,10 +1,9 @@
 """Parameterized Triton fused RMSNorm + Linear (matmul) kernel.
 
-This is the genuinely novel "full-layer fusion" — nobody has fused RMSNorm +
-matmul in a single kernel.  The key insight: we load x once, normalize in
-registers, and immediately use the normalized values for the dot product.
-The normalized intermediate is *never written to HBM*, eliminating one full
-read+write of the activation tensor.
+This operator targets deeper transformer prologue fusion by loading ``x``
+once, normalizing in registers, and immediately using the normalized values
+for the dot product. The normalized intermediate is never written to HBM,
+eliminating one full read+write of the activation tensor.
 
 In a standard transformer pre-attention block the computation is::
 
@@ -143,6 +142,23 @@ def fused_norm_linear_shape_bucket_key(shape: dict[str, int]) -> str:
     return "llama3_70b"
 
 
+def default_fused_norm_linear_config(m: int, n: int, k: int) -> dict[str, int]:
+    """Return a conservative curated config for a given fused norm+linear shape."""
+    if m <= 8:
+        return dict(FUSED_NORM_LINEAR_CURATED_CONFIGS[-1])
+    if k <= 1536 and n <= 2560:
+        return dict(FUSED_NORM_LINEAR_CURATED_CONFIGS[1])
+    # Large 31B-style projections use the two-kernel rstd path and benefit from
+    # a smaller BLOCK_K than the earlier generic prefill fallback.
+    if k >= 4096 and n >= 16384:
+        return dict(FUSED_NORM_LINEAR_CURATED_CONFIGS[5])
+    if k <= 2816 or n >= 8192:
+        return dict(FUSED_NORM_LINEAR_CURATED_CONFIGS[3])
+    if k <= 5376:
+        return dict(FUSED_NORM_LINEAR_CURATED_CONFIGS[5])
+    return dict(FUSED_NORM_LINEAR_CURATED_CONFIGS[5])
+
+
 def fused_norm_linear_shared_memory_check(config: dict[str, int]) -> bool:
     """Soft annotation only — always returns True.
 
@@ -195,15 +211,104 @@ def generate_fused_norm_linear_grid(
 
 _triton_available = False
 _fused_norm_linear_kernel_compiled = None
+_rmsnorm_rstd_kernel_compiled = None
+_rstd_linear_kernel_compiled = None
 
 
 def _ensure_triton_fused_norm_linear():
     global _triton_available, _fused_norm_linear_kernel_compiled
-    if _fused_norm_linear_kernel_compiled is not None:
+    global _rmsnorm_rstd_kernel_compiled, _rstd_linear_kernel_compiled
+    if (
+        _fused_norm_linear_kernel_compiled is not None
+        and _rmsnorm_rstd_kernel_compiled is not None
+        and _rstd_linear_kernel_compiled is not None
+    ):
         return
     try:
         import triton
         import triton.language as tl
+
+        @triton.jit
+        def _rmsnorm_rstd_kernel(
+            x_ptr,
+            rstd_ptr,
+            M,
+            K,
+            stride_xm,
+            stride_xk,
+            eps,
+            BLOCK_M: tl.constexpr,
+            BLOCK_K: tl.constexpr,
+        ):
+            pid_m = tl.program_id(0)
+            offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+            mask_m = offs_m < M
+            sum_sq = tl.zeros((BLOCK_M,), dtype=tl.float32)
+
+            for k_start in range(0, K, BLOCK_K):
+                offs_k = k_start + tl.arange(0, BLOCK_K)
+                mask_k = offs_k < K
+                x_ptrs = x_ptr + offs_m[:, None] * stride_xm + offs_k[None, :] * stride_xk
+                x_tile = tl.load(x_ptrs, mask=mask_m[:, None] & mask_k[None, :], other=0.0)
+                x_f32 = x_tile.to(tl.float32)
+                sum_sq += tl.sum(x_f32 * x_f32, axis=1)
+
+            rstd = 1.0 / tl.sqrt(sum_sq / K + eps)
+            tl.store(rstd_ptr + offs_m, rstd, mask=mask_m)
+
+        @triton.jit
+        def _rstd_linear_kernel(
+            x_ptr,
+            rstd_ptr,
+            w_ptr,
+            linear_ptr,
+            out_ptr,
+            M,
+            N,
+            K,
+            stride_xm,
+            stride_xk,
+            stride_lk,
+            stride_ln,
+            stride_om,
+            stride_on,
+            BLOCK_M: tl.constexpr,
+            BLOCK_N: tl.constexpr,
+            BLOCK_K: tl.constexpr,
+            AFFINE_MODE: tl.constexpr,
+        ):
+            pid_m = tl.program_id(0)
+            pid_n = tl.program_id(1)
+
+            offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+            offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+            mask_m = offs_m < M
+            mask_n = offs_n < N
+
+            rstd = tl.load(rstd_ptr + offs_m, mask=mask_m, other=0.0)
+            acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+
+            for k_start in range(0, K, BLOCK_K):
+                offs_k = k_start + tl.arange(0, BLOCK_K)
+                mask_k = offs_k < K
+
+                x_ptrs = x_ptr + offs_m[:, None] * stride_xm + offs_k[None, :] * stride_xk
+                x_tile = tl.load(x_ptrs, mask=mask_m[:, None] & mask_k[None, :], other=0.0)
+                x_f32 = x_tile.to(tl.float32)
+
+                w_tile = tl.load(w_ptr + offs_k, mask=mask_k, other=0.0).to(tl.float32)
+                x_normed = x_f32 * rstd[:, None]
+                if AFFINE_MODE == 0:
+                    x_normed = x_normed * w_tile[None, :]
+                else:
+                    x_normed = x_normed * (1.0 + w_tile[None, :])
+
+                l_ptrs = linear_ptr + offs_k[:, None] * stride_lk + offs_n[None, :] * stride_ln
+                l_tile = tl.load(l_ptrs, mask=mask_k[:, None] & mask_n[None, :], other=0.0)
+                acc += tl.dot(x_normed.to(tl.float16), l_tile.to(tl.float16))
+
+            out_ptrs = out_ptr + offs_m[:, None] * stride_om + offs_n[None, :] * stride_on
+            tl.store(out_ptrs, acc.to(tl.float16), mask=mask_m[:, None] & mask_n[None, :])
 
         @triton.jit
         def _fused_rmsnorm_linear_kernel(
@@ -313,19 +418,57 @@ def _ensure_triton_fused_norm_linear():
             tl.store(out_ptrs, acc.to(tl.float16), mask=mask_m[:, None] & mask_n[None, :])
 
         _fused_norm_linear_kernel_compiled = _fused_rmsnorm_linear_kernel
+        _rmsnorm_rstd_kernel_compiled = _rmsnorm_rstd_kernel
+        _rstd_linear_kernel_compiled = _rstd_linear_kernel
         _triton_available = True
     except ImportError:
         _triton_available = False
 
 
-def fused_rmsnorm_linear(x, rmsnorm_weight, linear_weight, eps=1e-6, affine_mode=0, config=None):
+def torch_rmsnorm_linear_reference(
+    x,
+    rmsnorm_weight,
+    linear_weight,
+    eps=1e-6,
+    affine_mode=0,
+):
+    """Reference RMSNorm + linear used for correctness checks.
+
+    The output dtype matches ``x`` so the comparison surface is aligned with
+    the Triton launcher, which stores fp16 outputs.
+    """
+    import torch
+
+    x_f32 = x.to(torch.float32)
+    variance = x_f32.pow(2).mean(-1, keepdim=True)
+    x_normed = x_f32 * torch.rsqrt(variance + eps)
+    w = rmsnorm_weight.to(torch.float32)
+    if affine_mode == 1:
+        x_normed = x_normed * (1.0 + w)
+    else:
+        x_normed = x_normed * w
+    x_normed = x_normed.to(x.dtype)
+    return x_normed @ linear_weight.t()
+
+
+def fused_rmsnorm_linear(
+    x,
+    rmsnorm_weight,
+    linear_weight,
+    eps=1e-6,
+    affine_mode=0,
+    config=None,
+    *,
+    linear_weight_is_pretransposed: bool = False,
+):
     """Module-level launcher for fused RMSNorm + Linear projection.
 
     Args:
         x: (M, K) fp16 input activations.
         rmsnorm_weight: (K,) fp16 RMSNorm affine weight.
-        linear_weight: (N, K) fp16 linear weight (PyTorch nn.Linear convention:
-            weight shape is (out_features, in_features)).
+        linear_weight: Either:
+            - (N, K) fp16 linear weight using the PyTorch ``nn.Linear`` layout, or
+            - (K, N) fp16 linear weight when ``linear_weight_is_pretransposed=True``.
         eps: Epsilon for numerical stability.
         affine_mode: 0 = standard (y = x * rstd * w),
                      1 = Gemma (y = x * rstd * (1 + w)).
@@ -344,24 +487,74 @@ def fused_rmsnorm_linear(x, rmsnorm_weight, linear_weight, eps=1e-6, affine_mode
     if not _triton_available:
         raise RuntimeError("Triton not available")
 
-    if config is None:
-        config = FUSED_NORM_LINEAR_CURATED_CONFIGS[0]
-
     M, K = x.shape
-    N = linear_weight.shape[0]
-    assert linear_weight.shape[1] == K, f"Weight K dim mismatch: {linear_weight.shape[1]} != {K}"
+    if linear_weight_is_pretransposed:
+        assert linear_weight.shape[0] == K, (
+            f"Pretransposed weight K dim mismatch: {linear_weight.shape[0]} != {K}"
+        )
+        N = linear_weight.shape[1]
+    else:
+        N = linear_weight.shape[0]
+    if config is None:
+        config = default_fused_norm_linear_config(M, N, K)
     assert rmsnorm_weight.shape[0] == K, f"RMSNorm weight dim mismatch: {rmsnorm_weight.shape[0]} != {K}"
+    if linear_weight_is_pretransposed:
+        linear_t = linear_weight.contiguous()
+    else:
+        assert linear_weight.shape[1] == K, f"Weight K dim mismatch: {linear_weight.shape[1]} != {K}"
+        # Keep the PyTorch-friendly API, but let hot paths pass a cached (K, N)
+        # weight to avoid paying this full transpose copy on every invocation.
+        linear_t = linear_weight.t().contiguous()  # (K, N)
 
     out = torch.empty((M, N), device=x.device, dtype=x.dtype)
-
-    # Pre-transpose linear weight to (K, N) contiguous layout.
-    # This avoids tl.trans() in the kernel, which can miscompile on Turing (T4).
-    # The transpose copy is a one-time O(NK) memcpy — negligible vs the O(MNK) matmul.
-    linear_t = linear_weight.t().contiguous()  # (K, N)
 
     BLOCK_M = config["BLOCK_M"]
     BLOCK_N = config["BLOCK_N"]
     BLOCK_K = config["BLOCK_K"]
+
+    use_two_kernel_large_n = N >= 8192
+
+    if use_two_kernel_large_n:
+        rstd = torch.empty((M,), device=x.device, dtype=torch.float32)
+        rstd_grid = (triton.cdiv(M, BLOCK_M),)
+        _rmsnorm_rstd_kernel_compiled[rstd_grid](
+            x,
+            rstd,
+            M,
+            K,
+            x.stride(0),
+            x.stride(1),
+            eps,
+            BLOCK_M=BLOCK_M,
+            BLOCK_K=BLOCK_K,
+            num_warps=config["num_warps"],
+            num_stages=config["num_stages"],
+        )
+
+        grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
+        _rstd_linear_kernel_compiled[grid](
+            x,
+            rstd,
+            rmsnorm_weight,
+            linear_t,
+            out,
+            M,
+            N,
+            K,
+            x.stride(0),
+            x.stride(1),
+            linear_t.stride(0),
+            linear_t.stride(1),
+            out.stride(0),
+            out.stride(1),
+            BLOCK_M=BLOCK_M,
+            BLOCK_N=BLOCK_N,
+            BLOCK_K=BLOCK_K,
+            AFFINE_MODE=affine_mode,
+            num_warps=config["num_warps"],
+            num_stages=config["num_stages"],
+        )
+        return out
 
     grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
 
@@ -397,9 +590,8 @@ def generate_fused_norm_linear_benchmark_script(
     return f'''#!/usr/bin/env python3
 """Auto-generated Triton fused RMSNorm + Linear benchmark.
 
-Novel kernel: fuses RMSNorm normalization with the QKV linear projection
-into a single kernel, eliminating the intermediate normalized activation
-tensor from HBM.
+Fuses RMSNorm normalization with the following linear projection so the
+normalized activation does not materialize in HBM.
 """
 
 import json
@@ -492,13 +684,27 @@ def fused_rmsnorm_linear_kernel(
 # Python wrapper
 # ---------------------------------------------------------------------------
 
-def fused_rmsnorm_linear(x, rmsnorm_weight, linear_weight, config, eps=1e-6, affine_mode=0):
+def fused_rmsnorm_linear(
+    x,
+    rmsnorm_weight,
+    linear_weight,
+    config,
+    eps=1e-6,
+    affine_mode=0,
+    linear_weight_is_pretransposed=False,
+):
     M, K = x.shape
-    N = linear_weight.shape[0]
+    if linear_weight_is_pretransposed:
+        assert linear_weight.shape[0] == K, f"Pretransposed weight K dim mismatch: {{linear_weight.shape[0]}} != {{K}}"
+        N = linear_weight.shape[1]
+        linear_t = linear_weight.contiguous()
+    else:
+        N = linear_weight.shape[0]
+        assert linear_weight.shape[1] == K, f"Weight K dim mismatch: {{linear_weight.shape[1]}} != {{K}}"
+        # Accept PyTorch's (N, K) layout by default, but let hot paths pass a
+        # cached (K, N) weight and skip this copy.
+        linear_t = linear_weight.t().contiguous()  # (K, N)
     out = torch.empty((M, N), device=x.device, dtype=x.dtype)
-    # Pre-transpose to (K, N) contiguous — avoids tl.trans() in the kernel
-    # which can miscompile on Turing (T4).
-    linear_t = linear_weight.t().contiguous()  # (K, N)
     BLOCK_M = config["BLOCK_M"]
     BLOCK_N = config["BLOCK_N"]
     BLOCK_K = config["BLOCK_K"]
@@ -545,9 +751,17 @@ def benchmark_one(M, N, K, config, dtype=torch.float16, affine_mode=0):
         x = torch.randn((M, K), device="cuda", dtype=dtype)
         rmsnorm_w = torch.randn((K,), device="cuda", dtype=dtype) * 0.01
         linear_w = torch.randn((N, K), device="cuda", dtype=dtype) * (K ** -0.5)
+        linear_w_t = linear_w.t().contiguous()
 
         ref = torch_rmsnorm_linear(x, rmsnorm_w, linear_w, affine_mode=affine_mode)
-        out = fused_rmsnorm_linear(x, rmsnorm_w, linear_w, config, affine_mode=affine_mode)
+        out = fused_rmsnorm_linear(
+            x,
+            rmsnorm_w,
+            linear_w_t,
+            config,
+            affine_mode=affine_mode,
+            linear_weight_is_pretransposed=True,
+        )
         # Use relative tolerance for matmul outputs
         abs_err = (out.to(torch.float32) - ref.to(torch.float32)).abs()
         ref_abs = ref.to(torch.float32).abs().clamp(min=1e-4)
@@ -561,7 +775,14 @@ def benchmark_one(M, N, K, config, dtype=torch.float16, affine_mode=0):
 
         # Benchmark fused kernel
         fused_ms = triton.testing.do_bench(
-            lambda: fused_rmsnorm_linear(x, rmsnorm_w, linear_w, config, affine_mode=affine_mode),
+            lambda: fused_rmsnorm_linear(
+                x,
+                rmsnorm_w,
+                linear_w_t,
+                config,
+                affine_mode=affine_mode,
+                linear_weight_is_pretransposed=True,
+            ),
             warmup=25, rep=100,
         )
         # Benchmark separated baseline
@@ -657,7 +878,7 @@ FUSED_NORM_LINEAR_SPEC = register_operator(TritonOperatorSpec(
     shared_memory_check_fn=fused_norm_linear_shared_memory_check,
     description=(
         "Fused RMSNorm + Linear projection. Eliminates the intermediate "
-        "normalized activation tensor from HBM. Novel: no existing system "
-        "fuses normalization with the subsequent matmul in a single kernel."
+        "normalized activation tensor from HBM by normalizing in registers "
+        "before the following matmul."
     ),
 ))

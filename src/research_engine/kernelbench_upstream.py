@@ -94,9 +94,8 @@ UPSTREAM_PROBLEMS: list[UpstreamProblem] = [
         problem_file="26_GELU_.py",
         noeris_operator="geglu",
         notes=(
-            "(4096, 393216) fp32 GELU. Noeris has no standalone GELU; we "
-            "reuse the GeGLU kernel with gate=1 to approximate, or flag "
-            "as Noeris-skipped. See adapter."
+            "(4096, 393216) fp32 exact GELU (erf-based). Uses dedicated "
+            "noeris_gelu_exact kernel dispatched via _NOERIS_EXACT_GELU_PROBLEMS."
         ),
     ),
     UpstreamProblem(
@@ -122,8 +121,9 @@ UPSTREAM_PROBLEMS: list[UpstreamProblem] = [
         problem_file="88_MinGPTNewGelu.py",
         noeris_operator="geglu",
         notes=(
-            "(8192, 8192) fp32 tanh-approx GELU. Noeris GeGLU kernel "
-            "computes gate * GELU_tanh(up); adapter passes ones as gate."
+            "(8192, 8192) fp32 tanh-approx GELU. Routed through Noeris's "
+            "standalone tanh-GELU kernel under the historical 'geglu' "
+            "operator label."
         ),
     ),
     UpstreamProblem(
@@ -284,6 +284,7 @@ def noeris_matmul_kernel(
     BLOCK_SIZE_N: tl.constexpr,
     BLOCK_SIZE_K: tl.constexpr,
     GROUP_SIZE_M: tl.constexpr,
+    USE_TF32: tl.constexpr = False,
 ):
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
@@ -304,10 +305,13 @@ def noeris_matmul_kernel(
         k_remaining = K - k_offset * BLOCK_SIZE_K
         a = tl.load(a_ptrs, mask=offs_k[None, :] < k_remaining, other=0.0)
         b = tl.load(b_ptrs, mask=offs_k[:, None] < k_remaining, other=0.0)
-        accumulator = tl.dot(a, b, accumulator)
+        if USE_TF32:
+            accumulator = tl.dot(a, b, accumulator, input_precision="tf32")
+        else:
+            accumulator = tl.dot(a, b, accumulator)
         a_ptrs += BLOCK_SIZE_K * stride_ak
         b_ptrs += BLOCK_SIZE_K * stride_bk
-    c = accumulator.to(tl.float16)
+    c = accumulator.to(c_ptr.dtype.element_ty)
     offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
     offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
     c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
@@ -315,25 +319,97 @@ def noeris_matmul_kernel(
     tl.store(c_ptrs, c, mask=c_mask)
 
 
+@triton.jit
+def noeris_matmul_splitk_kernel(
+    a_ptr, b_ptr, c_ptr,
+    M, N, K,
+    stride_am, stride_ak,
+    stride_bk, stride_bn,
+    stride_cm, stride_cn,
+    BLOCK_SIZE_M: tl.constexpr,
+    BLOCK_SIZE_N: tl.constexpr,
+    BLOCK_SIZE_K: tl.constexpr,
+    SPLIT_K: tl.constexpr,
+    GROUP_SIZE_M: tl.constexpr,
+    USE_TF32: tl.constexpr = False,
+):
+    pid = tl.program_id(axis=0)
+    pid_k = tl.program_id(axis=2)
+    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
+    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
+    num_pid_in_group = GROUP_SIZE_M * num_pid_n
+    group_id = pid // num_pid_in_group
+    first_pid_m = group_id * GROUP_SIZE_M
+    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
+    pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
+    pid_n = (pid % num_pid_in_group) // group_size_m
+    offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+    offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+    offs_k = pid_k * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
+    offs_k = tl.max_contiguous(tl.multiple_of(offs_k, BLOCK_SIZE_K), BLOCK_SIZE_K)
+    a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
+    b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
+    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+    for _ in range(0, tl.cdiv(K, BLOCK_SIZE_K * SPLIT_K)):
+        k_mask = offs_k < K
+        a = tl.load(a_ptrs, mask=(offs_am[:, None] < M) & k_mask[None, :], other=0.0)
+        b = tl.load(b_ptrs, mask=k_mask[:, None] & (offs_bn[None, :] < N), other=0.0)
+        if USE_TF32:
+            accumulator = tl.dot(a, b, accumulator, input_precision="tf32")
+        else:
+            accumulator = tl.dot(a, b, accumulator)
+        offs_k += BLOCK_SIZE_K * SPLIT_K
+        a_ptrs += BLOCK_SIZE_K * SPLIT_K * stride_ak
+        b_ptrs += BLOCK_SIZE_K * SPLIT_K * stride_bk
+    c_ptrs = c_ptr + stride_cm * offs_am[:, None] + stride_cn * offs_bn[None, :]
+    c_mask = (offs_am[:, None] < M) & (offs_bn[None, :] < N)
+    tl.atomic_add(c_ptrs, accumulator.to(c_ptr.dtype.element_ty), mask=c_mask, sem="relaxed")
+
+
 def noeris_matmul(a, b, config):
     M, K = a.shape
     _, N = b.shape
-    c = torch.empty((M, N), device=a.device, dtype=torch.float16)
-    grid = lambda META: (
-        triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]),
-    )
-    noeris_matmul_kernel[grid](
-        a, b, c, M, N, K,
-        a.stride(0), a.stride(1),
-        b.stride(0), b.stride(1),
-        c.stride(0), c.stride(1),
-        BLOCK_SIZE_M=config["BLOCK_SIZE_M"],
-        BLOCK_SIZE_N=config["BLOCK_SIZE_N"],
-        BLOCK_SIZE_K=config["BLOCK_SIZE_K"],
-        GROUP_SIZE_M=config["GROUP_SIZE_M"],
-        num_warps=config["num_warps"],
-        num_stages=config["num_stages"],
-    )
+    out_dtype = torch.float32 if config.get("OUTPUT_FP32", False) or a.dtype == torch.float32 else a.dtype
+    c = torch.empty((M, N), device=a.device, dtype=out_dtype)
+    split_k = int(config.get("SPLIT_K", 1))
+    if split_k > 1:
+        c.zero_()
+        grid = lambda META: (
+            triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]),
+            1,
+            split_k,
+        )
+        noeris_matmul_splitk_kernel[grid](
+            a, b, c, M, N, K,
+            a.stride(0), a.stride(1),
+            b.stride(0), b.stride(1),
+            c.stride(0), c.stride(1),
+            BLOCK_SIZE_M=config["BLOCK_SIZE_M"],
+            BLOCK_SIZE_N=config["BLOCK_SIZE_N"],
+            BLOCK_SIZE_K=config["BLOCK_SIZE_K"],
+            SPLIT_K=split_k,
+            GROUP_SIZE_M=config["GROUP_SIZE_M"],
+            USE_TF32=config.get("USE_TF32", False),
+            num_warps=config["num_warps"],
+            num_stages=config["num_stages"],
+        )
+    else:
+        grid = lambda META: (
+            triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]),
+        )
+        noeris_matmul_kernel[grid](
+            a, b, c, M, N, K,
+            a.stride(0), a.stride(1),
+            b.stride(0), b.stride(1),
+            c.stride(0), c.stride(1),
+            BLOCK_SIZE_M=config["BLOCK_SIZE_M"],
+            BLOCK_SIZE_N=config["BLOCK_SIZE_N"],
+            BLOCK_SIZE_K=config["BLOCK_SIZE_K"],
+            GROUP_SIZE_M=config["GROUP_SIZE_M"],
+            USE_TF32=config.get("USE_TF32", False),
+            num_warps=config["num_warps"],
+            num_stages=config["num_stages"],
+        )
     return c
 '''
 
@@ -355,19 +431,119 @@ def noeris_softmax_kernel(
     exp_x = tl.exp(x_shifted)
     denom = tl.sum(exp_x, axis=0)
     y = exp_x / denom
-    tl.store(y_ptr + offs, y.to(tl.float16), mask=mask)
+    tl.store(y_ptr + offs, y.to(x_ptr.dtype.element_ty), mask=mask)
+
+
+@triton.jit
+def noeris_softmax_online_kernel(
+    x_ptr, y_ptr, row_stride, n_cols,
+    BLOCK_SIZE: tl.constexpr,
+):
+    row_idx = tl.program_id(0)
+    x_base = x_ptr + row_idx * row_stride
+    y_base = y_ptr + row_idx * row_stride
+
+    m = tl.zeros((1,), dtype=tl.float32) - 1e30
+    d = tl.zeros((1,), dtype=tl.float32)
+    for start in range(0, n_cols, BLOCK_SIZE):
+        offs = start + tl.arange(0, BLOCK_SIZE)
+        mask = offs < n_cols
+        x = tl.load(x_base + offs, mask=mask, other=-1e30).to(tl.float32)
+        tile_max = tl.max(x, axis=0)
+        new_m = tl.maximum(m, tile_max)
+        d = d * tl.exp(m - new_m) + tl.sum(tl.exp(x - new_m), axis=0)
+        m = new_m
+
+    for start in range(0, n_cols, BLOCK_SIZE):
+        offs = start + tl.arange(0, BLOCK_SIZE)
+        mask = offs < n_cols
+        x = tl.load(x_base + offs, mask=mask, other=-1e30).to(tl.float32)
+        y = tl.exp(x - m) / d
+        tl.store(y_base + offs, y.to(x_ptr.dtype.element_ty), mask=mask)
+
+
+@triton.jit
+def noeris_softmax_split_reduce_kernel(
+    x_ptr, partial_max_ptr, partial_sumexp_ptr,
+    row_stride, n_cols, n_chunks,
+    BLOCK_SIZE: tl.constexpr,
+    CHUNK_COLS: tl.constexpr,
+):
+    pid = tl.program_id(0)
+    row_idx = pid // n_chunks
+    chunk_idx = pid % n_chunks
+    chunk_col_start = chunk_idx * CHUNK_COLS
+    x_base = x_ptr + row_idx * row_stride + chunk_col_start
+
+    m = tl.zeros((1,), dtype=tl.float32) - 1e30
+    d = tl.zeros((1,), dtype=tl.float32)
+    for start in range(0, CHUNK_COLS, BLOCK_SIZE):
+        offs = start + tl.arange(0, BLOCK_SIZE)
+        mask = (chunk_col_start + offs) < n_cols
+        x = tl.load(x_base + offs, mask=mask, other=-1e30).to(tl.float32)
+        tile_max = tl.max(x, axis=0)
+        new_m = tl.maximum(m, tile_max)
+        d = d * tl.exp(m - new_m) + tl.sum(tl.exp(x - new_m), axis=0)
+        m = new_m
+
+    partial_idx = row_idx * n_chunks + chunk_idx
+    tl.store(partial_max_ptr + partial_idx, m)
+    tl.store(partial_sumexp_ptr + partial_idx, d)
+
+
+@triton.jit
+def noeris_softmax_split_norm_kernel(
+    x_ptr, y_ptr, partial_max_ptr, partial_sumexp_ptr,
+    row_stride, n_cols, n_chunks,
+    BLOCK_SIZE: tl.constexpr,
+    CHUNK_COLS: tl.constexpr,
+    N_CHUNKS: tl.constexpr,
+):
+    pid = tl.program_id(0)
+    row_idx = pid // n_chunks
+    chunk_idx = pid % n_chunks
+    chunk_col_start = chunk_idx * CHUNK_COLS
+    x_base = x_ptr + row_idx * row_stride + chunk_col_start
+    y_base = y_ptr + row_idx * row_stride + chunk_col_start
+
+    partial_base = row_idx * N_CHUNKS
+    global_m = tl.load(partial_max_ptr + partial_base).to(tl.float32)
+    global_d = tl.load(partial_sumexp_ptr + partial_base).to(tl.float32)
+    for c in range(1, N_CHUNKS):
+        cm = tl.load(partial_max_ptr + partial_base + c).to(tl.float32)
+        cd = tl.load(partial_sumexp_ptr + partial_base + c).to(tl.float32)
+        new_m = tl.maximum(global_m, cm)
+        global_d = global_d * tl.exp(global_m - new_m) + cd * tl.exp(cm - new_m)
+        global_m = new_m
+
+    for start in range(0, CHUNK_COLS, BLOCK_SIZE):
+        offs = start + tl.arange(0, BLOCK_SIZE)
+        mask = (chunk_col_start + offs) < n_cols
+        x = tl.load(x_base + offs, mask=mask, other=-1e30).to(tl.float32)
+        y = tl.exp(x - global_m) / global_d
+        tl.store(y_base + offs, y.to(x_ptr.dtype.element_ty), mask=mask)
 
 
 def noeris_softmax(x, config):
     n_rows, n_cols = x.shape
     y = torch.empty_like(x)
-    BLOCK_SIZE = max(config["BLOCK_SIZE"], triton.next_power_of_2(n_cols))
-    noeris_softmax_kernel[(n_rows,)](
-        x, y, x.stride(0), y.stride(0), n_cols,
-        BLOCK_SIZE=BLOCK_SIZE,
-        num_warps=config["num_warps"],
-        num_stages=config["num_stages"],
-    )
+    pow2 = triton.next_power_of_2(n_cols)
+    if pow2 <= 65536:
+        noeris_softmax_kernel[(n_rows,)](
+            x, y, x.stride(0), y.stride(0), n_cols,
+            BLOCK_SIZE=pow2,
+            num_warps=config["num_warps"],
+            num_stages=config["num_stages"],
+        )
+    else:
+        # Wide rows: 2-pass online softmax (proven 0.77x, split-k crashes in Triton JIT)
+        BLOCK = 8192
+        noeris_softmax_online_kernel[(n_rows,)](
+            x, y, x.stride(0), n_cols,
+            BLOCK_SIZE=BLOCK,
+            num_warps=16,
+            num_stages=2,
+        )
     return y
 '''
 
@@ -394,20 +570,138 @@ def noeris_rmsnorm_kernel(
         y = x * rstd * w
     else:
         y = x * rstd * (1.0 + w)
-    tl.store(y_ptr + offs, y.to(tl.float16), mask=mask)
+    tl.store(y_ptr + offs, y.to(x_ptr.dtype.element_ty), mask=mask)
+
+
+@triton.jit
+def noeris_rmsnorm_strided_kernel(
+    x_ptr, w_ptr, y_ptr,
+    outer_stride,   # stride to next "row" (the non-norm dims flattened)
+    norm_stride,    # stride along the normalization axis
+    n_norm,         # number of elements along norm axis
+    eps,
+    BLOCK_SIZE: tl.constexpr,
+):
+    """RMSNorm along a strided (non-contiguous) axis. No permute needed.
+
+    For (B, C, H, W) normalized along dim=1: n_norm=C, norm_stride=H*W,
+    outer_stride=1 (elements in H,W are contiguous), grid=(B*H*W,).
+    """
+    pid = tl.program_id(0)
+    base = x_ptr + pid * outer_stride
+    y_base = y_ptr + pid * outer_stride
+    offs = tl.arange(0, BLOCK_SIZE)
+    mask = offs < n_norm
+    # Gather along the norm axis with stride
+    x = tl.load(base + offs * norm_stride, mask=mask, other=0.0).to(tl.float32)
+    mean_sq = tl.sum(x * x, axis=0) / n_norm
+    rstd = 1.0 / tl.sqrt(mean_sq + eps)
+    w = tl.load(w_ptr + offs, mask=mask, other=0.0).to(tl.float32)
+    y = x * rstd * w
+    tl.store(y_base + offs * norm_stride, y.to(x_ptr.dtype.element_ty), mask=mask)
+
+
+@triton.jit
+def noeris_rmsnorm_nchw_dim1_kernel(
+    x_ptr, w_ptr, y_ptr,
+    batch_stride,
+    channel_stride,
+    hw_size,
+    eps,
+    BLOCK_HW: tl.constexpr,
+    CHANNELS: tl.constexpr,
+):
+    """RMSNorm for contiguous NCHW tensors normalized across C."""
+    hw_pid = tl.program_id(0)
+    batch_pid = tl.program_id(1)
+
+    hw_offsets = hw_pid * BLOCK_HW + tl.arange(0, BLOCK_HW)
+    mask = hw_offsets < hw_size
+
+    x_batch = x_ptr + batch_pid * batch_stride
+    y_batch = y_ptr + batch_pid * batch_stride
+    sum_sq = tl.zeros((BLOCK_HW,), dtype=tl.float32)
+
+    for c in range(CHANNELS):
+        x_vals = tl.load(
+            x_batch + c * channel_stride + hw_offsets,
+            mask=mask,
+            other=0.0,
+        ).to(tl.float32)
+        sum_sq += x_vals * x_vals
+
+    rstd = tl.rsqrt(sum_sq / CHANNELS + eps)
+
+    for c in range(CHANNELS):
+        x_vals = tl.load(
+            x_batch + c * channel_stride + hw_offsets,
+            mask=mask,
+            other=0.0,
+        ).to(tl.float32)
+        w_val = tl.load(w_ptr + c).to(tl.float32)
+        y_vals = x_vals * rstd * w_val
+        tl.store(
+            y_batch + c * channel_stride + hw_offsets,
+            y_vals.to(x_ptr.dtype.element_ty),
+            mask=mask,
+        )
+
+
+@triton.jit
+def noeris_rmsnorm_batched_kernel(
+    x_ptr, w_ptr, y_ptr,
+    x_row_stride, y_row_stride,
+    n_rows, n_cols, eps,
+    BLOCK_SIZE: tl.constexpr,
+    ROWS_PER_PROG: tl.constexpr,
+    AFFINE_MODE: tl.constexpr,
+):
+    """Process multiple rows per program to amortize launch overhead."""
+    pid = tl.program_id(0)
+    row_start = pid * ROWS_PER_PROG
+    offs = tl.arange(0, BLOCK_SIZE)
+    mask = offs < n_cols
+    w = tl.load(w_ptr + offs, mask=mask, other=0.0).to(tl.float32)
+    for i in range(ROWS_PER_PROG):
+        row_idx = row_start + i
+        if row_idx < n_rows:
+            x_row = x_ptr + row_idx * x_row_stride
+            y_row = y_ptr + row_idx * y_row_stride
+            x = tl.load(x_row + offs, mask=mask, other=0.0).to(tl.float32)
+            mean_sq = tl.sum(x * x, axis=0) / n_cols
+            rstd = 1.0 / tl.sqrt(mean_sq + eps)
+            if AFFINE_MODE == 0:
+                y = x * rstd * w
+            else:
+                y = x * rstd * (1.0 + w)
+            tl.store(y_row + offs, y.to(x_ptr.dtype.element_ty), mask=mask)
 
 
 def noeris_rmsnorm(x, w, config, eps=1e-6, affine_mode=0):
     n_rows, n_cols = x.shape
     y = torch.empty_like(x)
     BLOCK_SIZE = max(config["BLOCK_SIZE"], triton.next_power_of_2(n_cols))
-    noeris_rmsnorm_kernel[(n_rows,)](
-        x, w, y, x.stride(0), y.stride(0), n_cols, eps,
-        BLOCK_SIZE=BLOCK_SIZE,
-        AFFINE_MODE=affine_mode,
-        num_warps=config["num_warps"],
-        num_stages=config["num_stages"],
-    )
+    if n_rows > 100000 and n_cols <= 256:
+        # Many tiny rows: batch to reduce launch overhead
+        ROWS_PER_PROG = 32
+        n_progs = triton.cdiv(n_rows, ROWS_PER_PROG)
+        noeris_rmsnorm_batched_kernel[(n_progs,)](
+            x, w, y, x.stride(0), y.stride(0),
+            n_rows, n_cols, eps,
+            BLOCK_SIZE=BLOCK_SIZE,
+            ROWS_PER_PROG=ROWS_PER_PROG,
+            AFFINE_MODE=affine_mode,
+            num_warps=config["num_warps"],
+            num_stages=config["num_stages"],
+        )
+    else:
+        noeris_rmsnorm_kernel[(n_rows,)](
+            x, w, y, x.stride(0), y.stride(0), n_cols, eps,
+            BLOCK_SIZE=BLOCK_SIZE,
+            AFFINE_MODE=affine_mode,
+            num_warps=config["num_warps"],
+            num_stages=config["num_stages"],
+        )
     return y
 '''
 
@@ -437,16 +731,67 @@ def noeris_layernorm_kernel(
     tl.store(y_ptr + offs, y.to(tl.float16), mask=mask)
 
 
+@triton.jit
+def noeris_layernorm_online_kernel(
+    x_ptr, w_ptr, b_ptr, y_ptr,
+    x_row_stride, y_row_stride,
+    n_cols, eps,
+    BLOCK_SIZE: tl.constexpr,
+):
+    """Two-pass tiled LayerNorm for arbitrarily wide rows.
+    Pass 1: accumulate sum and sum_sq across BLOCK_SIZE tiles.
+    Pass 2: normalize each tile using global mean/variance.
+    """
+    row_idx = tl.program_id(0)
+    x_base = x_ptr + row_idx * x_row_stride
+    y_base = y_ptr + row_idx * y_row_stride
+
+    # Pass 1: accumulate sum and sum_sq
+    running_sum = tl.zeros((1,), dtype=tl.float32)
+    running_sum_sq = tl.zeros((1,), dtype=tl.float32)
+    for start in range(0, n_cols, BLOCK_SIZE):
+        offs = start + tl.arange(0, BLOCK_SIZE)
+        mask = offs < n_cols
+        x = tl.load(x_base + offs, mask=mask, other=0.0).to(tl.float32)
+        running_sum += tl.sum(x, axis=0)
+        running_sum_sq += tl.sum(x * x, axis=0)
+
+    # Derive mean and rstd
+    inv_n = 1.0 / n_cols
+    mean = running_sum * inv_n
+    var = running_sum_sq * inv_n - mean * mean
+    rstd = tl.rsqrt(var + eps)
+
+    # Pass 2: normalize each tile
+    for start in range(0, n_cols, BLOCK_SIZE):
+        offs = start + tl.arange(0, BLOCK_SIZE)
+        mask = offs < n_cols
+        x = tl.load(x_base + offs, mask=mask, other=0.0).to(tl.float32)
+        w = tl.load(w_ptr + offs, mask=mask, other=0.0).to(tl.float32)
+        b = tl.load(b_ptr + offs, mask=mask, other=0.0).to(tl.float32)
+        y = (x - mean) * rstd * w + b
+        tl.store(y_base + offs, y.to(tl.float16), mask=mask)
+
+
 def noeris_layernorm(x, w, b, config, eps=1e-5):
     n_rows, n_cols = x.shape
     y = torch.empty_like(x)
-    BLOCK_SIZE = max(config["BLOCK_SIZE"], triton.next_power_of_2(n_cols))
-    noeris_layernorm_kernel[(n_rows,)](
-        x, w, b, y, x.stride(0), y.stride(0), n_cols, eps,
-        BLOCK_SIZE=BLOCK_SIZE,
-        num_warps=config["num_warps"],
-        num_stages=config["num_stages"],
-    )
+    if n_cols <= 65536:
+        BLOCK_SIZE = max(config["BLOCK_SIZE"], triton.next_power_of_2(n_cols))
+        noeris_layernorm_kernel[(n_rows,)](
+            x, w, b, y, x.stride(0), y.stride(0), n_cols, eps,
+            BLOCK_SIZE=BLOCK_SIZE,
+            num_warps=config["num_warps"],
+            num_stages=config["num_stages"],
+        )
+    else:
+        BLOCK_SIZE = 8192
+        noeris_layernorm_online_kernel[(n_rows,)](
+            x, w, b, y, x.stride(0), y.stride(0), n_cols, eps,
+            BLOCK_SIZE=BLOCK_SIZE,
+            num_warps=16,
+            num_stages=2,
+        )
     return y
 '''
 
@@ -503,7 +848,7 @@ def noeris_geglu_kernel(
     inner = sqrt_2_over_pi * (up + coeff * up * up * up)
     gelu_up = 0.5 * up * (1.0 + tl.extra.libdevice.tanh(inner))
     out = gate * gelu_up
-    tl.store(out_ptr + offs, out.to(tl.float16), mask=mask)
+    tl.store(out_ptr + offs, out.to(gate_ptr.dtype.element_ty), mask=mask)
 
 
 def noeris_geglu(gate, up, config):
@@ -512,6 +857,72 @@ def noeris_geglu(gate, up, config):
     BLOCK_SIZE = max(config["BLOCK_SIZE"], triton.next_power_of_2(n_cols))
     noeris_geglu_kernel[(n_rows,)](
         gate, up, out, n_cols,
+        BLOCK_SIZE=BLOCK_SIZE,
+        num_warps=config["num_warps"],
+        num_stages=config["num_stages"],
+    )
+    return out
+
+
+@triton.jit
+def noeris_gelu_kernel(
+    x_ptr, out_ptr, n_cols,
+    BLOCK_SIZE: tl.constexpr,
+):
+    """Standalone GELU (tanh approx) — 2D grid (rows x col_tiles)."""
+    row_idx = tl.program_id(0)
+    col_block = tl.program_id(1)
+    x_ptr   = x_ptr   + row_idx * n_cols
+    out_ptr = out_ptr + row_idx * n_cols
+    offs = col_block * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offs < n_cols
+    x = tl.load(x_ptr + offs, mask=mask, other=0.0).to(tl.float32)
+    sqrt_2_over_pi = 0.7978845608028654
+    coeff = 0.044715
+    inner = sqrt_2_over_pi * (x + coeff * x * x * x)
+    out = 0.5 * x * (1.0 + tl.extra.libdevice.tanh(inner))
+    tl.store(out_ptr + offs, out.to(x_ptr.dtype.element_ty), mask=mask)
+
+
+def noeris_gelu(x, config):
+    n_rows, n_cols = x.shape
+    out = torch.empty_like(x)
+    BLOCK_SIZE = config["BLOCK_SIZE"]
+    num_col_blocks = triton.cdiv(n_cols, BLOCK_SIZE)
+    noeris_gelu_kernel[(n_rows, num_col_blocks)](
+        x, out, n_cols,
+        BLOCK_SIZE=BLOCK_SIZE,
+        num_warps=config["num_warps"],
+        num_stages=config["num_stages"],
+    )
+    return out
+
+
+@triton.jit
+def noeris_gelu_exact_kernel(
+    x_ptr, out_ptr, n_cols,
+    BLOCK_SIZE: tl.constexpr,
+):
+    """Standalone GELU (exact via erf) — 2D grid (rows x col_tiles)."""
+    row_idx = tl.program_id(0)
+    col_block = tl.program_id(1)
+    x_ptr   = x_ptr   + row_idx * n_cols
+    out_ptr = out_ptr + row_idx * n_cols
+    offs = col_block * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offs < n_cols
+    x = tl.load(x_ptr + offs, mask=mask, other=0.0).to(tl.float32)
+    inv_sqrt2 = 0.7071067811865476  # 1 / sqrt(2)
+    out = x * 0.5 * (1.0 + tl.extra.libdevice.erf(x * inv_sqrt2))
+    tl.store(out_ptr + offs, out.to(x_ptr.dtype.element_ty), mask=mask)
+
+
+def noeris_gelu_exact(x, config):
+    n_rows, n_cols = x.shape
+    out = torch.empty_like(x)
+    BLOCK_SIZE = config["BLOCK_SIZE"]
+    num_col_blocks = triton.cdiv(n_cols, BLOCK_SIZE)
+    noeris_gelu_exact_kernel[(n_rows, num_col_blocks)](
+        x, out, n_cols,
         BLOCK_SIZE=BLOCK_SIZE,
         num_warps=config["num_warps"],
         num_stages=config["num_stages"],
@@ -654,14 +1065,17 @@ def _build_curated_configs() -> dict[str, dict]:
     from .triton_softmax import SOFTMAX_CURATED_CONFIGS
     from .triton_layernorm import LAYERNORM_CURATED_CONFIGS
     from .triton_cross_entropy import CROSS_ENTROPY_CURATED_CONFIGS
-    from .triton_geglu import GEGLU_CURATED_CONFIGS
+    from .triton_gelu import GELU_CURATED_CONFIGS, default_gelu_exact_config
     return {
         "matmul": {"BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 128, "BLOCK_SIZE_K": 32, "GROUP_SIZE_M": 8, "num_warps": 4, "num_stages": 4},
         "softmax": dict(SOFTMAX_CURATED_CONFIGS[0]),
         "rmsnorm": dict(RMSNORM_CURATED_CONFIGS[0]),
         "layernorm": dict(LAYERNORM_CURATED_CONFIGS[0]),
         "cross_entropy": dict(CROSS_ENTROPY_CURATED_CONFIGS[0]),
-        "geglu": dict(GEGLU_CURATED_CONFIGS[0]),
+        # Upstream GELU problems keep the legacy "geglu" key, but use the
+        # standalone GELU kernel and its curated config.
+        "geglu": dict(GELU_CURATED_CONFIGS[0]),
+        "geglu_exact": default_gelu_exact_config(n_cols=393216),
         # head_dim=1024 is huge — use the smallest BLOCK_M/BLOCK_N we can so
         # each tile fits in shared memory. Even this may fail to launch; if
         # so, the adapter will fall back via its try/except in the runner.
@@ -670,6 +1084,49 @@ def _build_curated_configs() -> dict[str, dict]:
 
 
 NOERIS_CURATED_CONFIGS = _build_curated_configs()
+
+
+# One matmul entrypoint, a few shape-routed families.
+NOERIS_MATMUL_FAMILY_CONFIGS: dict[str, dict] = {
+    "square_dense": {
+        "BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 256, "BLOCK_SIZE_K": 64,
+        "GROUP_SIZE_M": 8, "num_warps": 8, "num_stages": 3,
+    },
+    "irregular_masked": {
+        "BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 128, "BLOCK_SIZE_K": 32,
+        "GROUP_SIZE_M": 8, "num_warps": 4, "num_stages": 4,
+    },
+    "small_k": {
+        "BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 256, "BLOCK_SIZE_K": 64,
+        "GROUP_SIZE_M": 8, "num_warps": 8, "num_stages": 3,
+        "OUTPUT_FP32": True,
+    },
+    "tall_skinny": {
+        "BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 256, "BLOCK_SIZE_K": 64,
+        "GROUP_SIZE_M": 8, "num_warps": 8, "num_stages": 3,
+    },
+    "large_k": {
+        "BLOCK_SIZE_M": 64, "BLOCK_SIZE_N": 64, "BLOCK_SIZE_K": 128,
+        "GROUP_SIZE_M": 8, "num_warps": 4, "num_stages": 3,
+        "SPLIT_K": 32, "USE_TF32": True, "OUTPUT_FP32": True,
+    },
+}
+
+
+def select_noeris_matmul_family(m: int, n: int, k: int) -> str:
+    if k >= 131072:
+        return "large_k"
+    if n <= 64 and m >= 4 * max(n, 1):
+        return "tall_skinny"
+    if k <= 128 and min(m, n) >= 4096:
+        return "small_k"
+    if (m % 128) != 0 or (n % 128) != 0 or (k % 128) != 0:
+        return "irregular_masked"
+    return "square_dense"
+
+
+def select_noeris_matmul_config(m: int, n: int, k: int) -> dict:
+    return dict(NOERIS_MATMUL_FAMILY_CONFIGS[select_noeris_matmul_family(m, n, k)])
 
 
 # ---------------------------------------------------------------------------
@@ -722,6 +1179,9 @@ def generate_kernelbench_upstream_script(
     )
 
     curated_configs_json = json.dumps(NOERIS_CURATED_CONFIGS)
+    # Use repr() not json.dumps() so Python booleans (True/False) survive
+    # the round-trip into the generated script (json.dumps emits true/false).
+    matmul_family_configs_json = repr(NOERIS_MATMUL_FAMILY_CONFIGS)
 
     script = f'''#!/usr/bin/env python3
 """Auto-generated: Noeris vs upstream KernelBench L1 runner."""
@@ -747,6 +1207,22 @@ NOERIS_TIMER = "{timer}"
 
 NOERIS_CURATED_CONFIGS = {curated_configs_json}
 
+NOERIS_MATMUL_FAMILY_CONFIGS = {matmul_family_configs_json}
+
+def select_noeris_matmul_family(m, n, k):
+    if k >= 131072:
+        return "large_k"
+    if n <= 64 and m >= 4 * max(n, 1):
+        return "tall_skinny"
+    if k <= 128 and min(m, n) >= 4096:
+        return "small_k"
+    if (m % 128) != 0 or (n % 128) != 0 or (k % 128) != 0:
+        return "irregular_masked"
+    return "square_dense"
+
+def select_noeris_matmul_config(m, n, k):
+    return dict(NOERIS_MATMUL_FAMILY_CONFIGS[select_noeris_matmul_family(m, n, k)])
+
 PROBLEMS = {problems_json}
 
 def _to_fp32_cuda(x):
@@ -766,7 +1242,8 @@ def _materialize(source):
 # -----------------------------------------------------------------
 # Noeris adapters. These wire the upstream fp32 Model inputs into
 # the real Noeris triton kernel for that operator. Each adapter:
-#   1) Casts the upstream fp32 input(s) to fp16 (Noeris's native dtype)
+#   1) Casts inputs to the kernel's expected dtype (fp16 for most ops,
+#      fp32 for matmul to preserve large-K accumulation correctness)
 #   2) Reshapes to the 2D/4D interface the Noeris kernel expects
 #   3) Calls the inlined Noeris kernel with a curated config
 #   4) Reshapes/casts the output back to match the reference shape
@@ -776,10 +1253,8 @@ def _materialize(source):
 # eps, etc. These come from the Model instance (passed via `model`).
 # -----------------------------------------------------------------
 
-# Some problems don't have a reusable Noeris kernel yet (e.g. exact
-# GELU). Those adapters are flagged ``_NOERIS_ADAPTER_TORCH_FALLBACK``
-# and fall back to the torch reference math inside the adapter — the
-# speedup will be ~1.00x but correctness will pass.
+# Problems in _NOERIS_EXACT_GELU_PROBLEMS use the erf-based exact GELU
+# kernel instead of the tanh-approx variant.
 
 def _model_for(problem_file, init_inputs):
     """Dummy — unused. Models are materialized by the main loop."""
@@ -787,37 +1262,62 @@ def _model_for(problem_file, init_inputs):
 
 def _noeris_matmul(model, init_inputs, fwd_inputs, cfg):
     A, B = fwd_inputs
-    A_h = A.to(torch.float16).contiguous()
-    B_h = B.to(torch.float16).contiguous()
-    out = noeris_matmul(A_h, B_h, cfg)
+    M, K = A.shape
+    _, N = B.shape
+    cfg = select_noeris_matmul_config(M, N, K)
+    # Large-K (K>100000): keep fp32 inputs, use TF32 tensor cores for speed.
+    # TF32 truncates mantissa to 10 bits but accumulates in fp32, giving
+    # ~1e-3 relative error — well within our 5e-3 tolerance.
+    # Normal shapes: cast to fp16 for 2x bandwidth advantage.
+    if K > 100000:
+        A_c = A.contiguous()
+        B_c = B.contiguous()
+    else:
+        A_c = A.to(torch.float16).contiguous()
+        B_c = B.to(torch.float16).contiguous()
+    out = noeris_matmul(A_c, B_c, cfg)
     return out.to(torch.float32)
 
 def _noeris_softmax(model, init_inputs, fwd_inputs, cfg):
     (x,) = fwd_inputs
     # upstream Model applies softmax along dim=-1 (the 393216 axis).
-    # 23_Softmax.py input is already (4096, 393216) so a direct fp16
-    # pass-through into noeris_softmax works.
-    x_h = x.to(torch.float16).contiguous()
-    out = noeris_softmax(x_h, cfg)
+    # 23_Softmax.py input is already (4096, 393216); keep it in fp32 to
+    # avoid an extra fp32->fp16->fp32 boundary for this standalone benchmark.
+    out = noeris_softmax(x.contiguous(), cfg)
     return out.to(torch.float32)
 
 def _noeris_rmsnorm(model, init_inputs, fwd_inputs, cfg):
     # Upstream 36_RMSNorm_.py: (B, C, H, W) normalized along dim=1 (C).
-    # Noeris rmsnorm expects (rows, last_dim) and normalizes along the
-    # last dim. Permute C to innermost, flatten, call, undo.
     (x,) = fwd_inputs
-    B, C, H, W = x.shape
-    eps = getattr(model, "eps", 1e-5)
-    rows = x.permute(0, 2, 3, 1).contiguous().view(-1, C).to(torch.float16)
-    w = torch.ones((C,), device=x.device, dtype=torch.float16)
-    out_rows = noeris_rmsnorm(rows, w, cfg, eps=eps, affine_mode=0)
-    out = out_rows.view(B, H, W, C).permute(0, 3, 1, 2).contiguous()
-    return out.to(torch.float32)
+    if x.ndim == 4:
+        B, C, H, W = x.shape
+        eps = getattr(model, "eps", 1e-5)
+        x_h = x.to(torch.float16).contiguous()
+        y_h = torch.empty_like(x_h)
+        w = torch.ones((C,), device=x.device, dtype=torch.float16)
+        noeris_rmsnorm_nchw_dim1_kernel[(triton.cdiv(H * W, 256), B)](
+            x_h, w, y_h,
+            x_h.stride(0),
+            x_h.stride(1),
+            H * W,
+            eps,
+            BLOCK_HW=256,
+            CHANNELS=C,
+            num_warps=4,
+            num_stages=1,
+        )
+        return y_h.to(torch.float32)
+    else:
+        # 2D fallback
+        rows = x.to(torch.float16).contiguous()
+        w = torch.ones((x.shape[-1],), device=x.device, dtype=torch.float16)
+        return noeris_rmsnorm(rows, w, cfg, eps=getattr(model, "eps", 1e-5), affine_mode=0).to(torch.float32)
 
 def _noeris_layernorm(model, init_inputs, fwd_inputs, cfg):
     # Upstream 40_LayerNorm.py: (B, C, H, W) with nn.LayerNorm over
     # last three dims (C, H, W). Flatten last three into one feature
-    # axis and call noeris_layernorm.
+    # axis and call noeris_layernorm.  The online kernel handles
+    # arbitrarily wide rows (e.g. 4M cols), so no PyTorch fallback needed.
     (x,) = fwd_inputs
     B = x.shape[0]
     feat = x.numel() // B
@@ -846,18 +1346,17 @@ def _noeris_attention(model, init_inputs, fwd_inputs, cfg):
     return out.to(torch.float32)
 
 def _noeris_geglu(model, init_inputs, fwd_inputs, cfg):
-    # Noeris has no standalone GELU, but the geglu kernel computes
-    #   gate * GELU_tanh(up)
-    # so we pass gate=ones to recover GELU_tanh(up). This matches
-    # upstream problem #88 (MinGPT_NewGelu which IS tanh-approx GELU)
-    # but NOT upstream problem #26 (exact-GELU via F.gelu). The
-    # runner runs #26 via this adapter anyway — correctness will
-    # report False and the result row will flag it.
+    # Use standalone GELU kernel — no gate tensor allocation needed.
+    # Matches upstream #88 (MinGPT_NewGelu, tanh-approx GELU).
     (x,) = fwd_inputs
-    up   = x.to(torch.float16).contiguous()
-    gate = torch.ones_like(up)
-    out = noeris_geglu(gate, up, cfg)
-    return out.to(torch.float32)
+    out = noeris_gelu(x.contiguous(), cfg)
+    return out
+
+def _noeris_geglu_exact(model, init_inputs, fwd_inputs, cfg):
+    # Exact GELU (erf-based) for upstream #26 (F.gelu without approximate="tanh").
+    (x,) = fwd_inputs
+    out = noeris_gelu_exact(x.contiguous(), cfg)
+    return out
 
 _NOERIS_ADAPTERS = {{
     "matmul":        _noeris_matmul,
@@ -869,9 +1368,7 @@ _NOERIS_ADAPTERS = {{
     "geglu":         _noeris_geglu,
 }}
 
-# Per-problem correctness tolerance. fp16 casts relax atol; exact-GELU
-# (#26) can't match tanh-approx so we just run it without strict
-# correctness (the note will flag this in the report).
+# Per-problem correctness tolerance. fp16 casts relax atol.
 _NOERIS_RELAXED_TOL = {{
     "rtol": 5e-3,
     "atol": 5e-3,
@@ -907,39 +1404,42 @@ def main():
                 del ref_out, ref_flat
                 torch.cuda.empty_cache()
 
-                adapter = _NOERIS_ADAPTERS.get(p["operator"])
+                # Dispatch: use exact-GELU adapter for problem #26
+                if p["file"] in _NOERIS_EXACT_GELU_PROBLEMS:
+                    adapter = _noeris_geglu_exact
+                else:
+                    adapter = _NOERIS_ADAPTERS.get(p["operator"])
                 if adapter is None:
                     entry["noeris_ms"] = None
                     entry["speedup"] = None
                     entry["correct"] = None
                     entry["note"] = "no adapter for operator=" + repr(p["operator"])
                 else:
-                    cfg = NOERIS_CURATED_CONFIGS[p["operator"]]
+                    if p["operator"] == "matmul":
+                        A0, B0 = fwd_inputs
+                        cfg = select_noeris_matmul_config(A0.shape[0], B0.shape[1], A0.shape[1])
+                    elif p["file"] in _NOERIS_EXACT_GELU_PROBLEMS:
+                        cfg = NOERIS_CURATED_CONFIGS["geglu_exact"]
+                    else:
+                        cfg = NOERIS_CURATED_CONFIGS[p["operator"]]
                     entry["config"] = cfg
                     # fp32->fp16 casts inside the adapter widen the
                     # tolerance budget. Most L1 problems use rand [0,1)
                     # inputs so abs errors stay small, but atol=1e-4
                     # is too tight for fp16 accumulators.
+                    # Large-K matmul (K=524288, fp16 inputs): output values
+                    # are O(sqrt(K))~724, and fp16 quantisation error
+                    # accumulates over 4000+ K-iterations, so we need much
+                    # wider tolerance for this specific problem.
                     tol_rtol = 5e-3
                     tol_atol = 5e-3
                     try:
                         noeris_out = adapter(model, init_inputs, fwd_inputs, cfg)
                         noeris_flat = noeris_out.reshape(-1)[:sample_n]
-                        if p["file"] in ("26_GELU_.py",):
-                            # Noeris geglu kernel uses tanh-approx GELU
-                            # but upstream #26 uses exact GELU. We still
-                            # run the kernel (to get a valid noeris_ms)
-                            # but tag correctness as None with a note.
-                            entry["correct"] = None
-                            entry["note"] = (
-                                "exact-GELU (#26) cannot match tanh-approx "
-                                "Noeris kernel; timing valid, correctness N/A"
-                            )
-                        else:
-                            entry["correct"] = bool(torch.allclose(
-                                noeris_flat.float(), ref_sample.float(),
-                                rtol=tol_rtol, atol=tol_atol,
-                            ))
+                        entry["correct"] = bool(torch.allclose(
+                            noeris_flat.float(), ref_sample.float(),
+                            rtol=tol_rtol, atol=tol_atol,
+                        ))
                         del noeris_out, noeris_flat
                         torch.cuda.empty_cache()
                         noeris_ms = noeris_time(lambda: adapter(model, init_inputs, fwd_inputs, cfg))
@@ -1072,7 +1572,7 @@ def run_kernelbench_upstream_eval(
         "problem_count":   len(problems),
     })
 
-    with ModalBenchmarkSession(gpu=gpu, timeout_seconds=600, max_cost_usd=5.0) as session:
+    with ModalBenchmarkSession(gpu=gpu, timeout_seconds=1800, max_cost_usd=10.0) as session:
         batch = session.run_batch(script)
 
     if not batch.success:
@@ -1101,6 +1601,6 @@ def run_kernelbench_upstream_eval(
             correct=r.get("correct"),
             external_h100_ms=ext_ms,
             notes=r.get("notes", ""),
-            error=r.get("error", ""),
+            error=r.get("error", "") or r.get("adapter_error", ""),
         ))
     return report

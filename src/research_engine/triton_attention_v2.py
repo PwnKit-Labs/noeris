@@ -33,6 +33,7 @@ References:
 from __future__ import annotations
 
 import json
+from functools import lru_cache
 from typing import Any
 
 from .triton_operators import TritonOperatorSpec, register_operator
@@ -206,45 +207,13 @@ def generate_attention_v2_grid(
 # Module-level launcher (lazy GPU imports)
 # ---------------------------------------------------------------------------
 
-def flash_attn_v2(
-    q, k, v, config=None, is_causal=False, sm_scale=None, window_size=-1,
-    use_qk_norm=False, q_scale=None, k_scale=None,
-    num_kv_heads=None, shared_kv=False,
-):
-    """Module-level FlashAttention-v2 launcher. Requires CUDA GPU.
 
-    Ported from the official Triton FA2 tutorial with Noeris extensions
-    (GQA, sliding-window tile-pruning, QK-norm, YOCO).
-
-    Args:
-        q: (B, H, S, D) fp16 tensor.
-        k: (B, H_kv, S, D) fp16 tensor.
-        v: (B, H_kv, S, D) fp16 tensor.
-        config: Triton config dict with BLOCK_M, BLOCK_N, num_warps, num_stages.
-            Defaults to the first curated config.
-        is_causal: Apply causal masking.
-        sm_scale: Softmax scale. Defaults to 1/sqrt(D).
-        window_size: Sliding-window size. -1 means full attention.
-        use_qk_norm: Fuse per-row RMSNorm into Q and K.
-        q_scale: (D,) fp32 scale weights for Q-norm.
-        k_scale: (D,) fp32 scale weights for K-norm.
-        num_kv_heads: Number of KV heads for GQA. Defaults to H (MHA).
-        shared_kv: YOCO-style KV sharing (skip K-norm).
-
-    Returns:
-        (B, H, S, D) fp16 output tensor.
-    """
-    import torch
+@lru_cache(maxsize=1)
+def _get_attention_v2_forward_kernel():
+    """Build the Triton kernels once so hot call sites reuse them."""
     import triton
     import triton.language as tl
 
-    if config is None:
-        config = ATTENTION_V2_CURATED_CONFIGS[0]
-
-    # -----------------------------------------------------------------
-    # Inner loop helper — mirrors the official tutorial's _attn_fwd_inner
-    # with Noeris extensions for sliding-window and QK-norm.
-    # -----------------------------------------------------------------
     @triton.jit
     def _attn_v2_inner(
         acc, l_i, m_i, q,
@@ -259,63 +228,39 @@ def flash_attn_v2(
         WINDOW_SIZE: tl.constexpr,
         USE_QK_NORM: tl.constexpr,
     ):
-        # Compute the [lo, hi) range for this stage.
-        # STAGE 1: off-band (before the diagonal) — no causal mask needed.
-        # STAGE 2: on-band (diagonal block) — apply causal + window masks.
-        # STAGE 3: full range (non-causal) — no mask.
         if STAGE == 1:
-            # Off-band: keys before the diagonal block.
-            # Align hi to BLOCK_N boundary so we don't miss/double-count
-            # keys when BLOCK_M != BLOCK_N.
             lo = 0
             hi = (start_m * BLOCK_M // BLOCK_N) * BLOCK_N
         elif STAGE == 2:
-            # On-band: diagonal block(s).
-            # Start where STAGE 1 left off (BLOCK_N-aligned).
             lo = (start_m * BLOCK_M // BLOCK_N) * BLOCK_N
-            # Cover through the last key that could be causally valid for
-            # any row in this Q-tile, rounded up to BLOCK_N boundary.
             hi = (((start_m + 1) * BLOCK_M + BLOCK_N - 1) // BLOCK_N) * BLOCK_N
             if hi > N:
                 hi = N
         else:
-            # Non-causal: full range
             lo = 0
             hi = N
 
-        # Sliding-window: tighten both lo AND hi to exclude keys outside window.
         if WINDOW_SIZE > 0:
             window_lo = start_m * BLOCK_M - WINDOW_SIZE + 1
             if window_lo < 0:
                 window_lo = 0
             if lo < window_lo:
-                # Align to BLOCK_N boundary (round down)
                 lo = (window_lo // BLOCK_N) * BLOCK_N
-            # Tighten hi: keys past the window end are irrelevant
-            # For causal STAGE 1, hi is already <= start_m*BLOCK_M which is fine.
-            # For non-causal STAGE 3, cap hi to the window upper bound.
             if STAGE == 3:
                 window_hi = (start_m + 1) * BLOCK_M + WINDOW_SIZE - 1
                 if window_hi < hi:
-                    # Align up to BLOCK_N boundary
                     hi = ((window_hi + BLOCK_N - 1) // BLOCK_N) * BLOCK_N
                     if hi > N:
                         hi = N
 
-        # Pre-compute window floor for the last (most restrictive) row of
-        # the Q-tile.  If an entire K-tile starts at or after this floor,
-        # every element is in-window for all Q rows — skip per-element mask.
         if WINDOW_SIZE > 0:
             tile_window_lo = (start_m + 1) * BLOCK_M - WINDOW_SIZE
 
         for start_n in range(lo, hi, BLOCK_N):
             curr_n = start_n + offs_n
-
-            # Tile-level bounds checks: skip per-element masking when safe
             tile_n_end = start_n + BLOCK_N
             tile_fully_in_bounds = tile_n_end <= N
 
-            # Load K tile — skip mask when tile is fully in bounds
             k_ptrs = K_base + curr_n[:, None] * stride_kn + offs_k[None, :] * stride_kk
             if tile_fully_in_bounds:
                 k = tl.load(k_ptrs)
@@ -323,7 +268,6 @@ def flash_attn_v2(
                 n_mask = curr_n[:, None] < N
                 k = tl.load(k_ptrs, mask=n_mask, other=0.0)
 
-            # Fused QK-norm on K (per-row RMSNorm)
             if USE_QK_NORM:
                 k = k.to(tl.float32)
                 k_sq = k * k
@@ -334,51 +278,36 @@ def flash_attn_v2(
                 k = k * k_scale_val[None, :]
                 k = k.to(tl.float16)
 
-            # QK dot product
             qk = tl.dot(q, tl.trans(k))
 
-            # On-band stage: apply causal mask before scaling
             if STAGE == 2:
-                NEG_INF = -1.0e6
+                neg_inf = -1.0e6
                 mask = offs_m[:, None] >= curr_n[None, :]
                 if not tile_fully_in_bounds:
-                    qk = tl.where(curr_n[None, :] < N, qk, NEG_INF)
-                qk = qk * qk_scale + tl.where(mask, 0, NEG_INF)
-                # Sliding-window mask on diagonal block
+                    qk = tl.where(curr_n[None, :] < N, qk, neg_inf)
+                qk = qk * qk_scale + tl.where(mask, 0, neg_inf)
                 if WINDOW_SIZE > 0:
                     window_floor = offs_m[:, None] - WINDOW_SIZE + 1
                     window_mask = curr_n[None, :] >= window_floor
-                    qk = tl.where(window_mask, qk, NEG_INF)
+                    qk = tl.where(window_mask, qk, neg_inf)
                 m_ij = tl.maximum(m_i, tl.max(qk, 1))
                 qk -= m_ij[:, None]
             else:
-                # Off-band or non-causal: scale first (consistent with on-band)
                 qk = qk * qk_scale
                 if not tile_fully_in_bounds:
                     qk = tl.where(curr_n[None, :] < N, qk, -1.0e6)
-                # Sliding-window: skip per-element mask when tile is fully inside window
-                if WINDOW_SIZE > 0:
-                    # tile_window_lo is the floor for the last row of Q-tile;
-                    # if start_n >= tile_window_lo, the entire K-tile is in-window
-                    # for all Q rows.
-                    if start_n < tile_window_lo:
-                        window_floor = offs_m[:, None] - WINDOW_SIZE + 1
-                        window_mask = curr_n[None, :] >= window_floor
-                        qk = tl.where(window_mask, qk, -1.0e6)
+                if WINDOW_SIZE > 0 and start_n < tile_window_lo:
+                    window_floor = offs_m[:, None] - WINDOW_SIZE + 1
+                    window_mask = curr_n[None, :] >= window_floor
+                    qk = tl.where(window_mask, qk, -1.0e6)
                 m_ij = tl.maximum(m_i, tl.max(qk, 1))
                 qk -= m_ij[:, None]
 
-            # exp2-based softmax (numerically stable)
             p = tl.math.exp2(qk)
-
-            # Correction factor for running max update
             alpha = tl.math.exp2(m_i - m_ij)
             l_ij = tl.sum(p, 1)
-
-            # Update accumulator
             acc = acc * alpha[:, None]
 
-            # Load V tile and accumulate — skip mask when tile is in bounds
             v_ptrs = V_base + curr_n[:, None] * stride_vn + offs_k[None, :] * stride_vk
             if tile_fully_in_bounds:
                 v = tl.load(v_ptrs)
@@ -388,15 +317,11 @@ def flash_attn_v2(
             p = p.to(v.dtype)
             acc = tl.dot(p, v, acc)
 
-            # Update running stats (at end of iteration to reduce register pressure)
             l_i = l_i * alpha + l_ij
             m_i = m_ij
 
         return acc, l_i, m_i
 
-    # -----------------------------------------------------------------
-    # Main forward kernel — two-stage causal (official tutorial pattern)
-    # -----------------------------------------------------------------
     @triton.jit
     def _attn_v2_fwd(
         Q, K, V, Out,
@@ -420,7 +345,6 @@ def flash_attn_v2(
         off_bh = tl.program_id(1)
         off_b = off_bh // H
         off_h = off_bh % H
-        # GQA: map Q head to KV head
         off_kvh = off_h // GROUP_SIZE
 
         q_base = Q + off_b * stride_qb + off_h * stride_qh
@@ -432,12 +356,10 @@ def flash_attn_v2(
         offs_k = tl.arange(0, HEAD_DIM)
         offs_n = tl.arange(0, BLOCK_N)
 
-        # Load Q — stays in SRAM for the entire tile loop
         q_ptrs = q_base + offs_m[:, None] * stride_qm + offs_k[None, :] * stride_qk
         q_mask = offs_m[:, None] < M
         q = tl.load(q_ptrs, mask=q_mask, other=0.0)
 
-        # Fused QK-norm on Q (per-row RMSNorm)
         if USE_QK_NORM:
             q = q.to(tl.float32)
             q_sq = q * q
@@ -448,16 +370,12 @@ def flash_attn_v2(
             q = q * q_scale_val[None, :]
             q = q.to(tl.float16)
 
-        # Initialize online softmax state (official tutorial convention):
-        # m_i = -inf, l_i = 1.0
         m_i = tl.zeros([BLOCK_M], dtype=tl.float32) - float("inf")
         l_i = tl.zeros([BLOCK_M], dtype=tl.float32) + 1.0
         acc = tl.zeros([BLOCK_M, HEAD_DIM], dtype=tl.float32)
-
-        qk_scale = sm_scale * 1.44269504  # log2(e) for tl.exp2
+        qk_scale = sm_scale * 1.44269504
 
         if IS_CAUSAL:
-            # Stage 1: off-band (keys before diagonal) — no causal mask
             acc, l_i, m_i = _attn_v2_inner(
                 acc, l_i, m_i, q,
                 k_base, v_base, QScale, KScale,
@@ -471,7 +389,6 @@ def flash_attn_v2(
                 WINDOW_SIZE=WINDOW_SIZE,
                 USE_QK_NORM=USE_QK_NORM,
             )
-            # Stage 2: on-band (diagonal block) — causal mask applied
             acc, l_i, m_i = _attn_v2_inner(
                 acc, l_i, m_i, q,
                 k_base, v_base, QScale, KScale,
@@ -486,7 +403,6 @@ def flash_attn_v2(
                 USE_QK_NORM=USE_QK_NORM,
             )
         else:
-            # Non-causal: single pass over all keys
             acc, l_i, m_i = _attn_v2_inner(
                 acc, l_i, m_i, q,
                 k_base, v_base, QScale, KScale,
@@ -501,17 +417,24 @@ def flash_attn_v2(
                 USE_QK_NORM=USE_QK_NORM,
             )
 
-        # Epilogue: normalize by softmax denominator
         acc = acc / l_i[:, None]
-
-        # Store output
         o_ptrs = o_base + offs_m[:, None] * stride_om + offs_k[None, :] * stride_ok
         tl.store(o_ptrs, acc.to(Out.dtype.element_ty), mask=q_mask)
 
-    # -----------------------------------------------------------------
-    # Launch
-    # -----------------------------------------------------------------
+    return _attn_v2_fwd
+
+
+def flash_attn_v2(
+    q, k, v, config=None, is_causal=False, sm_scale=None, window_size=-1,
+    use_qk_norm=False, q_scale=None, k_scale=None,
+    num_kv_heads=None, shared_kv=False,
+):
+    """Module-level FlashAttention-v2 launcher. Requires CUDA GPU."""
     import torch
+    import triton
+
+    if config is None:
+        config = ATTENTION_V2_CURATED_CONFIGS[0]
 
     B, H, M, D = q.shape
     _, Hk, N, Dk = k.shape
@@ -529,16 +452,17 @@ def flash_attn_v2(
     if sm_scale is None:
         sm_scale = 1.0 / (D ** 0.5)
     out = torch.empty_like(q)
-    BLOCK_M = config["BLOCK_M"]
-    BLOCK_N = config["BLOCK_N"]
+    block_m = config["BLOCK_M"]
+    block_n = config["BLOCK_N"]
 
     if q_scale is None:
         q_scale = torch.ones(D, device=q.device, dtype=torch.float32)
     if k_scale is None:
         k_scale = torch.ones(D, device=k.device, dtype=torch.float32)
 
-    grid = (triton.cdiv(M, BLOCK_M), B * H, 1)
-    _attn_v2_fwd[grid](
+    attn_v2_fwd = _get_attention_v2_forward_kernel()
+    grid = (triton.cdiv(M, block_m), B * H, 1)
+    attn_v2_fwd[grid](
         q, k, v, out,
         q_scale, k_scale,
         q.stride(0), q.stride(1), q.stride(2), q.stride(3),
@@ -550,8 +474,8 @@ def flash_attn_v2(
         HEAD_DIM=D,
         NUM_KV_HEADS=num_kv_heads,
         GROUP_SIZE=group_size,
-        BLOCK_M=BLOCK_M,
-        BLOCK_N=BLOCK_N,
+        BLOCK_M=block_m,
+        BLOCK_N=block_n,
         IS_CAUSAL=is_causal,
         WINDOW_SIZE=window_size,
         USE_QK_NORM=use_qk_norm,

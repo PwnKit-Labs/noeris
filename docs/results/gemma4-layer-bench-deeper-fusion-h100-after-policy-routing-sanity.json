@@ -1,0 +1,30 @@
+{
+  "hardware": {
+    "gpu": "NVIDIA H100 80GB HBM3",
+    "cuda_version": "13.0",
+    "python": "3.11.12"
+  },
+  "layer_results": [
+    {
+      "name": "gemma4_31b_local",
+      "layer_speedup": 1.2569,
+      "noeris_fused_ms": 4.4256,
+      "pytorch_separated_ms": 5.5624,
+      "correct": true
+    },
+    {
+      "name": "gemma4_31b_global",
+      "layer_speedup": 1.1722,
+      "noeris_fused_ms": 6.0324,
+      "pytorch_separated_ms": 7.0715,
+      "correct": true
+    },
+    {
+      "name": "gemma4_e2b_local",
+      "layer_speedup": 2.3211,
+      "noeris_fused_ms": 0.9054,
+      "pytorch_separated_ms": 2.1015,
+      "correct": true
+    }
+  ]
+}

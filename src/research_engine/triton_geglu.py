@@ -197,12 +197,15 @@ def _ensure_triton_geglu():
         def _geglu_kernel(
             gate_ptr, up_ptr, out_ptr,
             n_cols,
+            stride_gate_row,
+            stride_up_row,
+            stride_out_row,
             BLOCK_SIZE: tl.constexpr,
         ):
             row_idx = tl.program_id(0)
-            gate_ptr = gate_ptr + row_idx * n_cols
-            up_ptr = up_ptr + row_idx * n_cols
-            out_ptr = out_ptr + row_idx * n_cols
+            gate_ptr = gate_ptr + row_idx * stride_gate_row
+            up_ptr = up_ptr + row_idx * stride_up_row
+            out_ptr = out_ptr + row_idx * stride_out_row
             offs = tl.arange(0, BLOCK_SIZE)
             mask = offs < n_cols
             gate = tl.load(gate_ptr + offs, mask=mask, other=0.0).to(tl.float32)
@@ -245,11 +248,15 @@ def geglu(gate, up, config=None):
         config = GEGLU_CURATED_CONFIGS[0]
 
     n_rows, n_cols = gate.shape
+    assert up.shape == gate.shape, f"Shape mismatch: gate={gate.shape}, up={up.shape}"
     out = torch.empty_like(gate)
     BLOCK_SIZE = max(config["BLOCK_SIZE"], triton.next_power_of_2(n_cols))
     _geglu_kernel_compiled[(n_rows,)](
         gate, up, out,
         n_cols,
+        gate.stride(0),
+        up.stride(0),
+        out.stride(0),
         BLOCK_SIZE=BLOCK_SIZE,
         num_warps=config["num_warps"],
         num_stages=config["num_stages"],
@@ -287,6 +294,9 @@ def geglu_kernel(
     up_ptr,
     out_ptr,
     n_cols,
+    stride_gate_row,
+    stride_up_row,
+    stride_out_row,
     BLOCK_SIZE: tl.constexpr,
 ):
     """Fused GeGLU: out[row, col] = gate[row, col] * GELU_tanh(up[row, col]).
@@ -296,9 +306,9 @@ def geglu_kernel(
         GELU(x) = 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
     """
     row_idx = tl.program_id(0)
-    gate_ptr = gate_ptr + row_idx * n_cols
-    up_ptr   = up_ptr   + row_idx * n_cols
-    out_ptr  = out_ptr  + row_idx * n_cols
+    gate_ptr = gate_ptr + row_idx * stride_gate_row
+    up_ptr   = up_ptr   + row_idx * stride_up_row
+    out_ptr  = out_ptr  + row_idx * stride_out_row
 
     offs = tl.arange(0, BLOCK_SIZE)
     mask = offs < n_cols
@@ -323,11 +333,15 @@ def geglu_kernel(
 def geglu(gate, up, config):
     """Run fused GeGLU with the given config."""
     n_rows, n_cols = gate.shape
+    assert up.shape == gate.shape, f"Shape mismatch: gate={{gate.shape}}, up={{up.shape}}"
     out = torch.empty_like(gate)
     BLOCK_SIZE = max(config["BLOCK_SIZE"], triton.next_power_of_2(n_cols))
     geglu_kernel[(n_rows,)](
         gate, up, out,
         n_cols,
+        gate.stride(0),
+        up.stride(0),
+        out.stride(0),
         BLOCK_SIZE=BLOCK_SIZE,
         num_warps=config["num_warps"],
         num_stages=config["num_stages"],

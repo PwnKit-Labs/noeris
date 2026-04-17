@@ -1,0 +1,66 @@
+{
+  "runs": [
+    {
+      "run_index": 1,
+      "hardware": {
+        "gpu": "NVIDIA A100-SXM4-40GB",
+        "cuda_version": "13.0",
+        "python": "3.11.12"
+      },
+      "layer_results": [
+        {
+          "name": "gemma4_31b_local",
+          "layer_speedup": 1.1474,
+          "noeris_fused_ms": 11.6244,
+          "pytorch_separated_ms": 13.3376,
+          "correct": true
+        },
+        {
+          "name": "gemma4_31b_global",
+          "layer_speedup": 1.0721,
+          "noeris_fused_ms": 14.4845,
+          "pytorch_separated_ms": 15.529,
+          "correct": true
+        },
+        {
+          "name": "gemma4_e2b_local",
+          "layer_speedup": 1.8508,
+          "noeris_fused_ms": 2.8406,
+          "pytorch_separated_ms": 5.2572,
+          "correct": true
+        }
+      ]
+    },
+    {
+      "run_index": 2,
+      "hardware": {
+        "gpu": "NVIDIA A100-SXM4-40GB",
+        "cuda_version": "13.0",
+        "python": "3.11.12"
+      },
+      "layer_results": [
+        {
+          "name": "gemma4_31b_local",
+          "layer_speedup": 1.1433,
+          "noeris_fused_ms": 11.7596,
+          "pytorch_separated_ms": 13.4451,
+          "correct": true
+        },
+        {
+          "name": "gemma4_31b_global",
+          "layer_speedup": 1.0721,
+          "noeris_fused_ms": 14.507,
+          "pytorch_separated_ms": 15.5525,
+          "correct": true
+        },
+        {
+          "name": "gemma4_e2b_local",
+          "layer_speedup": 2.3154,
+          "noeris_fused_ms": 2.2856,
+          "pytorch_separated_ms": 5.292,
+          "correct": true
+        }
+      ]
+    }
+  ]
+}

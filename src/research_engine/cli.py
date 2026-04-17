@@ -281,7 +281,7 @@ def build_parser() -> argparse.ArgumentParser:
     triton_parser.add_argument(
         "--operator",
         default="matmul",
-        choices=["matmul", "rmsnorm", "softmax", "layernorm", "cross_entropy", "attention", "rotary", "geglu"],
+        choices=["matmul", "rmsnorm", "softmax", "layernorm", "cross_entropy", "attention", "attention_v2", "rotary", "geglu", "fused_norm_linear"],
         help="which Triton operator to search",
     )
     triton_parser.add_argument(
@@ -338,7 +338,7 @@ def build_parser() -> argparse.ArgumentParser:
     kb_parser.add_argument(
         "--operator",
         default="",
-        choices=["", "matmul", "rmsnorm", "softmax", "layernorm", "cross_entropy", "attention", "rotary", "geglu"],
+        choices=["", "matmul", "rmsnorm", "softmax", "layernorm", "cross_entropy", "attention", "attention_v2", "rotary", "geglu"],
         help="restrict to one operator, or leave empty for all",
     )
     kb_parser.add_argument(
@@ -411,7 +411,7 @@ def build_parser() -> argparse.ArgumentParser:
     ablation_parser.add_argument(
         "--operator",
         required=True,
-        choices=["matmul", "rmsnorm", "softmax", "layernorm", "cross_entropy", "attention", "rotary", "geglu"],
+        choices=["matmul", "rmsnorm", "softmax", "layernorm", "cross_entropy", "attention", "attention_v2", "rotary", "geglu", "fused_norm_linear"],
     )
     ablation_parser.add_argument("--gpu", default="A100")
     ablation_parser.add_argument("--trials", type=int, default=1,
@@ -451,8 +451,14 @@ def build_parser() -> argparse.ArgumentParser:
     kb_l4_parser.add_argument(
         "--dry-run",
         action="store_true",
-        default=True,
-        help="Generate and print the benchmark script without executing (default: true).",
+        default=False,
+        help="Generate and print the benchmark script without executing.",
+    )
+    kb_l4_parser.add_argument(
+        "--run",
+        action="store_true",
+        default=False,
+        help="Execute the benchmark on Modal GPU (requires modal setup).",
     )
 
     kb_hf_parser = subparsers.add_parser(
@@ -480,13 +486,37 @@ def build_parser() -> argparse.ArgumentParser:
     gemma4_parser.add_argument(
         "--output",
         default="",
-        help="path to write the generated script (default: print to stdout)",
+        help="when generating only, write the script here; with --run, write JSON results here",
+    )
+    gemma4_parser.add_argument(
+        "--run",
+        action="store_true",
+        default=False,
+        help="run the benchmark remotely on Modal instead of only generating the script",
+    )
+    gemma4_parser.add_argument(
+        "--gpu",
+        default="A100",
+        choices=["T4", "A10G", "A100", "A100-80GB", "H100"],
+        help="remote GPU to use with --run",
+    )
+    gemma4_parser.add_argument(
+        "--timeout-seconds",
+        type=int,
+        default=1800,
+        help="remote timeout for --run",
+    )
+    gemma4_parser.add_argument(
+        "--max-cost-usd",
+        type=float,
+        default=2.00,
+        help="per-session Modal cost cap for --run",
     )
     gemma4_parser.add_argument(
         "--dry-run",
         action="store_true",
-        default=True,
-        help="generate and print the benchmark script without executing (default: true)",
+        default=False,
+        help="generate and print the benchmark script without executing",
     )
 
     train_parser = subparsers.add_parser(
@@ -962,6 +992,30 @@ def _run_kernelbench_l4_eval(args) -> int:
     else:
         problems = None  # default: top-5 attack order
 
+    # --run: execute on Modal GPU
+    if args.run:
+        from .kernelbench_l4 import run_l4_benchmark_on_modal
+        result = run_l4_benchmark_on_modal(
+            gpu=args.gpu,
+            problems=problems,
+        )
+        if result.get("success"):
+            print(json.dumps(result["results"], indent=2))
+            if args.output:
+                out = _Path(args.output)
+                out.parent.mkdir(parents=True, exist_ok=True)
+                out.write_text(json.dumps(result["results"], indent=2) + "\n")
+                print(f"\nResults written to {out}")
+        else:
+            print("L4 benchmark FAILED:", file=sys.stderr)
+            print(result.get("error", "unknown error"), file=sys.stderr)
+            if result.get("stdout"):
+                print("\n--- stdout tail ---", file=sys.stderr)
+                print(result["stdout"][-2000:], file=sys.stderr)
+            return 1
+        return 0
+
+    # Script generation mode
     script = generate_l4_benchmark_script(problems)
 
     if args.output:
@@ -974,6 +1028,7 @@ def _run_kernelbench_l4_eval(args) -> int:
 
     if args.dry_run:
         print("\n# --dry-run is active; script printed but not executed.", file=sys.stderr)
+        print("# Use --run to execute on Modal GPU.", file=sys.stderr)
 
     return 0
 
@@ -993,19 +1048,60 @@ def _run_kernelbench_hf_coverage(args) -> int:
 def _run_gemma4_layer_bench(args) -> int:
     """Generate (and optionally run) the Gemma 4 decoder layer benchmark."""
     from .gemma4_layer_benchmark import generate_gemma4_layer_benchmark_script
+    from .modal_session import ModalBenchmarkSession, ModalBudgetExceeded
 
     script = generate_gemma4_layer_benchmark_script()
+
+    if not args.run:
+        if args.output:
+            out = _Path(args.output)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(script)
+            print(f"Benchmark script written to {out}")
+        else:
+            print(script)
+
+    if args.dry_run or not args.run:
+        print("\n# --dry-run is active; script printed but not executed.", file=sys.stderr)
+        return 0
+
+    source_dir = _Path(__file__).resolve().parent
+    try:
+        with ModalBenchmarkSession(
+            gpu=args.gpu,
+            timeout_seconds=args.timeout_seconds,
+            max_cost_usd=args.max_cost_usd,
+            local_source_dir=str(source_dir),
+        ) as session:
+            result = session.run_script(script)
+    except ModalBudgetExceeded as exc:
+        print(json.dumps({"error": str(exc)}, indent=2))
+        return 1
+
+    if not result.success:
+        print(json.dumps(
+            {
+                "error": result.error,
+                "stderr": result.stderr[-2000:],
+                "stdout": result.stdout[-2000:],
+            },
+            indent=2,
+        ))
+        return 1
+
+    payload = {
+        "hardware": result.hardware,
+        "layer_results": result.extra.get("layer_results", result.config_results),
+        "config_results": result.config_results,
+    }
 
     if args.output:
         out = _Path(args.output)
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(script)
-        print(f"Benchmark script written to {out}")
+        out.write_text(json.dumps(payload, indent=2) + "\n")
+        print(f"Gemma 4 benchmark results written to {out}")
     else:
-        print(script)
-
-    if args.dry_run:
-        print("\n# --dry-run is active; script printed but not executed.", file=sys.stderr)
+        print(json.dumps(payload, indent=2))
 
     return 0
 
@@ -1243,7 +1339,7 @@ def _run_generic_operator_iterate(*, spec, args, db, shapes) -> int:
         recorded = []
         for shape_result in shape_results:
             if shape_result.get("correct") and shape_result.get("tflops"):
-                shape_info = _parse_operator_shape(operator_name, shape_result["shape"])
+                shape_info = _parse_operator_shape(operator_name, shape_result["shape"], shape_result)
                 bucket = spec.shape_bucket_fn(shape_info)
                 metric_value = shape_result["tflops"]  # tflops field = gb_per_s for memory-bound
                 is_new_best = db.record_result(
@@ -1296,21 +1392,27 @@ def _run_generic_operator_iterate(*, spec, args, db, shapes) -> int:
     return 0
 
 
-def _parse_operator_shape(operator_name: str, shape_str: str) -> dict:
+def _parse_operator_shape(operator_name: str, shape_str: str, shape_result: dict | None = None) -> dict:
     """Parse shape string like '2048x2048x2048' or '4096x768' into a dict."""
     parts = shape_str.split("x")
-    if operator_name == "matmul":
+    extras = shape_result or {}
+    if operator_name in ("matmul", "fused_norm_linear"):
         return {"M": int(parts[0]), "N": int(parts[1]), "K": int(parts[2])}
     elif operator_name in ("rmsnorm", "layernorm"):
         return {"n_rows": int(parts[0]), "hidden_dim": int(parts[1])}
     elif operator_name in ("softmax", "cross_entropy"):
         return {"n_rows": int(parts[0]), "n_cols": int(parts[1])}
-    elif operator_name == "attention":
+    elif operator_name in ("attention", "attention_v2"):
         return {
             "batch": int(parts[0]),
             "heads": int(parts[1]),
             "seq_len": int(parts[2]),
             "head_dim": int(parts[3]),
+            "num_kv_heads": int(extras.get("num_kv_heads", int(parts[1]))),
+            "is_causal": bool(extras.get("is_causal", False)),
+            "window_size": int(extras.get("window_size", -1)),
+            "use_qk_norm": bool(extras.get("use_qk_norm", False)),
+            "shared_kv": bool(extras.get("shared_kv", False)),
         }
     elif operator_name == "rotary":
         return {

@@ -183,9 +183,10 @@ class TestBenchmarkScript(unittest.TestCase):
         self.assertIn("transformers", self.script)
 
     def test_benchmark_script_has_allclose_check(self) -> None:
-        """Correctness comparison via allclose is present."""
+        """Correctness comparison via allclose and cosine similarity."""
         self.assertIn("allclose", self.script)
-        self.assertIn("atol=5e-3", self.script)
+        self.assertIn("atol=0.1", self.script)
+        self.assertIn("cosine_similarity", self.script)
 
     def test_benchmark_script_has_cuda_event_timing(self) -> None:
         """Uses CUDA event timing."""

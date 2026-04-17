@@ -133,9 +133,9 @@ class TestScriptGeneration(unittest.TestCase):
             self.assertIn(f'"{op}"', script)
 
     def test_generated_script_has_allclose_fp16_tolerance(self) -> None:
-        # Noeris adapters cast fp32 -> fp16 at the kernel boundary, so
-        # the strict upstream 1e-4 tolerance is too tight. We relax to
-        # 5e-3 which is what fp16 accumulation error typically demands.
+        # Several adapters still cross reduced-precision boundaries
+        # (fp16 and/or TF32), so the strict upstream 1e-4 tolerance is
+        # too tight for the generated apples-to-apples runner.
         script = generate_kernelbench_upstream_script([UPSTREAM_PROBLEMS[0]])
         self.assertIn("5e-3", script)
 
@@ -173,19 +173,24 @@ class TestScriptGeneration(unittest.TestCase):
             self.assertIn("def " + kernel, script,
                           f"generated script missing @triton.jit kernel {kernel!r}")
 
-    def test_generated_script_casts_to_fp16_at_boundary(self) -> None:
+    def test_generated_script_preserves_fp32_boundary_for_softmax(self) -> None:
         script = generate_kernelbench_upstream_script(UPSTREAM_PROBLEMS)
-        # Every adapter casts fp32 upstream inputs to fp16 for the
-        # kernel call.
-        self.assertIn("torch.float16", script)
+        self.assertIn("out = noeris_softmax(x.contiguous(), cfg)", script)
         self.assertIn(".to(torch.float32)", script)
 
     def test_generated_script_threads_curated_configs(self) -> None:
         script = generate_kernelbench_upstream_script(UPSTREAM_PROBLEMS)
         # Each adapter is called with cfg = NOERIS_CURATED_CONFIGS[op]
         self.assertIn("NOERIS_CURATED_CONFIGS", script)
+        self.assertIn('cfg = NOERIS_CURATED_CONFIGS["geglu_exact"]', script)
         # attention uses small BLOCK_M for head_dim=1024 safety
         self.assertIn("BLOCK_M", script)
+
+    def test_generated_script_uses_strided_rmsnorm_for_upstream_4d_case(self) -> None:
+        script = generate_kernelbench_upstream_script(UPSTREAM_PROBLEMS)
+        self.assertIn("noeris_rmsnorm_nchw_dim1_kernel", script)
+        self.assertIn("x_h = x.to(torch.float16).contiguous()", script)
+        self.assertIn("BLOCK_HW=256", script)
 
     def test_generated_script_does_not_use_torch_reference_for_matmul(self) -> None:
         # Regression guard for issue #41: the matmul adapter must NOT
@@ -194,13 +199,19 @@ class TestScriptGeneration(unittest.TestCase):
             [p for p in UPSTREAM_PROBLEMS if p.noeris_operator == "matmul"][:1]
         )
         # The adapter should call the inlined noeris_matmul launcher.
-        self.assertIn("out = noeris_matmul(A_h, B_h, cfg)", script)
+        self.assertIn("out = noeris_matmul(", script)
 
     def test_curated_configs_cover_all_operators(self) -> None:
         from research_engine.kernelbench_upstream import NOERIS_CURATED_CONFIGS
         for op in ("matmul", "softmax", "rmsnorm", "layernorm",
                    "cross_entropy", "attention", "geglu"):
             self.assertIn(op, NOERIS_CURATED_CONFIGS)
+
+    def test_curated_configs_include_exact_gelu_variant(self) -> None:
+        from research_engine.kernelbench_upstream import NOERIS_CURATED_CONFIGS
+
+        self.assertIn("geglu_exact", NOERIS_CURATED_CONFIGS)
+        self.assertEqual(NOERIS_CURATED_CONFIGS["geglu_exact"]["BLOCK_SIZE"], 4096)
 
 
 class TestReportRendering(unittest.TestCase):

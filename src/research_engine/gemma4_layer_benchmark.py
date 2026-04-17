@@ -107,6 +107,7 @@ from research_engine.triton_rmsnorm import rmsnorm as _noeris_rmsnorm_raw
 from research_engine.triton_qk_norm_rope import apply_qk_norm_rope as _noeris_qk_norm_rope_raw
 from research_engine.triton_geglu import geglu as _noeris_geglu_raw
 from research_engine.triton_attention_v2 import flash_attn_v2 as _noeris_flash_attn_raw
+from research_engine.triton_fused_norm_matmul import fused_rmsnorm_linear as _noeris_fused_norm_linear_raw
 
 
 LAYER_CONFIGS = json.loads({configs_json!r})
@@ -116,15 +117,121 @@ LAYER_CONFIGS = json.loads({configs_json!r})
 # Noeris operator wrappers (delegate to installed Triton kernels)
 # =============================================================================
 
-# Default configs that work well on T4/A100/H100
+# Benchmark configs for the currently tested Gemma layer shapes.
 _RMSNORM_CONFIG = {{"BLOCK_SIZE": 128, "num_warps": 4, "num_stages": 1}}
 _QK_NORM_ROPE_CONFIG = {{"BLOCK_SIZE": 128, "num_warps": 4, "num_stages": 1}}
-_GEGLU_CONFIG = {{"BLOCK_SIZE": 128, "num_warps": 4, "num_stages": 1}}
-_ATTN_CONFIG = {{"BLOCK_M": 32, "BLOCK_N": 32, "num_warps": 2, "num_stages": 3}}
+_GEGLU_CONFIG = {{"BLOCK_SIZE": 128, "num_warps": 16, "num_stages": 1}}
+_FUSED_NORM_LINEAR_CONFIG_PREFILL = {{"BLOCK_M": 128, "BLOCK_N": 256, "BLOCK_K": 64, "num_warps": 8, "num_stages": 3}}
+_FUSED_NORM_LINEAR_CONFIG_31B = {{"BLOCK_M": 128, "BLOCK_N": 256, "BLOCK_K": 64, "num_warps": 8, "num_stages": 3}}
+_ATTN_CONFIG_LOCAL = {{"BLOCK_M": 64, "BLOCK_N": 64, "num_warps": 4, "num_stages": 3}}
+_ATTN_CONFIG_GLOBAL = {{"BLOCK_M": 32, "BLOCK_N": 32, "num_warps": 4, "num_stages": 2}}
+
+_FUSED_NORM_LINEAR_CONFIG_POLICY = {{
+    "default": {{
+        "31b_prefill": _FUSED_NORM_LINEAR_CONFIG_31B,
+        "prefill": _FUSED_NORM_LINEAR_CONFIG_PREFILL,
+        "decode": None,
+    }},
+    "a100": {{
+        "31b_prefill": _FUSED_NORM_LINEAR_CONFIG_31B,
+        "prefill": _FUSED_NORM_LINEAR_CONFIG_PREFILL,
+        "decode": None,
+    }},
+    "h100": {{
+        "31b_prefill": _FUSED_NORM_LINEAR_CONFIG_31B,
+        "prefill": _FUSED_NORM_LINEAR_CONFIG_PREFILL,
+        "decode": None,
+    }},
+}}
+
+_ATTN_CONFIG_POLICY = {{
+    "default": {{
+        "31b_global": _ATTN_CONFIG_GLOBAL,
+        "local": _ATTN_CONFIG_LOCAL,
+    }},
+    "a100": {{
+        "31b_global": _ATTN_CONFIG_GLOBAL,
+        "local": _ATTN_CONFIG_LOCAL,
+    }},
+    "h100": {{
+        "31b_global": _ATTN_CONFIG_GLOBAL,
+        "local": _ATTN_CONFIG_LOCAL,
+    }},
+}}
+
+_GEGLU_CONFIG_POLICY = {{
+    "default": {{
+        "31b": _GEGLU_CONFIG,
+        "default": _GEGLU_CONFIG,
+    }},
+    "a100": {{
+        "31b": _GEGLU_CONFIG,
+        "default": _GEGLU_CONFIG,
+    }},
+    "h100": {{
+        "31b": _GEGLU_CONFIG,
+        "default": _GEGLU_CONFIG,
+    }},
+}}
+
+
+def gpu_family_name():
+    name = torch.cuda.get_device_name(0).upper()
+    if "H100" in name:
+        return "h100"
+    if "A100" in name:
+        return "a100"
+    return "default"
+
+
+def fused_norm_linear_profile(m, n, k):
+    if m >= 1024 and k >= 4096:
+        return "31b_prefill"
+    if m >= 1024:
+        return "prefill"
+    return "decode"
+
+
+def attention_profile(head_dim, window_size):
+    if head_dim >= 512 and window_size <= 0:
+        return "31b_global"
+    return "local"
+
+
+def geglu_profile(ffn_dim):
+    if ffn_dim >= 21504:
+        return "31b"
+    return "default"
 
 def noeris_rmsnorm(x, w, eps=1e-6):
     """RMSNorm via the canonical Triton kernel (Gemma affine_mode=1)."""
     return _noeris_rmsnorm_raw(x, w, _RMSNORM_CONFIG, eps=eps, affine_mode=1)
+
+
+def fused_norm_linear_config_for_shape(m, n, k):
+    """Select fused-norm-linear config via hardware+shape policy."""
+    gpu = gpu_family_name()
+    profile = fused_norm_linear_profile(m, n, k)
+    policy = _FUSED_NORM_LINEAR_CONFIG_POLICY.get(gpu, _FUSED_NORM_LINEAR_CONFIG_POLICY["default"])
+    return policy.get(profile, None)
+
+
+def noeris_fused_norm_linear(x, w, linear_weight, eps=1e-6, linear_weight_is_pretransposed=False):
+    """Fuse Gemma RMSNorm with the following linear projection."""
+    if linear_weight_is_pretransposed:
+        n = linear_weight.shape[1]
+    else:
+        n = linear_weight.shape[0]
+    config = fused_norm_linear_config_for_shape(x.shape[0], n, x.shape[1])
+    return _noeris_fused_norm_linear_raw(
+        x,
+        w,
+        linear_weight,
+        eps=eps,
+        affine_mode=1,
+        config=config,
+        linear_weight_is_pretransposed=linear_weight_is_pretransposed,
+    )
 
 
 def noeris_qk_norm_rope(q, k, q_scale, k_scale, cos, sin):
@@ -134,13 +241,26 @@ def noeris_qk_norm_rope(q, k, q_scale, k_scale, cos, sin):
 
 def noeris_geglu(gate, up):
     """Fused GeGLU via the canonical Triton kernel."""
-    return _noeris_geglu_raw(gate, up, _GEGLU_CONFIG)
+    gpu = gpu_family_name()
+    profile = geglu_profile(gate.shape[1])
+    policy = _GEGLU_CONFIG_POLICY.get(gpu, _GEGLU_CONFIG_POLICY["default"])
+    config = policy.get(profile, _GEGLU_CONFIG)
+    return _noeris_geglu_raw(gate, up, config)
+
+
+def attention_config_for_shape(head_dim, window_size):
+    """Select attention config via hardware+shape policy."""
+    gpu = gpu_family_name()
+    profile = attention_profile(head_dim, window_size)
+    policy = _ATTN_CONFIG_POLICY.get(gpu, _ATTN_CONFIG_POLICY["default"])
+    return policy.get(profile, _ATTN_CONFIG_LOCAL)
 
 
 def noeris_attention(Q, K, V, num_kv_heads, window_size=-1, is_causal=True):
     """FlashAttention with GQA + optional sliding window via the canonical Triton kernel."""
-    return _noeris_flash_attn_raw(Q, K, V, _ATTN_CONFIG, is_causal=is_causal,
-                                  window_size=window_size, num_kv_heads=num_kv_heads)
+    config = attention_config_for_shape(Q.shape[-1], window_size)
+    return _noeris_flash_attn_raw(Q, K, V, config, is_causal=is_causal,
+                                   window_size=window_size, num_kv_heads=num_kv_heads)
 
 
 # =============================================================================
@@ -166,6 +286,11 @@ def cuda_event_timer(fn, warmup=5, trials=20):
 
     times.sort()
     return times[len(times) // 2]  # median
+
+
+def max_abs_diff(a, b):
+    """Return max absolute difference in fp32 for debugging layer divergence."""
+    return (a.to(torch.float32) - b.to(torch.float32)).abs().max().item()
 
 
 # =============================================================================
@@ -256,15 +381,20 @@ def benchmark_layer(cfg):
     # --- Allocate weights (random, fp16) ---
     hidden = torch.randn(B, S, D, device=device, dtype=torch.float16)
     w_pre_attn   = torch.randn(D, device=device, dtype=torch.float16)
-    w_q          = torch.randn(D, H * Dh, device=device, dtype=torch.float16)
-    w_k          = torch.randn(D, Hkv * Dh, device=device, dtype=torch.float16)
-    w_v          = torch.randn(D, Hkv * Dh, device=device, dtype=torch.float16)
+    proj_scale = D ** -0.5
+    w_q          = torch.randn(D, H * Dh, device=device, dtype=torch.float16) * proj_scale
+    w_k          = torch.randn(D, Hkv * Dh, device=device, dtype=torch.float16) * proj_scale
+    w_v          = torch.randn(D, Hkv * Dh, device=device, dtype=torch.float16) * proj_scale
+    w_qkv        = torch.cat([w_q.t(), w_k.t(), w_v.t()], dim=0).contiguous()
+    w_qkv_t      = torch.cat([w_q, w_k, w_v], dim=1).contiguous()
+    w_o          = torch.randn(H * Dh, D, device=device, dtype=torch.float16) * ((H * Dh) ** -0.5)
     q_scale      = torch.randn(Dh, device=device, dtype=torch.float32) * 0.1
     k_scale      = torch.randn(Dh, device=device, dtype=torch.float32) * 0.1
     cos, sin     = build_rope_cache(S, Dh, device)
     w_pre_mlp    = torch.randn(D, device=device, dtype=torch.float16)
-    w_gate_up    = torch.randn(D, Dff * 2, device=device, dtype=torch.float16)
-    w_down       = torch.randn(Dff, D, device=device, dtype=torch.float16)
+    w_gate_up    = torch.randn(D, Dff * 2, device=device, dtype=torch.float16) * proj_scale
+    w_gate_up_t  = w_gate_up.contiguous()
+    w_down       = torch.randn(Dff, D, device=device, dtype=torch.float16) * (Dff ** -0.5)
 
     # =====================================================================
     # Path A: Noeris fused
@@ -275,13 +405,18 @@ def benchmark_layer(cfg):
     def noeris_fused_layer(hidden_in):
         residual = hidden_in
 
-        # Step 1: Pre-attention RMSNorm (Gemma affine_mode=1)
-        h = noeris_rmsnorm(hidden_in.view(-1, D), w_pre_attn).view(B, S, D)
-
-        # Step 2: QKV projection — contiguous (B, H, S, D) for Triton kernels
-        q = (h.view(-1, D) @ w_q).view(B, S, H, Dh).permute(0, 2, 1, 3).contiguous()
-        k = (h.view(-1, D) @ w_k).view(B, S, Hkv, Dh).permute(0, 2, 1, 3).contiguous()
-        v = (h.view(-1, D) @ w_v).view(B, S, Hkv, Dh).permute(0, 2, 1, 3).contiguous()
+        # Step 1+2: fused pre-attention RMSNorm + QKV projection
+        qkv = noeris_fused_norm_linear(
+            hidden_in.view(-1, D),
+            w_pre_attn,
+            w_qkv_t,
+            linear_weight_is_pretransposed=True,
+        )
+        q_end = H * Dh
+        k_end = q_end + Hkv * Dh
+        q = qkv[:, :q_end].view(B, S, H, Dh).permute(0, 2, 1, 3).contiguous()
+        k = qkv[:, q_end:k_end].view(B, S, Hkv, Dh).permute(0, 2, 1, 3).contiguous()
+        v = qkv[:, k_end:].view(B, S, Hkv, Dh).permute(0, 2, 1, 3).contiguous()
 
         # Step 3: Fused QK-RMSNorm + RoPE (our headline kernel!)
         q, k = noeris_qk_norm_rope(q, k, q_scale, k_scale, cos, sin)
@@ -290,16 +425,18 @@ def benchmark_layer(cfg):
         attn_out = noeris_attention(q, k, v, Hkv,
                                     window_size=ws, is_causal=causal)
 
-        # Step 5: Post-attention residual
-        h = attn_out.permute(0, 2, 1, 3).reshape(B, S, D)
+        # Step 5: Attention output projection + residual
+        h = (attn_out.permute(0, 2, 1, 3).reshape(B * S, H * Dh) @ w_o).view(B, S, D)
         h = residual + h
 
-        # Step 6: Pre-MLP RMSNorm
+        # Step 6+7a: fused pre-MLP RMSNorm + gate_up projection
         residual2 = h
-        h = noeris_rmsnorm(h.view(-1, D), w_pre_mlp).view(B, S, D)
-
-        # Step 7: GeGLU MLP
-        gate_up = h.view(-1, D) @ w_gate_up  # (B*S, 2*Dff)
+        gate_up = noeris_fused_norm_linear(
+            h.view(-1, D),
+            w_pre_mlp,
+            w_gate_up_t,
+            linear_weight_is_pretransposed=True,
+        )
         gate = gate_up[:, :Dff]
         up   = gate_up[:, Dff:]
         mlp_out = noeris_geglu(gate, up)
@@ -310,21 +447,21 @@ def benchmark_layer(cfg):
         return h
 
     # Per-step timing for Noeris
-    def step1_noeris():
-        return noeris_rmsnorm(hidden.view(-1, D), w_pre_attn)
-    noeris_step_times["1_pre_attn_rmsnorm"] = cuda_event_timer(step1_noeris)
+    def step12_noeris():
+        return noeris_fused_norm_linear(
+            hidden.view(-1, D),
+            w_pre_attn,
+            w_qkv_t,
+            linear_weight_is_pretransposed=True,
+        )
+    noeris_step_times["1_2_pre_attn_norm_qkv_fused"] = cuda_event_timer(step12_noeris)
 
-    h_norm = step1_noeris().view(B, S, D)
-    def step2_noeris():
-        q = (h_norm.view(-1, D) @ w_q).view(B, S, H, Dh).permute(0, 2, 1, 3).contiguous()
-        k = (h_norm.view(-1, D) @ w_k).view(B, S, Hkv, Dh).permute(0, 2, 1, 3).contiguous()
-        v = (h_norm.view(-1, D) @ w_v).view(B, S, Hkv, Dh).permute(0, 2, 1, 3).contiguous()
-        return q, k, v
-    noeris_step_times["2_qkv_proj"] = cuda_event_timer(step2_noeris)
-
-    q_t = (h_norm.view(-1, D) @ w_q).view(B, S, H, Dh).permute(0, 2, 1, 3).contiguous()
-    k_t = (h_norm.view(-1, D) @ w_k).view(B, S, Hkv, Dh).permute(0, 2, 1, 3).contiguous()
-    v_t = (h_norm.view(-1, D) @ w_v).view(B, S, Hkv, Dh).permute(0, 2, 1, 3).contiguous()
+    qkv_t = step12_noeris()
+    q_end = H * Dh
+    k_end = q_end + Hkv * Dh
+    q_t = qkv_t[:, :q_end].view(B, S, H, Dh).permute(0, 2, 1, 3).contiguous()
+    k_t = qkv_t[:, q_end:k_end].view(B, S, Hkv, Dh).permute(0, 2, 1, 3).contiguous()
+    v_t = qkv_t[:, k_end:].view(B, S, Hkv, Dh).permute(0, 2, 1, 3).contiguous()
 
     def step3_noeris():
         noeris_qk_norm_rope(q_t, k_t, q_scale, k_scale, cos, sin)
@@ -336,19 +473,23 @@ def benchmark_layer(cfg):
                                 window_size=ws, is_causal=causal)
     noeris_step_times["4_attention_flash"] = cuda_event_timer(step4_noeris)
 
-    attn_out = step4_noeris().permute(0, 2, 1, 3).reshape(B, S, D)
-    h_post_attn = hidden + attn_out
+    attn_out = step4_noeris()
+    def step5_noeris():
+        return attn_out.permute(0, 2, 1, 3).reshape(B * S, H * Dh) @ w_o
+    noeris_step_times["5_attn_out_proj"] = cuda_event_timer(step5_noeris)
 
-    def step6_noeris():
-        return noeris_rmsnorm(h_post_attn.view(-1, D), w_pre_mlp)
-    noeris_step_times["6_pre_mlp_rmsnorm"] = cuda_event_timer(step6_noeris)
+    h_post_attn = hidden + step5_noeris().view(B, S, D)
 
-    h_mlp = step6_noeris().view(B, S, D)
-    def step7a_noeris():
-        return h_mlp.view(-1, D) @ w_gate_up
-    noeris_step_times["7a_gate_up_proj"] = cuda_event_timer(step7a_noeris)
+    def step67a_noeris():
+        return noeris_fused_norm_linear(
+            h_post_attn.view(-1, D),
+            w_pre_mlp,
+            w_gate_up_t,
+            linear_weight_is_pretransposed=True,
+        )
+    noeris_step_times["6_7a_pre_mlp_norm_gateup_fused"] = cuda_event_timer(step67a_noeris)
 
-    gate_up = h_mlp.view(-1, D) @ w_gate_up
+    gate_up = step67a_noeris()
     gate_t = gate_up[:, :Dff]
     up_t   = gate_up[:, Dff:]
     def step7b_noeris():
@@ -400,8 +541,8 @@ def benchmark_layer(cfg):
             attn_out = F.scaled_dot_product_attention(
                 q, k_exp, v_exp, is_causal=causal)
 
-        # Step 5: Residual add
-        h = attn_out.permute(0, 2, 1, 3).reshape(B, S, D)
+        # Step 5: Attention output projection + residual add
+        h = (attn_out.permute(0, 2, 1, 3).reshape(B * S, H * Dh) @ w_o).view(B, S, D)
         h = residual + h
 
         # Step 6: Pre-MLP RMSNorm
@@ -432,26 +573,33 @@ def benchmark_layer(cfg):
         return q, k, v
     pytorch_step_times["2_qkv_proj"] = cuda_event_timer(step2_pytorch)
 
+    q_pt_proj, k_pt_proj, v_pt_proj = step2_pytorch()
+
     def step3_pytorch():
-        pytorch_qk_norm_rope_separated(q_t, q_scale, cos, sin)
-        pytorch_qk_norm_rope_separated(k_t, k_scale, cos, sin)
+        pytorch_qk_norm_rope_separated(q_pt_proj, q_scale, cos, sin)
+        pytorch_qk_norm_rope_separated(k_pt_proj, k_scale, cos, sin)
     pytorch_step_times["3_qk_norm_rope_4ops"] = cuda_event_timer(step3_pytorch)
 
-    q_pt = pytorch_qk_norm_rope_separated(q_t, q_scale, cos, sin)
-    k_pt = pytorch_qk_norm_rope_separated(k_t, k_scale, cos, sin)
+    q_pt = pytorch_qk_norm_rope_separated(q_pt_proj, q_scale, cos, sin)
+    k_pt = pytorch_qk_norm_rope_separated(k_pt_proj, k_scale, cos, sin)
     def step4_pytorch():
         k_e = expand_kv_for_gqa(k_pt, H, Hkv)
-        v_e = expand_kv_for_gqa(v_t, H, Hkv)
+        v_e = expand_kv_for_gqa(v_pt_proj, H, Hkv)
         if ws > 0:
             rows = torch.arange(S, device="cuda").unsqueeze(1)
             cols = torch.arange(S, device="cuda").unsqueeze(0)
             mask = ((cols >= (rows - ws + 1)) & (cols <= rows)).unsqueeze(0).unsqueeze(0)
-            return F.scaled_dot_product_attention(q_t, k_e, v_e, attn_mask=mask, is_causal=False)
-        return F.scaled_dot_product_attention(q_t, k_e, v_e, is_causal=causal)
+            return F.scaled_dot_product_attention(q_pt, k_e, v_e, attn_mask=mask, is_causal=False)
+        return F.scaled_dot_product_attention(q_pt, k_e, v_e, is_causal=causal)
     pytorch_step_times["4_attention_sdpa"] = cuda_event_timer(step4_pytorch)
 
+    attn_out_pt = step4_pytorch()
+    def step5_pytorch():
+        return attn_out_pt.permute(0, 2, 1, 3).reshape(B * S, H * Dh) @ w_o
+    pytorch_step_times["5_attn_out_proj"] = cuda_event_timer(step5_pytorch)
+
     def step6_pytorch():
-        return pytorch_rmsnorm(h_post_attn.view(-1, D), w_pre_mlp)
+        return pytorch_rmsnorm((hidden + step5_pytorch().view(B, S, D)).view(-1, D), w_pre_mlp)
     pytorch_step_times["6_pre_mlp_rmsnorm"] = cuda_event_timer(step6_pytorch)
 
     h_mlp_pt = step6_pytorch().view(B, S, D)
@@ -459,12 +607,18 @@ def benchmark_layer(cfg):
         return h_mlp_pt.view(-1, D) @ w_gate_up
     pytorch_step_times["7a_gate_up_proj"] = cuda_event_timer(step7a_pytorch)
 
+    gate_up_pt = step7a_pytorch()
+    gate_pt = gate_up_pt[:, :Dff]
+    up_pt = gate_up_pt[:, Dff:]
+
     def step7b_pytorch():
-        return pytorch_geglu_separated(gate_t, up_t)
+        return pytorch_geglu_separated(gate_pt, up_pt)
     pytorch_step_times["7b_geglu_separated"] = cuda_event_timer(step7b_pytorch)
 
+    mlp_act_pt = step7b_pytorch()
+
     def step7c_pytorch():
-        return mlp_act @ w_down
+        return mlp_act_pt @ w_down
     pytorch_step_times["7c_down_proj"] = cuda_event_timer(step7c_pytorch)
 
     # Total end-to-end PyTorch separated
@@ -473,6 +627,32 @@ def benchmark_layer(cfg):
     # =====================================================================
     # Correctness check
     # =====================================================================
+    qkv_ref = torch.cat([
+        q_pt_proj.permute(0, 2, 1, 3).reshape(B * S, H * Dh),
+        k_pt_proj.permute(0, 2, 1, 3).reshape(B * S, Hkv * Dh),
+        v_pt_proj.permute(0, 2, 1, 3).reshape(B * S, Hkv * Dh),
+    ], dim=1)
+    qk_rope_ref = torch.cat([
+        q_pt.reshape(B, H, S, Dh),
+        expand_kv_for_gqa(k_pt, H, Hkv).reshape(B, H, S, Dh),
+    ], dim=-1)
+    qk_rope_noeris = torch.cat([
+        q_nr.reshape(B, H, S, Dh),
+        expand_kv_for_gqa(k_nr, H, Hkv).reshape(B, H, S, Dh),
+    ], dim=-1)
+    attn_proj_noeris = step5_noeris().view(B, S, D)
+    attn_proj_pytorch = step5_pytorch().view(B, S, D)
+    down_noeris = step7c_noeris().view(B, S, D)
+    down_pytorch = step7c_pytorch().view(B, S, D)
+    step_max_errs = {{
+        "1_2_pre_attn_norm_qkv_fused": round(max_abs_diff(qkv_t, qkv_ref), 6),
+        "3_qk_norm_rope_fused": round(max_abs_diff(qk_rope_noeris, qk_rope_ref), 6),
+        "4_attention_flash": round(max_abs_diff(attn_out, attn_out_pt), 6),
+        "5_attn_out_proj": round(max_abs_diff(attn_proj_noeris, attn_proj_pytorch), 6),
+        "6_7a_pre_mlp_norm_gateup_fused": round(max_abs_diff(gate_up, gate_up_pt), 6),
+        "7b_geglu_fused": round(max_abs_diff(mlp_act, mlp_act_pt), 6),
+        "7c_down_proj": round(max_abs_diff(down_noeris, down_pytorch), 6),
+    }}
     noeris_out = noeris_fused_layer(hidden)
     pytorch_out = pytorch_separated_layer(hidden)
     max_err = (noeris_out.to(torch.float32) - pytorch_out.to(torch.float32)).abs().max().item()
@@ -510,6 +690,9 @@ def benchmark_layer(cfg):
     print(f"  pytorch_separated_ms: {{pytorch_separated_ms:.3f}}")
     print(f"  layer_speedup:        {{layer_speedup:.2f}}x")
     print(f"  correct:              {{correct}} (max_err={{max_err:.4f}})")
+    print("\\n  --- Step max abs error ---")
+    for step_name, err in step_max_errs.items():
+        print(f"    {{step_name:<28s}} {{err:.6f}}")
 
     return {{
         "name": name,
@@ -518,6 +701,7 @@ def benchmark_layer(cfg):
         "layer_speedup": round(layer_speedup, 4),
         "correct": correct,
         "max_err": round(max_err, 6),
+        "step_max_errs": step_max_errs,
         "noeris_step_times": {{k: round(v, 4) for k, v in noeris_step_times.items()}},
         "pytorch_step_times": {{k: round(v, 4) for k, v in pytorch_step_times.items()}},
         "config": cfg,
@@ -562,7 +746,15 @@ def main():
 
     # Machine-readable JSON output
     print("\\n--- JSON_RESULTS_START ---")
-    print(json.dumps({{"layer_results": results, "gpu": gpu_name}}, indent=2))
+    print(json.dumps({{
+        "hardware": {{
+            "gpu": gpu_name,
+            "cuda_version": torch.version.cuda or "unknown",
+            "python": platform.python_version(),
+        }},
+        "layer_results": results,
+        "config_results": results,
+    }}, indent=2))
     print("--- JSON_RESULTS_END ---")
 
     return 0

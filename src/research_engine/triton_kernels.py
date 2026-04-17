@@ -51,6 +51,23 @@ TRITON_MATMUL_CURATED_CONFIGS = [
     {"BLOCK_SIZE_M": 256, "BLOCK_SIZE_N": 128, "BLOCK_SIZE_K": 128, "GROUP_SIZE_M": 8, "num_warps": 8, "num_stages": 3},
 ]
 
+# Unified matmul dispatch should route across a few kernel families,
+# not pretend one tile shape wins every regime.
+MATMUL_FAMILY_CONFIGS = {
+    "square_dense": {"BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 256, "BLOCK_SIZE_K": 64, "GROUP_SIZE_M": 8, "num_warps": 8, "num_stages": 3},
+    "irregular_masked": {"BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 128, "BLOCK_SIZE_K": 32, "GROUP_SIZE_M": 8, "num_warps": 4, "num_stages": 4},
+    # Keep these families on the proven standard tile until they earn a
+    # genuinely different kernel family. Distinct routing keys remain so
+    # future implementations can swap in without changing call sites.
+    "small_k": {"BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 256, "BLOCK_SIZE_K": 64, "GROUP_SIZE_M": 8, "num_warps": 8, "num_stages": 3, "OUTPUT_FP32": True},
+    "tall_skinny": {"BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 256, "BLOCK_SIZE_K": 64, "GROUP_SIZE_M": 8, "num_warps": 8, "num_stages": 3},
+    "large_k": {
+        "BLOCK_SIZE_M": 64, "BLOCK_SIZE_N": 64, "BLOCK_SIZE_K": 128,
+        "GROUP_SIZE_M": 8, "num_warps": 4, "num_stages": 3,
+        "SPLIT_K": 32, "USE_TF32": True, "OUTPUT_FP32": True,
+    },
+}
+
 # Shape buckets for workload-aware config selection
 MATMUL_SHAPE_BUCKETS = [
     {"name": "tiny", "M": 128, "N": 128, "K": 128},
@@ -95,6 +112,235 @@ def shape_bucket_key(m: int, n: int, k: int) -> str:
     if total < 2**34:
         return "large"
     return "xlarge"
+
+
+def matmul_family_key(m: int, n: int, k: int) -> str:
+    """Route a shape to a matmul kernel family.
+
+    The goal is one dispatch surface with a few specialized families,
+    not one universal tile shape.
+    """
+    if k >= 131072:
+        return "large_k"
+    if n <= 64 and m >= 4 * max(n, 1):
+        return "tall_skinny"
+    if k <= 128 and min(m, n) >= 4096:
+        return "small_k"
+    if (m % 128) != 0 or (n % 128) != 0 or (k % 128) != 0:
+        return "irregular_masked"
+    return "square_dense"
+
+
+def routed_matmul_config(m: int, n: int, k: int) -> dict[str, int]:
+    """Return the default config for the routed matmul family."""
+    return dict(MATMUL_FAMILY_CONFIGS[matmul_family_key(m, n, k)])
+
+
+# ---------------------------------------------------------------------------
+# Module-level matmul launcher (lazy JIT compilation)
+# ---------------------------------------------------------------------------
+
+_matmul_kernel_compiled = None
+_matmul_splitk_kernel_compiled = None
+_triton_matmul_available = False
+
+
+def _ensure_triton_matmul():
+    """Lazily compile the Triton matmul kernel on first use."""
+    global _triton_matmul_available, _matmul_kernel_compiled, _matmul_splitk_kernel_compiled
+    if _matmul_kernel_compiled is not None and _matmul_splitk_kernel_compiled is not None:
+        return
+    try:
+        import triton
+        import triton.language as tl
+
+        @triton.jit
+        def _matmul_kernel(
+            a_ptr, b_ptr, c_ptr,
+            M, N, K,
+            stride_am, stride_ak,
+            stride_bk, stride_bn,
+            stride_cm, stride_cn,
+            BLOCK_SIZE_M: tl.constexpr,
+            BLOCK_SIZE_N: tl.constexpr,
+            BLOCK_SIZE_K: tl.constexpr,
+            GROUP_SIZE_M: tl.constexpr,
+        ):
+            pid = tl.program_id(axis=0)
+            num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
+            num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
+            num_pid_in_group = GROUP_SIZE_M * num_pid_n
+            group_id = pid // num_pid_in_group
+            first_pid_m = group_id * GROUP_SIZE_M
+            group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
+            pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
+            pid_n = (pid % num_pid_in_group) // group_size_m
+            offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
+            offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
+            offs_k = tl.arange(0, BLOCK_SIZE_K)
+            a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
+            b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
+            accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+            for k_offset in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
+                k_remaining = K - k_offset * BLOCK_SIZE_K
+                a = tl.load(a_ptrs, mask=offs_k[None, :] < k_remaining, other=0.0)
+                b = tl.load(b_ptrs, mask=offs_k[:, None] < k_remaining, other=0.0)
+                accumulator = tl.dot(a, b, accumulator)
+                a_ptrs += BLOCK_SIZE_K * stride_ak
+                b_ptrs += BLOCK_SIZE_K * stride_bk
+            c = accumulator.to(c_ptr.dtype.element_ty)
+            offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+            offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+            c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
+            c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
+            tl.store(c_ptrs, c, mask=c_mask)
+
+        @triton.jit
+        def _matmul_splitk_kernel(
+            a_ptr, b_ptr, c_ptr,
+            M, N, K,
+            stride_am, stride_ak,
+            stride_bk, stride_bn,
+            stride_cm, stride_cn,
+            BLOCK_SIZE_M: tl.constexpr,
+            BLOCK_SIZE_N: tl.constexpr,
+            BLOCK_SIZE_K: tl.constexpr,
+            SPLIT_K: tl.constexpr,
+            GROUP_SIZE_M: tl.constexpr,
+            USE_TF32: tl.constexpr,
+        ):
+            pid = tl.program_id(axis=0)
+            pid_k = tl.program_id(axis=2)
+
+            num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
+            num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
+            num_pid_in_group = GROUP_SIZE_M * num_pid_n
+            group_id = pid // num_pid_in_group
+            first_pid_m = group_id * GROUP_SIZE_M
+            group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
+            pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
+            pid_n = (pid % num_pid_in_group) // group_size_m
+
+            offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+            offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+            offs_k = pid_k * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
+            offs_k = tl.max_contiguous(tl.multiple_of(offs_k, BLOCK_SIZE_K), BLOCK_SIZE_K)
+
+            a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
+            b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
+            accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+
+            for _ in range(0, tl.cdiv(K, BLOCK_SIZE_K * SPLIT_K)):
+                k_mask = offs_k < K
+                a = tl.load(
+                    a_ptrs,
+                    mask=(offs_am[:, None] < M) & k_mask[None, :],
+                    other=0.0,
+                )
+                b = tl.load(
+                    b_ptrs,
+                    mask=k_mask[:, None] & (offs_bn[None, :] < N),
+                    other=0.0,
+                )
+                if USE_TF32:
+                    accumulator = tl.dot(a, b, accumulator, input_precision="tf32")
+                else:
+                    accumulator = tl.dot(a, b, accumulator)
+                offs_k += BLOCK_SIZE_K * SPLIT_K
+                a_ptrs += BLOCK_SIZE_K * SPLIT_K * stride_ak
+                b_ptrs += BLOCK_SIZE_K * SPLIT_K * stride_bk
+
+            offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+            offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+            c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
+            c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
+            tl.atomic_add(c_ptrs, accumulator.to(c_ptr.dtype.element_ty), mask=c_mask, sem="relaxed")
+
+        _matmul_kernel_compiled = _matmul_kernel
+        _matmul_splitk_kernel_compiled = _matmul_splitk_kernel
+        _triton_matmul_available = True
+    except ImportError:
+        _triton_matmul_available = False
+
+
+def matmul(a, b, config=None):
+    """Module-level Triton matmul launcher. Requires CUDA GPU.
+
+    Args:
+        a: (M, K) fp16 tensor, contiguous.
+        b: (K, N) fp16 tensor, contiguous.
+        config: Triton config dict with BLOCK_SIZE_M/N/K, GROUP_SIZE_M,
+            num_warps, num_stages.  Defaults to first curated config.
+
+    Returns:
+        (M, N) fp16 output tensor.
+    """
+    import torch
+    import triton
+
+    _ensure_triton_matmul()
+    if not _triton_matmul_available:
+        raise RuntimeError("Triton not available")
+
+    if config is None:
+        config = TRITON_MATMUL_CURATED_CONFIGS[0]
+
+    assert a.shape[1] == b.shape[0], "Incompatible dimensions"
+    assert a.is_contiguous() and b.is_contiguous(), "Inputs must be contiguous"
+    M, K = a.shape
+    _, N = b.shape
+    output_dtype = torch.float32 if config.get("OUTPUT_FP32", False) or a.dtype == torch.float32 else torch.float16
+    c = torch.empty((M, N), device=a.device, dtype=output_dtype)
+    split_k = int(config.get("SPLIT_K", 1))
+    if split_k > 1:
+        c.zero_()
+        grid = lambda META: (
+            triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]),
+            1,
+            split_k,
+        )
+        _matmul_splitk_kernel_compiled[grid](
+            a, b, c,
+            M, N, K,
+            a.stride(0), a.stride(1),
+            b.stride(0), b.stride(1),
+            c.stride(0), c.stride(1),
+            BLOCK_SIZE_M=config["BLOCK_SIZE_M"],
+            BLOCK_SIZE_N=config["BLOCK_SIZE_N"],
+            BLOCK_SIZE_K=config["BLOCK_SIZE_K"],
+            SPLIT_K=split_k,
+            GROUP_SIZE_M=config["GROUP_SIZE_M"],
+            USE_TF32=config.get("USE_TF32", False),
+            num_warps=config["num_warps"],
+            num_stages=config["num_stages"],
+        )
+    else:
+        grid = lambda META: (
+            triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]),
+            )
+        _matmul_kernel_compiled[grid](
+            a, b, c,
+            M, N, K,
+            a.stride(0), a.stride(1),
+            b.stride(0), b.stride(1),
+            c.stride(0), c.stride(1),
+            BLOCK_SIZE_M=config["BLOCK_SIZE_M"],
+            BLOCK_SIZE_N=config["BLOCK_SIZE_N"],
+            BLOCK_SIZE_K=config["BLOCK_SIZE_K"],
+            GROUP_SIZE_M=config["GROUP_SIZE_M"],
+            num_warps=config["num_warps"],
+            num_stages=config["num_stages"],
+        )
+    return c
+
+
+def matmul_auto(a, b, config=None):
+    """Unified matmul surface with shape-based family routing."""
+    if config is None:
+        m, k = a.shape
+        _, n = b.shape
+        config = routed_matmul_config(m, n, k)
+    return matmul(a, b, config)
 
 
 # ---------------------------------------------------------------------------
