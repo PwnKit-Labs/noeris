@@ -47,6 +47,7 @@ Noeris discovers and optimizes **cross-operation kernel fusions** that `torch.co
 | Fused QK-RMSNorm+RoPE prologue (H100) | **10.4--11.9x**, peak 1628 GB/s |
 
 Latest layer artifacts: `docs/results/gemma4-layer-bench-deeper-fusion-a100-after-geglu-retune.json`, `docs/results/gemma4-layer-bench-deeper-fusion-h100-after-geglu-retune.json`.
+Canonical results index: `docs/results/README.md`.
 
 ## Quick start
 
