@@ -420,16 +420,16 @@ fast_1.0 is identical across A100 and H100 because the same problems pass and fa
 
 **Attention.** Our simplified FlashAttention-style kernel achieves 0.68–0.83× of `F.scaled_dot_product_attention` on H100 and 0.80–1.05× on A100. The one A100 win (1.05×, `attn_short_64`) does not hold on H100 (0.68×). PyTorch's SDPA dispatches to FlashAttention-2/3 on NVIDIA hardware, implementing loop-order optimizations and register-pressure tuning that our 120-line reference does not replicate. We include attention to establish a starting point for the search loop, not to claim competitiveness with production implementations.
 
-**GeGLU.** The fused GeGLU kernel (operator #8) is evaluated on four Gemma FFN shapes: Gemma 2B (`ffn_dim=5632`), 4B, 26B A4B, and 31B Dense (`ffn_dim=24576`). All four problems are Level 2. Results using the best curated starter config (`bs4096_w16_s1`) are:
+**GeGLU.** The fused GeGLU kernel (operator #8) is evaluated on four Gemma FFN shapes: Gemma E2B (`ffn_dim=6144`), E4B, 26B A4B, and 31B Dense (`ffn_dim=21504`). All four problems are Level 2. Results using the best curated starter config (`bs4096_w16_s1`) are:
 
 | Problem | A100 (GB/s) | vs eager | H100 (GB/s) | vs eager | vs compile |
 |---|---|---|---|---|---|
-| gemma2b (ffn_dim=5632) | 1167.6 | **3.77×** | 1999.0 | **3.60×** | 2.45× |
+| gemma2b (ffn_dim=6144) | 1167.6 | **3.77×** | 1999.0 | **3.60×** | 2.45× |
 | gemma4b | 1279.5 | **3.79×** | 2120.3 | **3.61×** | 2.07× |
 | gemma26b | 1351.1 | **3.98×** | 2287.3 | **3.87×** | 2.34× |
-| gemma31b (ffn_dim=24576) | 1060.0 | **3.08×** | 1601.3 | **2.65×** | 1.52× |
+| gemma31b (ffn_dim=21504) | 1060.0 | **3.08×** | 1601.3 | **2.65×** | 1.52× |
 
-On A100, all four problems achieve fast_3.0 (≥3× over eager). On H100, three of four do (75% at fast_3.0). The fused kernel reaches 60–68% of H100 peak HBM3 bandwidth (3352 GB/s) with no search iterations — only a curated starter config. The H100/A100 bandwidth ratio is 1.63–1.65× for matched configs, consistent with the HBM3/HBM2e bandwidth ratio and with the cross-hardware ranking-transfer finding in §4.9 (Spearman ρ = 0.967, best config identical across GPUs). The Gemma 31B shape underperforms the others because its larger FFN dimension (`ffn_dim=24576`) fills shared memory with a larger tile, reducing occupancy at `BLOCK_SIZE=4096`.
+On A100, all four problems achieve fast_3.0 (≥3× over eager). On H100, three of four do (75% at fast_3.0). The fused kernel reaches 60–68% of H100 peak HBM3 bandwidth (3352 GB/s) with no search iterations — only a curated starter config. The H100/A100 bandwidth ratio is 1.63–1.65× for matched configs, consistent with the HBM3/HBM2e bandwidth ratio and with the cross-hardware ranking-transfer finding in §4.9 (Spearman ρ = 0.967, best config identical across GPUs). The Gemma 31B shape underperforms the others because its larger FFN dimension (`ffn_dim=21504`) fills shared memory with a larger tile, reducing occupancy at `BLOCK_SIZE=4096`.
 
 ### 4.4 Comparison to AutoKernel
 
