@@ -21,6 +21,11 @@ FP8 baseline probes:
 
 - `docs/results/fp8-hopper-probe.json`
 
+Speculative decoding verify+accept baseline:
+
+- `docs/results/spec-decode-verify-accept-baseline.json`
+- `docs/results/spec-decode-verify-accept-baseline.md`
+
 Reproducible benchmark-pack command:
 
 ```bash

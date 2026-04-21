@@ -1,0 +1,117 @@
+{
+  "generated_at_utc": "2026-04-21T04:40:21.326847+00:00",
+  "gpus": [
+    "A100",
+    "H100"
+  ],
+  "results": {
+    "A100": {
+      "hardware": {
+        "gpu": "NVIDIA A100-SXM4-40GB",
+        "cuda_version": "13.0",
+        "python": "3.11.12"
+      },
+      "config_results": [
+        {
+          "shape_name": "draft4_vocab32k",
+          "batch": 1,
+          "draft_len": 4,
+          "vocab": 32000,
+          "correct": true,
+          "separated_ms": 0.1556,
+          "tokens_per_ms": 25.699
+        },
+        {
+          "shape_name": "draft8_vocab32k",
+          "batch": 1,
+          "draft_len": 8,
+          "vocab": 32000,
+          "correct": true,
+          "separated_ms": 0.1413,
+          "tokens_per_ms": 56.6123
+        },
+        {
+          "shape_name": "draft16_vocab32k",
+          "batch": 1,
+          "draft_len": 16,
+          "vocab": 32000,
+          "correct": true,
+          "separated_ms": 0.1536,
+          "tokens_per_ms": 104.1667
+        },
+        {
+          "shape_name": "draft16_vocab128k",
+          "batch": 1,
+          "draft_len": 16,
+          "vocab": 128000,
+          "correct": true,
+          "separated_ms": 0.1423,
+          "tokens_per_ms": 112.4101
+        },
+        {
+          "shape_name": "draft32_vocab128k",
+          "batch": 1,
+          "draft_len": 32,
+          "vocab": 128000,
+          "correct": true,
+          "separated_ms": 0.1413,
+          "tokens_per_ms": 226.4493
+        }
+      ]
+    },
+    "H100": {
+      "hardware": {
+        "gpu": "NVIDIA H100 80GB HBM3",
+        "cuda_version": "13.0",
+        "python": "3.11.12"
+      },
+      "config_results": [
+        {
+          "shape_name": "draft4_vocab32k",
+          "batch": 1,
+          "draft_len": 4,
+          "vocab": 32000,
+          "correct": true,
+          "separated_ms": 0.0859,
+          "tokens_per_ms": 46.5549
+        },
+        {
+          "shape_name": "draft8_vocab32k",
+          "batch": 1,
+          "draft_len": 8,
+          "vocab": 32000,
+          "correct": true,
+          "separated_ms": 0.0794,
+          "tokens_per_ms": 100.7252
+        },
+        {
+          "shape_name": "draft16_vocab32k",
+          "batch": 1,
+          "draft_len": 16,
+          "vocab": 32000,
+          "correct": true,
+          "separated_ms": 0.076,
+          "tokens_per_ms": 210.5263
+        },
+        {
+          "shape_name": "draft16_vocab128k",
+          "batch": 1,
+          "draft_len": 16,
+          "vocab": 128000,
+          "correct": true,
+          "separated_ms": 0.0789,
+          "tokens_per_ms": 202.7575
+        },
+        {
+          "shape_name": "draft32_vocab128k",
+          "batch": 1,
+          "draft_len": 32,
+          "vocab": 128000,
+          "correct": true,
+          "separated_ms": 0.0838,
+          "tokens_per_ms": 381.971
+        }
+      ]
+    }
+  }
+}
