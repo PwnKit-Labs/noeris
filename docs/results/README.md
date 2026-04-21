@@ -31,6 +31,11 @@ Speculative decoding verify+accept fused v1:
 - `docs/results/spec-decode-verify-accept-fused-v1.json`
 - `docs/results/spec-decode-verify-accept-fused-v1.md`
 
+Speculative decoding runtime-hook integration benchmark:
+
+- `docs/results/spec-decode-verify-accept-runtime-integration.json`
+- `docs/results/spec-decode-verify-accept-runtime-integration.md`
+
 Reproducible benchmark-pack command:
 
 ```bash
