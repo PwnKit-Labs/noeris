@@ -46,6 +46,11 @@ KV cache quantize-on-write runtime integration:
 - `docs/results/kv-quant-write-runtime-integration.json`
 - `docs/results/kv-quant-write-runtime-integration.md`
 
+Cross-vendor zero-shot scaffold (MI300X label, no target measurements):
+
+- `docs/results/cross-vendor-zero-shot-scaffold-mi300x.json`
+- `docs/results/cross-vendor-zero-shot-scaffold-mi300x.md`
+
 Reproducible benchmark-pack command:
 
 ```bash

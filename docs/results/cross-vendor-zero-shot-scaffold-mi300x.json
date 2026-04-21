@@ -1,0 +1,819 @@
+{
+  "generated_at_utc": "2026-04-21T07:22:17.189863+00:00",
+  "db_path": ".noeris/triton-configs.json",
+  "training": {
+    "status": "trained",
+    "training_size": 462,
+    "holdout_r2": 0.0641,
+    "operator_counts": {
+      "5": 462
+    }
+  },
+  "source_hardware_filter": "A100",
+  "target_hardware_label": "AMD MI300X",
+  "operators": [
+    "matmul",
+    "rmsnorm",
+    "softmax",
+    "layernorm",
+    "cross_entropy",
+    "attention"
+  ],
+  "top_k": 5,
+  "summary": {
+    "matmul": {
+      "bucket_count": 0,
+      "total_candidates": 0
+    },
+    "rmsnorm": {
+      "bucket_count": 0,
+      "total_candidates": 0
+    },
+    "softmax": {
+      "bucket_count": 0,
+      "total_candidates": 0
+    },
+    "layernorm": {
+      "bucket_count": 0,
+      "total_candidates": 0
+    },
+    "cross_entropy": {
+      "bucket_count": 0,
+      "total_candidates": 0
+    },
+    "attention": {
+      "bucket_count": 7,
+      "total_candidates": 79
+    }
+  },
+  "predictions": {
+    "matmul": {},
+    "rmsnorm": {},
+    "softmax": {},
+    "layernorm": {},
+    "cross_entropy": {},
+    "attention": {
+      "short_64": {
+        "shape": {
+          "batch": 4,
+          "heads": 32,
+          "seq_len": 512,
+          "head_dim": 64,
+          "bucket": "short_64"
+        },
+        "source_top": [
+          {
+            "config_id": "m128_n64_w4_s4",
+            "config": {
+              "BLOCK_M": 128,
+              "BLOCK_N": 64,
+              "num_warps": 4,
+              "num_stages": 4
+            },
+            "metric": 92.19
+          },
+          {
+            "config_id": "m64_n32_w4_s3",
+            "config": {
+              "BLOCK_M": 64,
+              "BLOCK_N": 32,
+              "num_warps": 4,
+              "num_stages": 3
+            },
+            "metric": 86.0
+          },
+          {
+            "config_id": "m128_n32_w8_s4",
+            "config": {
+              "BLOCK_M": 128,
+              "BLOCK_N": 32,
+              "num_warps": 8,
+              "num_stages": 4
+            },
+            "metric": 84.38
+          },
+          {
+            "config_id": "m64_n128_w4_s2",
+            "config": {
+              "BLOCK_M": 64,
+              "BLOCK_N": 128,
+              "num_warps": 4,
+              "num_stages": 2
+            },
+            "metric": 79.7
+          },
+          {
+            "config_id": "m32_n64_w4_s3",
+            "config": {
+              "BLOCK_M": 32,
+              "BLOCK_N": 64,
+              "num_warps": 4,
+              "num_stages": 3
+            },
+            "metric": 73.33
+          }
+        ],
+        "target_predicted_top": [
+          [
+            {
+              "BLOCK_M": 64,
+              "BLOCK_N": 128,
+              "num_warps": 4,
+              "num_stages": 2
+            },
+            105.49849900415926
+          ],
+          [
+            {
+              "BLOCK_M": 128,
+              "BLOCK_N": 64,
+              "num_warps": 4,
+              "num_stages": 4
+            },
+            100.55254858402041
+          ],
+          [
+            {
+              "BLOCK_M": 64,
+              "BLOCK_N": 32,
+              "num_warps": 4,
+              "num_stages": 3
+            },
+            98.07297255906708
+          ],
+          [
+            {
+              "BLOCK_M": 64,
+              "BLOCK_N": 32,
+              "num_warps": 2,
+              "num_stages": 2
+            },
+            94.87730799459209
+          ],
+          [
+            {
+              "BLOCK_M": 128,
+              "BLOCK_N": 32,
+              "num_warps": 8,
+              "num_stages": 4
+            },
+            88.2180766350896
+          ]
+        ]
+      },
+      "short_128": {
+        "shape": {
+          "batch": 2,
+          "heads": 16,
+          "seq_len": 1024,
+          "head_dim": 128,
+          "bucket": "short_128"
+        },
+        "source_top": [
+          {
+            "config_id": "m32_n64_w4_s3",
+            "config": {
+              "BLOCK_M": 32,
+              "BLOCK_N": 64,
+              "num_warps": 4,
+              "num_stages": 3
+            },
+            "metric": 86.21
+          },
+          {
+            "config_id": "m128_n32_w8_s4",
+            "config": {
+              "BLOCK_M": 128,
+              "BLOCK_N": 32,
+              "num_warps": 8,
+              "num_stages": 4
+            },
+            "metric": 83.09
+          },
+          {
+            "config_id": "m64_n32_w4_s3",
+            "config": {
+              "BLOCK_M": 64,
+              "BLOCK_N": 32,
+              "num_warps": 4,
+              "num_stages": 3
+            },
+            "metric": 70.15
+          },
+          {
+            "config_id": "m64_n128_w8_s3",
+            "config": {
+              "BLOCK_M": 64,
+              "BLOCK_N": 128,
+              "num_warps": 8,
+              "num_stages": 3
+            },
+            "metric": 69.62
+          },
+          {
+            "config_id": "m32_n64_w8_s3",
+            "config": {
+              "BLOCK_M": 32,
+              "BLOCK_N": 64,
+              "num_warps": 8,
+              "num_stages": 3
+            },
+            "metric": 69.4
+          }
+        ],
+        "target_predicted_top": [
+          [
+            {
+              "BLOCK_M": 128,
+              "BLOCK_N": 32,
+              "num_warps": 8,
+              "num_stages": 4
+            },
+            112.82090235468034
+          ],
+          [
+            {
+              "BLOCK_M": 128,
+              "BLOCK_N": 64,
+              "num_warps": 4,
+              "num_stages": 4
+            },
+            99.87484347205275
+          ],
+          [
+            {
+              "BLOCK_M": 64,
+              "BLOCK_N": 128,
+              "num_warps": 4,
+              "num_stages": 2
+            },
+            88.99941744083422
+          ],
+          [
+            {
+              "BLOCK_M": 64,
+              "BLOCK_N": 128,
+              "num_warps": 8,
+              "num_stages": 3
+            },
+            82.18840493959586
+          ],
+          [
+            {
+              "BLOCK_M": 64,
+              "BLOCK_N": 32,
+              "num_warps": 4,
+              "num_stages": 3
+            },
+            75.84098464921276
+          ]
+        ]
+      },
+      "med_128": {
+        "shape": {
+          "batch": 2,
+          "heads": 16,
+          "seq_len": 2048,
+          "head_dim": 128,
+          "bucket": "med_128"
+        },
+        "source_top": [
+          {
+            "config_id": "m128_n32_w8_s4",
+            "config": {
+              "BLOCK_M": 128,
+              "BLOCK_N": 32,
+              "num_warps": 8,
+              "num_stages": 4
+            },
+            "metric": 110.42
+          },
+          {
+            "config_id": "m32_n64_w4_s3",
+            "config": {
+              "BLOCK_M": 32,
+              "BLOCK_N": 64,
+              "num_warps": 4,
+              "num_stages": 3
+            },
+            "metric": 98.58
+          },
+          {
+            "config_id": "m64_n32_w2_s2",
+            "config": {
+              "BLOCK_M": 64,
+              "BLOCK_N": 32,
+              "num_warps": 2,
+              "num_stages": 2
+            },
+            "metric": 92.34
+          },
+          {
+            "config_id": "m64_n128_w8_s3",
+            "config": {
+              "BLOCK_M": 64,
+              "BLOCK_N": 128,
+              "num_warps": 8,
+              "num_stages": 3
+            },
+            "metric": 78.82
+          },
+          {
+            "config_id": "m32_n64_w8_s3",
+            "config": {
+              "BLOCK_M": 32,
+              "BLOCK_N": 64,
+              "num_warps": 8,
+              "num_stages": 3
+            },
+            "metric": 78.6
+          }
+        ],
+        "target_predicted_top": [
+          [
+            {
+              "BLOCK_M": 128,
+              "BLOCK_N": 64,
+              "num_warps": 4,
+              "num_stages": 4
+            },
+            89.37570112616483
+          ],
+          [
+            {
+              "BLOCK_M": 128,
+              "BLOCK_N": 32,
+              "num_warps": 8,
+              "num_stages": 4
+            },
+            77.27710661125361
+          ],
+          [
+            {
+              "BLOCK_M": 64,
+              "BLOCK_N": 128,
+              "num_warps": 4,
+              "num_stages": 2
+            },
+            70.63658405660264
+          ],
+          [
+            {
+              "BLOCK_M": 64,
+              "BLOCK_N": 128,
+              "num_warps": 8,
+              "num_stages": 3
+            },
+            60.906864075078566
+          ],
+          [
+            {
+              "BLOCK_M": 64,
+              "BLOCK_N": 32,
+              "num_warps": 2,
+              "num_stages": 2
+            },
+            52.00343496237326
+          ]
+        ]
+      },
+      "long_64": {
+        "shape": {
+          "batch": 1,
+          "heads": 16,
+          "seq_len": 4096,
+          "head_dim": 64,
+          "bucket": "long_64"
+        },
+        "source_top": [
+          {
+            "config_id": "m128_n64_w4_s4",
+            "config": {
+              "BLOCK_M": 128,
+              "BLOCK_N": 64,
+              "num_warps": 4,
+              "num_stages": 4
+            },
+            "metric": 151.87
+          },
+          {
+            "config_id": "m64_n128_w4_s2",
+            "config": {
+              "BLOCK_M": 64,
+              "BLOCK_N": 128,
+              "num_warps": 4,
+              "num_stages": 2
+            },
+            "metric": 135.95
+          },
+          {
+            "config_id": "m64_n32_w4_s3",
+            "config": {
+              "BLOCK_M": 64,
+              "BLOCK_N": 32,
+              "num_warps": 4,
+              "num_stages": 3
+            },
+            "metric": 134.31
+          },
+          {
+            "config_id": "m128_n32_w8_s4",
+            "config": {
+              "BLOCK_M": 128,
+              "BLOCK_N": 32,
+              "num_warps": 8,
+              "num_stages": 4
+            },
+            "metric": 115.7
+          },
+          {
+            "config_id": "m64_n32_w2_s2",
+            "config": {
+              "BLOCK_M": 64,
+              "BLOCK_N": 32,
+              "num_warps": 2,
+              "num_stages": 2
+            },
+            "metric": 113.66
+          }
+        ],
+        "target_predicted_top": [
+          [
+            {
+              "BLOCK_M": 128,
+              "BLOCK_N": 64,
+              "num_warps": 4,
+              "num_stages": 4
+            },
+            144.02133958080006
+          ],
+          [
+            {
+              "BLOCK_M": 64,
+              "BLOCK_N": 128,
+              "num_warps": 4,
+              "num_stages": 2
+            },
+            138.90961674498897
+          ],
+          [
+            {
+              "BLOCK_M": 64,
+              "BLOCK_N": 32,
+              "num_warps": 4,
+              "num_stages": 3
+            },
+            129.16272784478065
+          ],
+          [
+            {
+              "BLOCK_M": 64,
+              "BLOCK_N": 32,
+              "num_warps": 2,
+              "num_stages": 2
+            },
+            122.43317078127494
+          ],
+          [
+            {
+              "BLOCK_M": 128,
+              "BLOCK_N": 32,
+              "num_warps": 8,
+              "num_stages": 4
+            },
+            117.43361387757638
+          ]
+        ]
+      },
+      "long_128": {
+        "shape": {
+          "batch": 1,
+          "heads": 16,
+          "seq_len": 4096,
+          "head_dim": 128,
+          "bucket": "long_128"
+        },
+        "source_top": [
+          {
+            "config_id": "m128_n32_w8_s4",
+            "config": {
+              "BLOCK_M": 128,
+              "BLOCK_N": 32,
+              "num_warps": 8,
+              "num_stages": 4
+            },
+            "metric": 121.69
+          },
+          {
+            "config_id": "m32_n64_w4_s3",
+            "config": {
+              "BLOCK_M": 32,
+              "BLOCK_N": 64,
+              "num_warps": 4,
+              "num_stages": 3
+            },
+            "metric": 101.76
+          },
+          {
+            "config_id": "m64_n32_w4_s3",
+            "config": {
+              "BLOCK_M": 64,
+              "BLOCK_N": 32,
+              "num_warps": 4,
+              "num_stages": 3
+            },
+            "metric": 95.73
+          },
+          {
+            "config_id": "m64_n32_w2_s2",
+            "config": {
+              "BLOCK_M": 64,
+              "BLOCK_N": 32,
+              "num_warps": 2,
+              "num_stages": 2
+            },
+            "metric": 93.57
+          },
+          {
+            "config_id": "m64_n128_w8_s3",
+            "config": {
+              "BLOCK_M": 64,
+              "BLOCK_N": 128,
+              "num_warps": 8,
+              "num_stages": 3
+            },
+            "metric": 81.79
+          }
+        ],
+        "target_predicted_top": [
+          [
+            {
+              "BLOCK_M": 128,
+              "BLOCK_N": 64,
+              "num_warps": 4,
+              "num_stages": 4
+            },
+            90.67405198807668
+          ],
+          [
+            {
+              "BLOCK_M": 64,
+              "BLOCK_N": 128,
+              "num_warps": 8,
+              "num_stages": 3
+            },
+            79.4092838870927
+          ],
+          [
+            {
+              "BLOCK_M": 64,
+              "BLOCK_N": 128,
+              "num_warps": 4,
+              "num_stages": 2
+            },
+            74.26047452413329
+          ],
+          [
+            {
+              "BLOCK_M": 128,
+              "BLOCK_N": 32,
+              "num_warps": 8,
+              "num_stages": 4
+            },
+            66.5277025097829
+          ],
+          [
+            {
+              "BLOCK_M": 64,
+              "BLOCK_N": 64,
+              "num_warps": 8,
+              "num_stages": 3
+            },
+            46.33111982117606
+          ]
+        ]
+      },
+      "llama7b": {
+        "shape": {
+          "batch": 1,
+          "heads": 32,
+          "seq_len": 4096,
+          "head_dim": 128,
+          "bucket": "llama7b"
+        },
+        "source_top": [
+          {
+            "config_id": "m128_n32_w8_s4",
+            "config": {
+              "BLOCK_M": 128,
+              "BLOCK_N": 32,
+              "num_warps": 8,
+              "num_stages": 4
+            },
+            "metric": 136.06
+          },
+          {
+            "config_id": "m64_n32_w2_s2",
+            "config": {
+              "BLOCK_M": 64,
+              "BLOCK_N": 32,
+              "num_warps": 2,
+              "num_stages": 2
+            },
+            "metric": 109.08
+          },
+          {
+            "config_id": "m32_n64_w4_s3",
+            "config": {
+              "BLOCK_M": 32,
+              "BLOCK_N": 64,
+              "num_warps": 4,
+              "num_stages": 3
+            },
+            "metric": 106.82
+          },
+          {
+            "config_id": "m64_n32_w4_s3",
+            "config": {
+              "BLOCK_M": 64,
+              "BLOCK_N": 32,
+              "num_warps": 4,
+              "num_stages": 3
+            },
+            "metric": 104.32
+          },
+          {
+            "config_id": "m64_n128_w4_s2",
+            "config": {
+              "BLOCK_M": 64,
+              "BLOCK_N": 128,
+              "num_warps": 4,
+              "num_stages": 2
+            },
+            "metric": 98.83
+          }
+        ],
+        "target_predicted_top": [
+          [
+            {
+              "BLOCK_M": 128,
+              "BLOCK_N": 32,
+              "num_warps": 8,
+              "num_stages": 4
+            },
+            104.00547866809896
+          ],
+          [
+            {
+              "BLOCK_M": 128,
+              "BLOCK_N": 64,
+              "num_warps": 4,
+              "num_stages": 4
+            },
+            100.43973934951858
+          ],
+          [
+            {
+              "BLOCK_M": 64,
+              "BLOCK_N": 128,
+              "num_warps": 4,
+              "num_stages": 2
+            },
+            90.88951692435387
+          ],
+          [
+            {
+              "BLOCK_M": 64,
+              "BLOCK_N": 128,
+              "num_warps": 8,
+              "num_stages": 3
+            },
+            82.09136749170135
+          ],
+          [
+            {
+              "BLOCK_M": 64,
+              "BLOCK_N": 32,
+              "num_warps": 4,
+              "num_stages": 3
+            },
+            67.83531628266815
+          ]
+        ]
+      },
+      "mistral": {
+        "shape": {
+          "batch": 1,
+          "heads": 32,
+          "seq_len": 8192,
+          "head_dim": 128,
+          "bucket": "mistral"
+        },
+        "source_top": [
+          {
+            "config_id": "m128_n32_w8_s4",
+            "config": {
+              "BLOCK_M": 128,
+              "BLOCK_N": 32,
+              "num_warps": 8,
+              "num_stages": 4
+            },
+            "metric": 149.7
+          },
+          {
+            "config_id": "m64_n32_w2_s2",
+            "config": {
+              "BLOCK_M": 64,
+              "BLOCK_N": 32,
+              "num_warps": 2,
+              "num_stages": 2
+            },
+            "metric": 111.66
+          },
+          {
+            "config_id": "m32_n64_w4_s3",
+            "config": {
+              "BLOCK_M": 32,
+              "BLOCK_N": 64,
+              "num_warps": 4,
+              "num_stages": 3
+            },
+            "metric": 107.82
+          },
+          {
+            "config_id": "m64_n128_w8_s3",
+            "config": {
+              "BLOCK_M": 64,
+              "BLOCK_N": 128,
+              "num_warps": 8,
+              "num_stages": 3
+            },
+            "metric": 107.17
+          },
+          {
+            "config_id": "m64_n32_w4_s3",
+            "config": {
+              "BLOCK_M": 64,
+              "BLOCK_N": 32,
+              "num_warps": 4,
+              "num_stages": 3
+            },
+            "metric": 106.56
+          }
+        ],
+        "target_predicted_top": [
+          [
+            {
+              "BLOCK_M": 128,
+              "BLOCK_N": 64,
+              "num_warps": 4,
+              "num_stages": 4
+            },
+            77.21572518025083
+          ],
+          [
+            {
+              "BLOCK_M": 128,
+              "BLOCK_N": 32,
+              "num_warps": 8,
+              "num_stages": 4
+            },
+            75.52022262731417
+          ],
+          [
+            {
+              "BLOCK_M": 64,
+              "BLOCK_N": 128,
+              "num_warps": 4,
+              "num_stages": 2
+            },
+            61.715498194208145
+          ],
+          [
+            {
+              "BLOCK_M": 64,
+              "BLOCK_N": 128,
+              "num_warps": 8,
+              "num_stages": 3
+            },
+            56.071014515368525
+          ],
+          [
+            {
+              "BLOCK_M": 64,
+              "BLOCK_N": 32,
+              "num_warps": 2,
+              "num_stages": 2
+            },
+            46.476590145785025
+          ]
+        ]
+      }
+    }
+  },
+  "limitations": [
+    "No target-hardware measurements are used in this scaffold artifact.",
+    "Predicted ranking quality across vendors must be validated on real AMD measurements.",
+    "Unknown hardware labels are mapped to the model's unseen-hardware path."
+  ]
+}
