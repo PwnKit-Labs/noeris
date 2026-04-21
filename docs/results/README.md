@@ -36,6 +36,16 @@ Speculative decoding runtime-hook integration benchmark:
 - `docs/results/spec-decode-verify-accept-runtime-integration.json`
 - `docs/results/spec-decode-verify-accept-runtime-integration.md`
 
+KV cache quantize-on-write fused v1:
+
+- `docs/results/kv-quant-write-fused-v1.json`
+- `docs/results/kv-quant-write-fused-v1.md`
+
+KV cache quantize-on-write runtime integration:
+
+- `docs/results/kv-quant-write-runtime-integration.json`
+- `docs/results/kv-quant-write-runtime-integration.md`
+
 Reproducible benchmark-pack command:
 
 ```bash

@@ -1,0 +1,147 @@
+{
+  "generated_at_utc": "2026-04-21T06:02:01.280550+00:00",
+  "gpus": [
+    "A100",
+    "H100"
+  ],
+  "results": {
+    "A100": {
+      "hardware": {
+        "gpu": "NVIDIA A100-SXM4-40GB",
+        "cuda_version": "13.0",
+        "python": "3.11.12"
+      },
+      "config_results": [
+        {
+          "shape_name": "b1_kv16_d256_t1",
+          "correct": true,
+          "max_err": 0.031574,
+          "separated_ms": 0.4352,
+          "fused_ms": 0.1393,
+          "auto_ms": 0.1372,
+          "fused_speedup": 3.125,
+          "auto_speedup": 3.1716,
+          "backends": {
+            "separated": "separated",
+            "fused": "fused",
+            "auto": "fused"
+          }
+        },
+        {
+          "shape_name": "b1_kv4_d512_t1",
+          "correct": true,
+          "max_err": 0.028097,
+          "separated_ms": 0.428,
+          "fused_ms": 0.1372,
+          "auto_ms": 0.1372,
+          "fused_speedup": 3.1194,
+          "auto_speedup": 3.1194,
+          "backends": {
+            "separated": "separated",
+            "fused": "fused",
+            "auto": "fused"
+          }
+        },
+        {
+          "shape_name": "b4_kv16_d256_t1",
+          "correct": true,
+          "max_err": 0.032648,
+          "separated_ms": 0.4321,
+          "fused_ms": 0.1362,
+          "auto_ms": 0.1352,
+          "fused_speedup": 3.1729,
+          "auto_speedup": 3.197,
+          "backends": {
+            "separated": "separated",
+            "fused": "fused",
+            "auto": "fused"
+          }
+        },
+        {
+          "shape_name": "b1_kv16_d256_t8",
+          "correct": true,
+          "max_err": 0.032648,
+          "separated_ms": 0.4332,
+          "fused_ms": 0.1352,
+          "auto_ms": 0.1352,
+          "fused_speedup": 3.2045,
+          "auto_speedup": 3.2045,
+          "backends": {
+            "separated": "separated",
+            "fused": "fused",
+            "auto": "fused"
+          }
+        }
+      ]
+    },
+    "H100": {
+      "hardware": {
+        "gpu": "NVIDIA H100 80GB HBM3",
+        "cuda_version": "13.0",
+        "python": "3.11.12"
+      },
+      "config_results": [
+        {
+          "shape_name": "b1_kv16_d256_t1",
+          "correct": true,
+          "max_err": 0.031574,
+          "separated_ms": 0.1876,
+          "fused_ms": 0.0612,
+          "auto_ms": 0.0631,
+          "fused_speedup": 3.0669,
+          "auto_speedup": 2.9721,
+          "backends": {
+            "separated": "separated",
+            "fused": "fused",
+            "auto": "fused"
+          }
+        },
+        {
+          "shape_name": "b1_kv4_d512_t1",
+          "correct": true,
+          "max_err": 0.028097,
+          "separated_ms": 0.1999,
+          "fused_ms": 0.065,
+          "auto_ms": 0.0613,
+          "fused_speedup": 3.0753,
+          "auto_speedup": 3.2616,
+          "backends": {
+            "separated": "separated",
+            "fused": "fused",
+            "auto": "fused"
+          }
+        },
+        {
+          "shape_name": "b4_kv16_d256_t1",
+          "correct": true,
+          "max_err": 0.032648,
+          "separated_ms": 0.1824,
+          "fused_ms": 0.0678,
+          "auto_ms": 0.0669,
+          "fused_speedup": 2.6887,
+          "auto_speedup": 2.7273,
+          "backends": {
+            "separated": "separated",
+            "fused": "fused",
+            "auto": "fused"
+          }
+        },
+        {
+          "shape_name": "b1_kv16_d256_t8",
+          "correct": true,
+          "max_err": 0.032648,
+          "separated_ms": 0.1827,
+          "fused_ms": 0.0604,
+          "auto_ms": 0.0696,
+          "fused_speedup": 3.0254,
+          "auto_speedup": 2.6248,
+          "backends": {
+            "separated": "separated",
+            "fused": "fused",
+            "auto": "fused"
+          }
+        }
+      ]
+    }
+  }
+}
