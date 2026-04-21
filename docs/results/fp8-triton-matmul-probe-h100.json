@@ -1,0 +1,19 @@
+{
+  "generated_at_utc": "2026-04-21T08:32:57.457488+00:00",
+  "hardware": {
+    "gpu": "NVIDIA H100 80GB HBM3",
+    "cuda_version": "13.0",
+    "python": "3.11.12"
+  },
+  "probe": {
+    "ok": true,
+    "shape": [
+      1024,
+      1024,
+      1024
+    ],
+    "ms": 0.0513,
+    "tflops": 41.8907,
+    "max_err": 0.125
+  }
+}

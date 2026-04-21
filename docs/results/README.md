@@ -20,6 +20,8 @@ Targeted QK-norm attention reruns:
 FP8 baseline probes:
 
 - `docs/results/fp8-hopper-probe.json`
+- `docs/results/fp8-triton-matmul-probe-h100.json`
+- `docs/results/fp8-triton-matmul-probe-h100.md`
 
 Speculative decoding verify+accept baseline:
 

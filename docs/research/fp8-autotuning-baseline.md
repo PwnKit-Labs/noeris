@@ -26,6 +26,23 @@ PYTHONPATH=src uv run --python 3.11 --no-project --with modal python3 scripts/fp
 - Whether `torch.matmul` accepts them end-to-end in this runtime
 - Any runtime error signatures to account for in future kernels
 
+4. Probe Triton-native FP8 matmul viability on H100:
+
+```bash
+PYTHONPATH=src uv run --python 3.11 --no-project --with modal python3 scripts/fp8_triton_matmul_probe.py
+```
+
+Artifacts:
+
+- `docs/results/fp8-triton-matmul-probe-h100.json`
+- `docs/results/fp8-triton-matmul-probe-h100.md`
+
+Interpretation:
+
+- If torch `addmm` is unavailable for float8 but Triton kernel probe passes,
+  FP8 autotuning should proceed through Triton kernel paths rather than torch
+  eager matmul baselines.
+
 ## Next implementation steps
 
 - Add FP8 shape bucket(s) for matmul in a dedicated experiment lane.
