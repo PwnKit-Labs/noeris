@@ -26,6 +26,11 @@ Speculative decoding verify+accept baseline:
 - `docs/results/spec-decode-verify-accept-baseline.json`
 - `docs/results/spec-decode-verify-accept-baseline.md`
 
+Speculative decoding verify+accept fused v1:
+
+- `docs/results/spec-decode-verify-accept-fused-v1.json`
+- `docs/results/spec-decode-verify-accept-fused-v1.md`
+
 Reproducible benchmark-pack command:
 
 ```bash
