@@ -5,6 +5,7 @@ from dataclasses import field
 import json
 from math import ceil
 import os
+from pathlib import Path
 import platform
 from random import Random
 from statistics import median
@@ -13,6 +14,7 @@ from time import perf_counter
 from ._legacy.components import ExperimentExecutor
 from .llm import ResponsesApiClient, extract_usage
 from .models import ExperimentResult, ExperimentSpec, ExperimentStatus, ResearchTopic
+from .fp8_runtime import resolve_fp8_layout
 
 
 LONG_CONTEXT_FIXTURES = [
@@ -179,6 +181,14 @@ LIVE_MATMUL_FIXTURES = [
         "dtype": "float64",
         "workload_tag": "square_control",
         "workload_share": 0.14,
+    },
+    {
+        "id": "mm-live-fp8-infer",
+        "shape": (256, 128, 256),
+        "dtype": "fp8",
+        "workload_tag": "fp8_infer_weight_reuse",
+        "workload_share": 0.10,
+        "expected_weight_reuse": 8,
     },
 ]
 
@@ -670,6 +680,7 @@ class MatmulPythonExecutor(ExperimentExecutor):
     max_candidates_per_run: int = 7
     history_summary: dict[str, object] | None = None
     proposer: ResponsesApiClient | None = None
+    fp8_layout_preference: str = "auto"
 
     def run(
         self,
@@ -677,6 +688,7 @@ class MatmulPythonExecutor(ExperimentExecutor):
         experiments: list[ExperimentSpec],
     ) -> list[ExperimentResult]:
         del topic
+        fp8_policy_payload = _load_fp8_layout_policy_payload()
         rows = []
         weighted_improvements = []
         unweighted_improvements = []
@@ -685,6 +697,16 @@ class MatmulPythonExecutor(ExperimentExecutor):
         selected_candidates, pruned_candidates, shape_focus, proposal = self._select_candidates()
         for fixture in LIVE_MATMUL_FIXTURES:
             row = self._run_fixture(fixture, selected_candidates)
+            if str(row.get("dtype", "")).lower() == "fp8":
+                expected_reuse = int(row.get("expected_weight_reuse", 1))
+                shape_name = _fp8_shape_name_from_shape_text(str(row.get("shape", "")))
+                row["fp8_layout"] = resolve_fp8_layout(
+                    prefer=self.fp8_layout_preference,
+                    shape_name=shape_name,
+                    expected_reuse_count=expected_reuse,
+                    policy_payload=fp8_policy_payload,
+                )
+                row["fp8_shape_name"] = shape_name
             rows.append(row)
             uplift = row["uplift_pct"] / 100
             share = float(row["workload_share"])
@@ -728,6 +750,10 @@ class MatmulPythonExecutor(ExperimentExecutor):
                 "repetitions": self.repetitions,
                 "warmup_repetitions": self.warmup_repetitions,
                 "aggregation": "workload_share_weighted_mean_uplift_pct",
+                "fp8_runtime_layout": {
+                    "preference": self.fp8_layout_preference,
+                    "policy_artifact": "docs/results/fp8-layout-reuse-policy-h100.json",
+                },
             },
             "candidate-catalog.json": {
                 "baseline": "naive_ijk",
@@ -755,6 +781,7 @@ class MatmulPythonExecutor(ExperimentExecutor):
                 "unweighted_mean_uplift_pct": round(unweighted_mean_uplift * 100, 2),
                 "rows": rows,
             },
+            "fp8-runtime-layout-summary.json": _build_fp8_runtime_layout_summary(rows),
             "best-candidate-summary.json": {
                 "winner_counts": winner_counts,
                 "winner_share_scores": {
@@ -858,6 +885,7 @@ class MatmulPythonExecutor(ExperimentExecutor):
             "dtype": fixture["dtype"],
             "workload_tag": fixture.get("workload_tag", ""),
             "workload_share": float(fixture.get("workload_share", 1.0)),
+            "expected_weight_reuse": int(fixture.get("expected_weight_reuse", 1)),
             "baseline_seconds": round(baseline_time, 6),
             "baseline_loops_per_sample": baseline_measurement["loops_per_sample"],
             "candidate_seconds": best_candidate["candidate_seconds"],
@@ -2766,6 +2794,71 @@ def _int_env(name: str) -> int | None:
         return int(value)
     except ValueError:
         return None
+
+
+def _load_fp8_layout_policy_payload() -> dict | None:
+    root = Path(__file__).resolve().parents[2]
+    policy_path = root / "docs/results/fp8-layout-reuse-policy-h100.json"
+    if not policy_path.exists():
+        return None
+    try:
+        payload = json.loads(policy_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return payload
+
+
+def _fp8_shape_name_from_shape_text(shape: str) -> str:
+    normalized = (shape or "").strip().lower()
+    if normalized == "1024x1024x1024":
+        return "fp8_mm_1024"
+    if normalized == "2048x1024x2048":
+        return "fp8_mm_2048x1024x2048"
+    if normalized == "4096x4096x4096":
+        return "fp8_mm_4096x4096x4096"
+    # Fallback: keep a deterministic name when shape is outside current policy set.
+    return f"fp8_mm_{normalized.replace('x', 'x')}"
+
+
+def _build_fp8_runtime_layout_summary(rows: list[dict[str, object]]) -> dict[str, object]:
+    fp8_rows = [
+        row
+        for row in rows
+        if str(row.get("dtype", "")).lower() == "fp8"
+    ]
+    layout_counts: dict[str, int] = {}
+    weighted_share_by_layout: dict[str, float] = {}
+    fixture_rows: list[dict[str, object]] = []
+
+    for row in fp8_rows:
+        layout = str(row.get("fp8_layout", "unknown"))
+        layout_counts[layout] = layout_counts.get(layout, 0) + 1
+        share = float(row.get("workload_share", 0.0))
+        weighted_share_by_layout[layout] = weighted_share_by_layout.get(layout, 0.0) + share
+        fixture_rows.append(
+            {
+                "id": row.get("id", ""),
+                "shape": row.get("shape", ""),
+                "fp8_shape_name": row.get("fp8_shape_name", ""),
+                "layout": layout,
+                "expected_weight_reuse": int(row.get("expected_weight_reuse", 1)),
+                "workload_share": share,
+                "uplift_pct": float(row.get("uplift_pct", 0.0)),
+            }
+        )
+
+    return {
+        "has_fp8_rows": bool(fp8_rows),
+        "fp8_fixture_count": len(fp8_rows),
+        "layout_counts": layout_counts,
+        "weighted_share_by_layout": {
+            layout: round(value, 4)
+            for layout, value in weighted_share_by_layout.items()
+        },
+        "fixtures": fixture_rows,
+    }
 
 
 _LONG_CONTEXT_ANSWER_SCHEMA = {

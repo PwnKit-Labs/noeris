@@ -311,9 +311,36 @@ class RunStoreTests(unittest.TestCase):
                     }
                 ]
             }
+            record.memo.results[0].artifact_payloads["fp8-runtime-layout-summary.json"] = {
+                "has_fp8_rows": True,
+                "fp8_fixture_count": 2,
+                "layout_counts": {"nk": 1, "kn": 1},
+                "weighted_share_by_layout": {"nk": 0.14, "kn": 0.10},
+                "fixtures": [
+                    {
+                        "id": "mm-live-fp8-a",
+                        "shape": "1024x1024x1024",
+                        "fp8_shape_name": "fp8_mm_1024",
+                        "layout": "kn",
+                        "expected_weight_reuse": 1,
+                        "workload_share": 0.10,
+                        "uplift_pct": 3.1,
+                    },
+                    {
+                        "id": "mm-live-fp8-b",
+                        "shape": "2048x1024x2048",
+                        "fp8_shape_name": "fp8_mm_2048x1024x2048",
+                        "layout": "nk",
+                        "expected_weight_reuse": 8,
+                        "workload_share": 0.14,
+                        "uplift_pct": 5.4,
+                    },
+                ],
+            }
             store.save(record)
 
             summary = store.summarize_history(benchmark_id="matmul-speedup")
+            brief = store.render_history_brief(benchmark_id="matmul-speedup")
 
         self.assertEqual(summary["best_matmul_candidate_id"], "transpose_dot")
         self.assertEqual(summary["matmul_candidate_wins"]["transpose_dot"], 5)
@@ -322,6 +349,16 @@ class RunStoreTests(unittest.TestCase):
         self.assertEqual(summary["weakest_matmul_shapes"][0]["shape"], "32x32x32")
         self.assertEqual(summary["weakest_matmul_workloads"][0]["workload_tag"], "mlp_up_proj")
         self.assertEqual(summary["matmul_frontier_archive"][0]["workload_tag"], "mlp_up_proj")
+        self.assertEqual(summary["fp8_total_fixture_count"], 2)
+        self.assertEqual(summary["fp8_layout_counts"]["nk"], 1)
+        self.assertEqual(summary["fp8_layout_counts"]["kn"], 1)
+        self.assertEqual(summary["fp8_reuse_bucket_layout_wins"]["reuse_1"]["kn"], 1)
+        self.assertEqual(summary["fp8_reuse_bucket_layout_wins"]["reuse_5_plus"]["nk"], 1)
+        self.assertEqual(summary["fp8_policy_alignment"]["overall_nk_rate"], 0.5)
+        self.assertEqual(summary["fp8_policy_alignment"]["reuse_1_kn_rate"], 1.0)
+        self.assertEqual(summary["fp8_policy_alignment"]["reuse_5_plus_nk_rate"], 1.0)
+        self.assertIn("## FP8 Layout Trends", brief)
+        self.assertIn("overall_nk_rate", brief)
 
     def test_summarize_history_keeps_latest_shape_winner_from_newest_run(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -415,6 +452,102 @@ class RunStoreTests(unittest.TestCase):
             summary["matmul_shape_challengers"]["96x96x96"]["latest_runner_up"],
             "transpose_dot",
         )
+
+    def test_summarize_history_flags_fp8_policy_regressions(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = JsonFileRunStore(Path(temp_dir))
+
+            older = ResearchPipeline().run_record_for(
+                topic=ResearchTopic(
+                    name="matrix multiplication speedup",
+                    objective="discover validated kernel-level speedups",
+                    benchmark_id="matmul-speedup",
+                    constraints=["benchmark_id:matmul-speedup"],
+                ),
+                benchmark_id="matmul-speedup",
+            )
+            older.created_at = "2026-04-10T09:00:00Z"
+            older.memo.results[0].artifact_payloads["best-candidate-summary.json"] = {
+                "winner_counts": {"transpose_dot": 1},
+                "best_overall_candidate_id": "transpose_dot",
+            }
+            older.memo.results[0].artifact_payloads["fp8-runtime-layout-summary.json"] = {
+                "has_fp8_rows": True,
+                "fp8_fixture_count": 2,
+                "layout_counts": {"kn": 1, "nk": 1},
+                "weighted_share_by_layout": {"kn": 0.1, "nk": 0.1},
+                "fixtures": [
+                    {
+                        "id": "f1",
+                        "shape": "1024x1024x1024",
+                        "fp8_shape_name": "fp8_mm_1024",
+                        "layout": "kn",
+                        "expected_weight_reuse": 1,
+                        "workload_share": 0.1,
+                        "uplift_pct": 1.0,
+                    },
+                    {
+                        "id": "f2",
+                        "shape": "2048x1024x2048",
+                        "fp8_shape_name": "fp8_mm_2048x1024x2048",
+                        "layout": "nk",
+                        "expected_weight_reuse": 8,
+                        "workload_share": 0.1,
+                        "uplift_pct": 1.0,
+                    },
+                ],
+            }
+            store.save(older)
+
+            newer = ResearchPipeline().run_record_for(
+                topic=ResearchTopic(
+                    name="matrix multiplication speedup",
+                    objective="discover validated kernel-level speedups",
+                    benchmark_id="matmul-speedup",
+                    constraints=["benchmark_id:matmul-speedup"],
+                ),
+                benchmark_id="matmul-speedup",
+            )
+            newer.created_at = "2026-04-10T10:00:00Z"
+            newer.memo.results[0].artifact_payloads["best-candidate-summary.json"] = {
+                "winner_counts": {"transpose_rowpair": 1},
+                "best_overall_candidate_id": "transpose_rowpair",
+            }
+            newer.memo.results[0].artifact_payloads["fp8-runtime-layout-summary.json"] = {
+                "has_fp8_rows": True,
+                "fp8_fixture_count": 2,
+                "layout_counts": {"nk": 1, "kn": 1},
+                "weighted_share_by_layout": {"kn": 0.1, "nk": 0.1},
+                "fixtures": [
+                    {
+                        "id": "f1",
+                        "shape": "1024x1024x1024",
+                        "fp8_shape_name": "fp8_mm_1024",
+                        "layout": "nk",
+                        "expected_weight_reuse": 1,
+                        "workload_share": 0.1,
+                        "uplift_pct": 1.0,
+                    },
+                    {
+                        "id": "f2",
+                        "shape": "2048x1024x2048",
+                        "fp8_shape_name": "fp8_mm_2048x1024x2048",
+                        "layout": "kn",
+                        "expected_weight_reuse": 8,
+                        "workload_share": 0.1,
+                        "uplift_pct": 1.0,
+                    },
+                ],
+            }
+            store.save(newer)
+
+            summary = store.summarize_history(benchmark_id="matmul-speedup")
+            brief = store.render_history_brief(benchmark_id="matmul-speedup")
+
+        self.assertTrue(summary["fp8_policy_regressions"])
+        self.assertIn("reuse_1_kn_rate dropped", summary["fp8_policy_regressions"][0])
+        self.assertIn("## FP8 Layout Trends", brief)
+        self.assertIn("Policy regression warnings", brief)
 
 
 if __name__ == "__main__":

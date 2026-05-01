@@ -11,6 +11,7 @@ from research_engine.executors import (
     LongContextResponsesExecutor,
     LIVE_MATMUL_FIXTURES,
     MatmulPythonExecutor,
+    _fp8_shape_name_from_shape_text,
     TOOL_USE_FIXTURES,
     ToolUseResponsesExecutor,
 )
@@ -299,9 +300,36 @@ class ExecutorTests(unittest.TestCase):
         self.assertIn("selection_slots", results[0].artifact_payloads["shape-focus.json"])
         self.assertIn("frontier-archive.json", results[0].artifact_refs)
         self.assertIn("pareto-frontier.json", results[0].artifact_refs)
+        self.assertIn("fp8-runtime-layout-summary.json", results[0].artifact_refs)
         self.assertTrue(results[0].artifact_payloads["pareto-frontier.json"]["candidate_ids"])
         self.assertTrue(
             results[0].artifact_payloads["best-candidate-summary.json"]["best_overall_candidate_id"]
+        )
+        self.assertIn("fp8_runtime_layout", results[0].artifact_payloads["benchmark-config.json"])
+        fp8_rows = [
+            row
+            for row in results[0].artifact_payloads["raw-timing-results.json"]["rows"]
+            if str(row.get("dtype", "")).lower() == "fp8"
+        ]
+        self.assertTrue(fp8_rows)
+        self.assertIn("fp8_layout", fp8_rows[0])
+        self.assertIn(fp8_rows[0]["fp8_layout"], {"kn", "nk"})
+        self.assertIn("expected_weight_reuse", fp8_rows[0])
+        fp8_summary = results[0].artifact_payloads["fp8-runtime-layout-summary.json"]
+        self.assertTrue(fp8_summary["has_fp8_rows"])
+        self.assertGreaterEqual(fp8_summary["fp8_fixture_count"], 1)
+        self.assertTrue(fp8_summary["layout_counts"])
+        self.assertTrue(fp8_summary["fixtures"])
+
+    def test_fp8_shape_name_mapping(self) -> None:
+        self.assertEqual(_fp8_shape_name_from_shape_text("1024x1024x1024"), "fp8_mm_1024")
+        self.assertEqual(
+            _fp8_shape_name_from_shape_text("2048x1024x2048"),
+            "fp8_mm_2048x1024x2048",
+        )
+        self.assertEqual(
+            _fp8_shape_name_from_shape_text("4096x4096x4096"),
+            "fp8_mm_4096x4096x4096",
         )
 
     def test_build_pipeline_uses_live_matmul_executor(self) -> None:

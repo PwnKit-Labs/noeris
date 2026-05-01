@@ -1,0 +1,66 @@
+{
+  "generated_at_utc": "2026-04-24T18:21:45.870090+00:00",
+  "gpus": [
+    "H100"
+  ],
+  "policy_json": "docs/results/fp8-layout-reuse-policy-h100.json",
+  "results": {
+    "H100": {
+      "hardware": {
+        "gpu": "NVIDIA H100 80GB HBM3",
+        "cuda_version": "13.0",
+        "python": "3.11.12"
+      },
+      "config_results": [
+        {
+          "shape_name": "fp8_mm_1024",
+          "expected_reuse": 1,
+          "correct": true,
+          "kn_ms": 0.0534,
+          "nk_ms": 0.0324,
+          "policy_kn_total_ms": 0.0359,
+          "policy_nk_total_ms": 0.0456,
+          "auto_effective_ms": 0.0359,
+          "auto_layout": "kn",
+          "kernel_best_layout": "nk",
+          "policy_best_layout": "kn",
+          "auto_vs_kernel_best_ratio": 1.646,
+          "auto_vs_policy_best_ratio": 1.0,
+          "max_err": 0.125
+        },
+        {
+          "shape_name": "fp8_mm_2048x1024x2048",
+          "expected_reuse": 2,
+          "correct": true,
+          "kn_ms": 0.0785,
+          "nk_ms": 0.0373,
+          "policy_kn_total_ms": 0.1008,
+          "policy_nk_total_ms": 0.0928,
+          "auto_effective_ms": 0.0928,
+          "auto_layout": "nk",
+          "kernel_best_layout": "nk",
+          "policy_best_layout": "nk",
+          "auto_vs_kernel_best_ratio": 1.0,
+          "auto_vs_policy_best_ratio": 1.0,
+          "max_err": 0.125
+        },
+        {
+          "shape_name": "fp8_mm_4096x4096x4096",
+          "expected_reuse": 1,
+          "correct": true,
+          "kn_ms": 0.8607,
+          "nk_ms": 0.1883,
+          "policy_kn_total_ms": 0.4597,
+          "policy_nk_total_ms": 0.3123,
+          "auto_effective_ms": 0.3123,
+          "auto_layout": "nk",
+          "kernel_best_layout": "nk",
+          "policy_best_layout": "nk",
+          "auto_vs_kernel_best_ratio": 1.0,
+          "auto_vs_policy_best_ratio": 1.0,
+          "max_err": 0.25
+        }
+      ]
+    }
+  }
+}

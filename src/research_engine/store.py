@@ -220,6 +220,8 @@ class JsonFileRunStore:
             source.identifier: source.title
             for source in (latest.memo.sources if latest else [])
         }
+        latest_fp8_layout_summary = _extract_fp8_layout_summary_from_record(latest)
+        previous_fp8_layout_summary = _extract_fp8_layout_summary_from_record(previous)
 
         confidence_changes = []
         for source_id in sorted(set(latest_assessments) & set(previous_assessments)):
@@ -253,6 +255,11 @@ class JsonFileRunStore:
         matmul_workload_challengers: dict[str, dict[str, object]] = {}
         matmul_frontier_archive: list[dict[str, object]] = []
         matmul_pareto_candidate_ids: list[str] = []
+        fp8_layout_counts: dict[str, int] = {}
+        fp8_weighted_share_by_layout: dict[str, float] = {}
+        fp8_total_fixture_count = 0
+        fp8_reuse_bucket_totals: dict[str, int] = {}
+        fp8_reuse_bucket_layout_wins: dict[str, dict[str, int]] = {}
         if benchmark_id == "matmul-speedup":
             for record in records:
                 for result in record.memo.results:
@@ -357,12 +364,66 @@ class JsonFileRunStore:
                                         + 1
                                     )
 
+                    fp8_layout_payload = result.artifact_payloads.get("fp8-runtime-layout-summary.json")
+                    if isinstance(fp8_layout_payload, dict):
+                        fp8_total_fixture_count += int(fp8_layout_payload.get("fp8_fixture_count", 0) or 0)
+                        layout_counts = fp8_layout_payload.get("layout_counts", {})
+                        if isinstance(layout_counts, dict):
+                            for layout, count in layout_counts.items():
+                                layout_key = str(layout)
+                                try:
+                                    fp8_layout_counts[layout_key] = fp8_layout_counts.get(layout_key, 0) + int(count)
+                                except (TypeError, ValueError):
+                                    continue
+                        weighted_share = fp8_layout_payload.get("weighted_share_by_layout", {})
+                        if isinstance(weighted_share, dict):
+                            for layout, share in weighted_share.items():
+                                layout_key = str(layout)
+                                try:
+                                    fp8_weighted_share_by_layout[layout_key] = (
+                                        fp8_weighted_share_by_layout.get(layout_key, 0.0) + float(share)
+                                    )
+                                except (TypeError, ValueError):
+                                    continue
+                        fixtures = fp8_layout_payload.get("fixtures", [])
+                        if isinstance(fixtures, list):
+                            for fixture in fixtures:
+                                if not isinstance(fixture, dict):
+                                    continue
+                                layout = str(fixture.get("layout", "")).strip()
+                                if not layout:
+                                    continue
+                                try:
+                                    reuse = int(fixture.get("expected_weight_reuse", 1))
+                                except (TypeError, ValueError):
+                                    reuse = 1
+                                if reuse <= 1:
+                                    bucket = "reuse_1"
+                                elif reuse <= 4:
+                                    bucket = "reuse_2_4"
+                                else:
+                                    bucket = "reuse_5_plus"
+                                fp8_reuse_bucket_totals[bucket] = fp8_reuse_bucket_totals.get(bucket, 0) + 1
+                                bucket_layouts = fp8_reuse_bucket_layout_wins.setdefault(bucket, {})
+                                bucket_layouts[layout] = bucket_layouts.get(layout, 0) + 1
+
         source_freshness = _summarize_source_freshness(latest.memo.sources if latest else [])
         ranked_sources = _rank_sources_for_history(
             sources=latest.memo.sources if latest else [],
             assessments=latest.memo.source_assessments if latest else [],
             claims=latest.memo.claims if latest else [],
             contradictions=latest.memo.contradictions if latest else [],
+        )
+        fp8_policy_alignment = _summarize_fp8_policy_alignment(
+            reuse_bucket_totals=fp8_reuse_bucket_totals,
+            reuse_bucket_layout_wins=fp8_reuse_bucket_layout_wins,
+            layout_counts=fp8_layout_counts,
+        )
+        fp8_latest_alignment = _alignment_from_layout_summary(latest_fp8_layout_summary)
+        fp8_previous_alignment = _alignment_from_layout_summary(previous_fp8_layout_summary)
+        fp8_policy_regressions = _detect_fp8_policy_regressions(
+            latest_alignment=fp8_latest_alignment,
+            previous_alignment=fp8_previous_alignment,
         )
 
         return {
@@ -411,6 +472,18 @@ class JsonFileRunStore:
             "matmul_workload_challengers": matmul_workload_challengers,
             "matmul_frontier_archive": matmul_frontier_archive,
             "matmul_pareto_candidate_ids": matmul_pareto_candidate_ids,
+            "fp8_layout_counts": fp8_layout_counts,
+            "fp8_weighted_share_by_layout": {
+                layout: round(value, 4)
+                for layout, value in fp8_weighted_share_by_layout.items()
+            },
+            "fp8_total_fixture_count": fp8_total_fixture_count,
+            "fp8_reuse_bucket_totals": fp8_reuse_bucket_totals,
+            "fp8_reuse_bucket_layout_wins": fp8_reuse_bucket_layout_wins,
+            "fp8_policy_alignment": fp8_policy_alignment,
+            "fp8_latest_alignment": fp8_latest_alignment,
+            "fp8_previous_alignment": fp8_previous_alignment,
+            "fp8_policy_regressions": fp8_policy_regressions,
             "weakest_matmul_shapes": sorted(
                 [
                     {
@@ -530,6 +603,46 @@ class JsonFileRunStore:
                     "",
                 ]
             )
+        if summary.get("fp8_total_fixture_count", 0):
+            lines.extend(["## FP8 Layout Trends", ""])
+            lines.append(f"- FP8 fixtures observed: `{summary.get('fp8_total_fixture_count', 0)}`")
+            layout_counts = summary.get("fp8_layout_counts", {}) or {}
+            if layout_counts:
+                lines.append(
+                    "- Layout counts: `"
+                    + ", ".join(f"{layout}={count}" for layout, count in layout_counts.items())
+                    + "`"
+                )
+            share_by_layout = summary.get("fp8_weighted_share_by_layout", {}) or {}
+            if share_by_layout:
+                lines.append(
+                    "- Weighted share by layout: `"
+                    + ", ".join(f"{layout}={share}" for layout, share in share_by_layout.items())
+                    + "`"
+                )
+            reuse_wins = summary.get("fp8_reuse_bucket_layout_wins", {}) or {}
+            for bucket, wins in reuse_wins.items():
+                if not wins:
+                    continue
+                lines.append(
+                    f"- {bucket}: `"
+                    + ", ".join(f"{layout}={count}" for layout, count in wins.items())
+                    + "`"
+                )
+            alignment = summary.get("fp8_policy_alignment", {}) or {}
+            if alignment.get("overall_nk_rate") is not None:
+                lines.append(f"- overall_nk_rate: `{alignment['overall_nk_rate']}`")
+            if alignment.get("reuse_1_kn_rate") is not None:
+                lines.append(f"- reuse_1_kn_rate: `{alignment['reuse_1_kn_rate']}`")
+            if alignment.get("reuse_2_4_nk_rate") is not None:
+                lines.append(f"- reuse_2_4_nk_rate: `{alignment['reuse_2_4_nk_rate']}`")
+            if alignment.get("reuse_5_plus_nk_rate") is not None:
+                lines.append(f"- reuse_5_plus_nk_rate: `{alignment['reuse_5_plus_nk_rate']}`")
+            regressions = summary.get("fp8_policy_regressions", []) or []
+            if regressions:
+                lines.append("- Policy regression warnings:")
+                lines.extend(f"  - {warning}" for warning in regressions)
+            lines.append("")
         return "\n".join(lines)
 
     def _load_matching_runs(
@@ -687,3 +800,120 @@ def _parse_iso_datetime(value: str):
 
     normalized = value.replace("Z", "+00:00")
     return datetime.fromisoformat(normalized)
+
+
+def _summarize_fp8_policy_alignment(
+    *,
+    reuse_bucket_totals: dict[str, int],
+    reuse_bucket_layout_wins: dict[str, dict[str, int]],
+    layout_counts: dict[str, int],
+) -> dict[str, float | None]:
+    def _rate(numerator: int, denominator: int) -> float | None:
+        if denominator <= 0:
+            return None
+        return round(float(numerator) / float(denominator), 4)
+
+    overall_total = sum(int(v) for v in layout_counts.values())
+    overall_nk = int(layout_counts.get("nk", 0))
+
+    reuse_1_total = int(reuse_bucket_totals.get("reuse_1", 0))
+    reuse_1_kn = int((reuse_bucket_layout_wins.get("reuse_1", {}) or {}).get("kn", 0))
+
+    reuse_2_4_total = int(reuse_bucket_totals.get("reuse_2_4", 0))
+    reuse_2_4_nk = int((reuse_bucket_layout_wins.get("reuse_2_4", {}) or {}).get("nk", 0))
+
+    reuse_5_plus_total = int(reuse_bucket_totals.get("reuse_5_plus", 0))
+    reuse_5_plus_nk = int((reuse_bucket_layout_wins.get("reuse_5_plus", {}) or {}).get("nk", 0))
+
+    return {
+        "overall_nk_rate": _rate(overall_nk, overall_total),
+        "reuse_1_kn_rate": _rate(reuse_1_kn, reuse_1_total),
+        "reuse_2_4_nk_rate": _rate(reuse_2_4_nk, reuse_2_4_total),
+        "reuse_5_plus_nk_rate": _rate(reuse_5_plus_nk, reuse_5_plus_total),
+    }
+
+
+def _extract_fp8_layout_summary_from_record(record: ResearchRunRecord | None) -> dict | None:
+    if record is None:
+        return None
+    for result in record.memo.results:
+        payload = result.artifact_payloads.get("fp8-runtime-layout-summary.json")
+        if isinstance(payload, dict):
+            return payload
+    return None
+
+
+def _alignment_from_layout_summary(payload: dict | None) -> dict[str, float | None]:
+    if not isinstance(payload, dict):
+        return {
+            "overall_nk_rate": None,
+            "reuse_1_kn_rate": None,
+            "reuse_2_4_nk_rate": None,
+            "reuse_5_plus_nk_rate": None,
+        }
+
+    layout_counts = payload.get("layout_counts", {})
+    if not isinstance(layout_counts, dict):
+        layout_counts = {}
+
+    bucket_totals = {"reuse_1": 0, "reuse_2_4": 0, "reuse_5_plus": 0}
+    bucket_wins = {
+        "reuse_1": {},
+        "reuse_2_4": {},
+        "reuse_5_plus": {},
+    }
+    fixtures = payload.get("fixtures", [])
+    if isinstance(fixtures, list):
+        for row in fixtures:
+            if not isinstance(row, dict):
+                continue
+            layout = str(row.get("layout", "")).strip()
+            if not layout:
+                continue
+            try:
+                reuse = int(row.get("expected_weight_reuse", 1))
+            except (TypeError, ValueError):
+                reuse = 1
+            if reuse <= 1:
+                bucket = "reuse_1"
+            elif reuse <= 4:
+                bucket = "reuse_2_4"
+            else:
+                bucket = "reuse_5_plus"
+            bucket_totals[bucket] = bucket_totals.get(bucket, 0) + 1
+            wins = bucket_wins.setdefault(bucket, {})
+            wins[layout] = wins.get(layout, 0) + 1
+
+    return _summarize_fp8_policy_alignment(
+        reuse_bucket_totals=bucket_totals,
+        reuse_bucket_layout_wins=bucket_wins,
+        layout_counts={
+            str(k): int(v)
+            for k, v in layout_counts.items()
+            if isinstance(k, str) and isinstance(v, int)
+        },
+    )
+
+
+def _detect_fp8_policy_regressions(
+    *,
+    latest_alignment: dict[str, float | None],
+    previous_alignment: dict[str, float | None],
+    threshold_drop: float = 0.20,
+) -> list[str]:
+    regressions: list[str] = []
+
+    def _check_drop(metric_key: str, label: str) -> None:
+        latest = latest_alignment.get(metric_key)
+        previous = previous_alignment.get(metric_key)
+        if latest is None or previous is None:
+            return
+        if float(previous) - float(latest) >= threshold_drop:
+            regressions.append(
+                f"{label} dropped from {float(previous):.4f} to {float(latest):.4f}"
+            )
+
+    _check_drop("reuse_1_kn_rate", "reuse_1_kn_rate")
+    _check_drop("reuse_2_4_nk_rate", "reuse_2_4_nk_rate")
+    _check_drop("reuse_5_plus_nk_rate", "reuse_5_plus_nk_rate")
+    return regressions

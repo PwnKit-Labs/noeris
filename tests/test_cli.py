@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 from tests import _pathfix  # noqa: F401
 
-from research_engine.cli import _parse_operator_shape, build_parser, main
+from research_engine.cli import _parse_operator_shape, _render_history_regressions_md, build_parser, main
 from research_engine.llm import LlmConfigurationError
 from research_engine.models import ResearchSource
 
@@ -164,11 +164,30 @@ class CliTests(unittest.TestCase):
             )
             summary_text = (output_dir / "history-summary.json").read_text(encoding="utf-8")
             brief_text = (output_dir / "history-brief.md").read_text(encoding="utf-8")
+            regressions_json = (output_dir / "history-regressions.json").read_text(encoding="utf-8")
+            regressions_md = (output_dir / "history-regressions.md").read_text(encoding="utf-8")
 
         self.assertEqual(exit_code, 0)
         self.assertTrue(payload["output_dir"].endswith("history"))
         self.assertIn("tool-use-reliability", summary_text)
         self.assertIn("# History Brief", brief_text)
+        self.assertIn("history-regressions.json", " ".join(payload["files"]))
+        self.assertIn("history-regressions.md", " ".join(payload["files"]))
+        self.assertIn("fp8_policy_regressions", regressions_json)
+        self.assertIn("# History Regressions", regressions_md)
+
+    def test_render_history_regressions_md_defaults_to_none(self) -> None:
+        md = _render_history_regressions_md(
+            {
+                "benchmark_id": "matmul-speedup",
+                "topic": "matrix multiplication speedup",
+                "run_count": 2,
+                "fp8_policy_regressions": [],
+            }
+        )
+        self.assertIn("# History Regressions", md)
+        self.assertIn("FP8 Policy Regressions", md)
+        self.assertIn("- none", md)
 
     def test_export_run_command_writes_bundle(self) -> None:
         with _temp_workspace() as temp_dir:
@@ -208,6 +227,8 @@ class CliTests(unittest.TestCase):
         self.assertEqual(status_payload["latest_run"]["run_id"], payload["run_id"])
         self.assertTrue(status_payload["history_artifacts_present"]["history_summary_json"])
         self.assertTrue(status_payload["history_artifacts_present"]["history_brief_md"])
+        self.assertTrue(status_payload["history_artifacts_present"]["history_regressions_json"])
+        self.assertTrue(status_payload["history_artifacts_present"]["history_regressions_md"])
         self.assertIn("CI", status_payload["workflow_summary"]["workflows"])
 
     def test_benchmark_run_command_persists_and_exports_empirical_lane(self) -> None:

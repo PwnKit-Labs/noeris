@@ -1,0 +1,308 @@
+{
+  "generated_at_utc": "2026-04-24T12:18:55.498850+00:00",
+  "hardware": {
+    "gpu": "NVIDIA H100 80GB HBM3",
+    "cuda_version": "13.0",
+    "python": "3.11.12"
+  },
+  "config_results": [
+    {
+      "config_id": "kn_bm128_bn64_bk64_w8_s3_g8",
+      "config": {
+        "layout": "kn",
+        "BLOCK_M": 128,
+        "BLOCK_N": 64,
+        "BLOCK_K": 64,
+        "num_warps": 8,
+        "num_stages": 3,
+        "GROUP_M": 8
+      },
+      "results": [
+        {
+          "shape_name": "fp8_mm_1024",
+          "shape": "1024x1024x1024",
+          "layout": "kn",
+          "correct": true,
+          "max_err": 0.125,
+          "ms": 0.0359,
+          "tflops": 59.7586
+        },
+        {
+          "shape_name": "fp8_mm_2048x1024x2048",
+          "shape": "2048x1024x2048",
+          "layout": "kn",
+          "correct": true,
+          "max_err": 0.125,
+          "ms": 0.0604,
+          "tflops": 142.1798
+        },
+        {
+          "shape_name": "fp8_mm_4096x4096x4096",
+          "shape": "4096x4096x4096",
+          "layout": "kn",
+          "correct": true,
+          "max_err": 0.25,
+          "ms": 0.6527,
+          "tflops": 210.5789
+        }
+      ]
+    },
+    {
+      "config_id": "kn_bm256_bn64_bk128_w8_s4_g8",
+      "config": {
+        "layout": "kn",
+        "BLOCK_M": 256,
+        "BLOCK_N": 64,
+        "BLOCK_K": 128,
+        "num_warps": 8,
+        "num_stages": 4,
+        "GROUP_M": 8
+      },
+      "results": [
+        {
+          "shape_name": "fp8_mm_1024",
+          "shape": "1024x1024x1024",
+          "layout": "kn",
+          "correct": true,
+          "max_err": 0.125,
+          "ms": 0.0364,
+          "tflops": 58.9709
+        },
+        {
+          "shape_name": "fp8_mm_2048x1024x2048",
+          "shape": "2048x1024x2048",
+          "layout": "kn",
+          "correct": true,
+          "max_err": 0.125,
+          "ms": 0.0504,
+          "tflops": 170.3271
+        },
+        {
+          "shape_name": "fp8_mm_4096x4096x4096",
+          "shape": "4096x4096x4096",
+          "layout": "kn",
+          "correct": true,
+          "max_err": 0.25,
+          "ms": 0.4597,
+          "tflops": 298.9467
+        }
+      ]
+    },
+    {
+      "config_id": "kn_bm128_bn128_bk128_w8_s4_g8",
+      "config": {
+        "layout": "kn",
+        "BLOCK_M": 128,
+        "BLOCK_N": 128,
+        "BLOCK_K": 128,
+        "num_warps": 8,
+        "num_stages": 4,
+        "GROUP_M": 8
+      },
+      "results": [
+        {
+          "shape_name": "fp8_mm_1024",
+          "shape": "1024x1024x1024",
+          "layout": "kn",
+          "correct": true,
+          "max_err": 0.125,
+          "ms": 0.0486,
+          "tflops": 44.2087
+        },
+        {
+          "shape_name": "fp8_mm_2048x1024x2048",
+          "shape": "2048x1024x2048",
+          "layout": "kn",
+          "correct": true,
+          "max_err": 0.125,
+          "ms": 0.074,
+          "tflops": 116.005
+        },
+        {
+          "shape_name": "fp8_mm_4096x4096x4096",
+          "shape": "4096x4096x4096",
+          "layout": "kn",
+          "correct": true,
+          "max_err": 0.25,
+          "ms": 0.8565,
+          "tflops": 160.4635
+        }
+      ]
+    },
+    {
+      "config_id": "nk_bm128_bn64_bk64_w8_s3_g8",
+      "config": {
+        "layout": "nk",
+        "BLOCK_M": 128,
+        "BLOCK_N": 64,
+        "BLOCK_K": 64,
+        "num_warps": 8,
+        "num_stages": 3,
+        "GROUP_M": 8
+      },
+      "results": [
+        {
+          "shape_name": "fp8_mm_1024",
+          "shape": "1024x1024x1024",
+          "layout": "nk",
+          "correct": true,
+          "max_err": 0.125,
+          "ms": 0.0257,
+          "tflops": 83.5727
+        },
+        {
+          "shape_name": "fp8_mm_2048x1024x2048",
+          "shape": "2048x1024x2048",
+          "layout": "nk",
+          "correct": true,
+          "max_err": 0.125,
+          "ms": 0.0332,
+          "tflops": 258.3594
+        },
+        {
+          "shape_name": "fp8_mm_4096x4096x4096",
+          "shape": "4096x4096x4096",
+          "layout": "nk",
+          "correct": true,
+          "max_err": 0.25,
+          "ms": 0.2416,
+          "tflops": 568.7945
+        }
+      ]
+    },
+    {
+      "config_id": "nk_bm256_bn64_bk128_w8_s4_g8",
+      "config": {
+        "layout": "nk",
+        "BLOCK_M": 256,
+        "BLOCK_N": 64,
+        "BLOCK_K": 128,
+        "num_warps": 8,
+        "num_stages": 4,
+        "GROUP_M": 8
+      },
+      "results": [
+        {
+          "shape_name": "fp8_mm_1024",
+          "shape": "1024x1024x1024",
+          "layout": "nk",
+          "correct": true,
+          "max_err": 0.125,
+          "ms": 0.0291,
+          "tflops": 73.9084
+        },
+        {
+          "shape_name": "fp8_mm_2048x1024x2048",
+          "shape": "2048x1024x2048",
+          "layout": "nk",
+          "correct": true,
+          "max_err": 0.125,
+          "ms": 0.034,
+          "tflops": 253.0023
+        },
+        {
+          "shape_name": "fp8_mm_4096x4096x4096",
+          "shape": "4096x4096x4096",
+          "layout": "nk",
+          "correct": true,
+          "max_err": 0.25,
+          "ms": 0.1976,
+          "tflops": 695.6539
+        }
+      ]
+    },
+    {
+      "config_id": "nk_bm128_bn128_bk128_w8_s4_g8",
+      "config": {
+        "layout": "nk",
+        "BLOCK_M": 128,
+        "BLOCK_N": 128,
+        "BLOCK_K": 128,
+        "num_warps": 8,
+        "num_stages": 4,
+        "GROUP_M": 8
+      },
+      "results": [
+        {
+          "shape_name": "fp8_mm_1024",
+          "shape": "1024x1024x1024",
+          "layout": "nk",
+          "correct": true,
+          "max_err": 0.125,
+          "ms": 0.029,
+          "tflops": 74.0716
+        },
+        {
+          "shape_name": "fp8_mm_2048x1024x2048",
+          "shape": "2048x1024x2048",
+          "layout": "nk",
+          "correct": true,
+          "max_err": 0.125,
+          "ms": 0.0333,
+          "tflops": 257.6156
+        },
+        {
+          "shape_name": "fp8_mm_4096x4096x4096",
+          "shape": "4096x4096x4096",
+          "layout": "nk",
+          "correct": true,
+          "max_err": 0.25,
+          "ms": 0.1866,
+          "tflops": 736.5747
+        }
+      ]
+    }
+  ],
+  "fp16_baseline": [
+    {
+      "shape_name": "fp8_mm_1024",
+      "shape": "1024x1024x1024",
+      "correct": true,
+      "ms": 0.0208,
+      "tflops": 103.0858
+    },
+    {
+      "shape_name": "fp8_mm_2048x1024x2048",
+      "shape": "2048x1024x2048",
+      "correct": true,
+      "ms": 0.0264,
+      "tflops": 325.3763
+    },
+    {
+      "shape_name": "fp8_mm_4096x4096x4096",
+      "shape": "4096x4096x4096",
+      "correct": true,
+      "ms": 0.1913,
+      "tflops": 718.5824
+    }
+  ],
+  "best_by_shape": {
+    "fp8_mm_1024": {
+      "config_id": "nk_bm128_bn64_bk64_w8_s3_g8",
+      "layout": "nk",
+      "tflops": 83.5727,
+      "ms": 0.0257,
+      "max_err": 0.125,
+      "fp16_tflops": 103.0858,
+      "fp8_vs_fp16_speedup": 0.8107101075026821
+    },
+    "fp8_mm_2048x1024x2048": {
+      "config_id": "nk_bm128_bn64_bk64_w8_s3_g8",
+      "layout": "nk",
+      "tflops": 258.3594,
+      "ms": 0.0332,
+      "max_err": 0.125,
+      "fp16_tflops": 325.3763,
+      "fp8_vs_fp16_speedup": 0.7940326323705813
+    },
+    "fp8_mm_4096x4096x4096": {
+      "config_id": "nk_bm128_bn128_bk128_w8_s4_g8",
+      "layout": "nk",
+      "tflops": 736.5747,
+      "ms": 0.1866,
+      "max_err": 0.25,
+      "fp16_tflops": 718.5824,
+      "fp8_vs_fp16_speedup": 1.0250386037843398
+    }
+  }
+}

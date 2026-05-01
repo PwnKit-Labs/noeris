@@ -1,0 +1,128 @@
+{
+  "generated_at_utc": "2026-04-24T14:50:32.623362+00:00",
+  "source_v3": "docs/results/fp8-triton-matmul-autotune-h100-v3.json",
+  "source_prepack": "docs/results/fp8-prepack-amortization-h100.json",
+  "reuse_counts": [
+    1,
+    2,
+    4,
+    8,
+    16
+  ],
+  "policy": [
+    {
+      "shape_name": "fp8_mm_1024",
+      "kn_ms": 0.0359,
+      "nk_ms": 0.0257,
+      "prepack_ms": 0.0199,
+      "decisions": [
+        {
+          "reuse_count": 1,
+          "kn_total_ms": 0.0359,
+          "nk_total_ms": 0.0456,
+          "winner": "kn"
+        },
+        {
+          "reuse_count": 2,
+          "kn_total_ms": 0.0718,
+          "nk_total_ms": 0.0713,
+          "winner": "nk"
+        },
+        {
+          "reuse_count": 4,
+          "kn_total_ms": 0.1436,
+          "nk_total_ms": 0.1227,
+          "winner": "nk"
+        },
+        {
+          "reuse_count": 8,
+          "kn_total_ms": 0.2872,
+          "nk_total_ms": 0.2255,
+          "winner": "nk"
+        },
+        {
+          "reuse_count": 16,
+          "kn_total_ms": 0.5744,
+          "nk_total_ms": 0.4311,
+          "winner": "nk"
+        }
+      ]
+    },
+    {
+      "shape_name": "fp8_mm_2048x1024x2048",
+      "kn_ms": 0.0504,
+      "nk_ms": 0.0332,
+      "prepack_ms": 0.0264,
+      "decisions": [
+        {
+          "reuse_count": 1,
+          "kn_total_ms": 0.0504,
+          "nk_total_ms": 0.0596,
+          "winner": "kn"
+        },
+        {
+          "reuse_count": 2,
+          "kn_total_ms": 0.1008,
+          "nk_total_ms": 0.0928,
+          "winner": "nk"
+        },
+        {
+          "reuse_count": 4,
+          "kn_total_ms": 0.2016,
+          "nk_total_ms": 0.1592,
+          "winner": "nk"
+        },
+        {
+          "reuse_count": 8,
+          "kn_total_ms": 0.4032,
+          "nk_total_ms": 0.292,
+          "winner": "nk"
+        },
+        {
+          "reuse_count": 16,
+          "kn_total_ms": 0.8064,
+          "nk_total_ms": 0.5576,
+          "winner": "nk"
+        }
+      ]
+    },
+    {
+      "shape_name": "fp8_mm_4096x4096x4096",
+      "kn_ms": 0.4597,
+      "nk_ms": 0.1866,
+      "prepack_ms": 0.1257,
+      "decisions": [
+        {
+          "reuse_count": 1,
+          "kn_total_ms": 0.4597,
+          "nk_total_ms": 0.3123,
+          "winner": "nk"
+        },
+        {
+          "reuse_count": 2,
+          "kn_total_ms": 0.9194,
+          "nk_total_ms": 0.4989,
+          "winner": "nk"
+        },
+        {
+          "reuse_count": 4,
+          "kn_total_ms": 1.8388,
+          "nk_total_ms": 0.8721,
+          "winner": "nk"
+        },
+        {
+          "reuse_count": 8,
+          "kn_total_ms": 3.6776,
+          "nk_total_ms": 1.6185,
+          "winner": "nk"
+        },
+        {
+          "reuse_count": 16,
+          "kn_total_ms": 7.3552,
+          "nk_total_ms": 3.1113,
+          "winner": "nk"
+        }
+      ]
+    }
+  ]
+}

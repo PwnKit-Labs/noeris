@@ -22,6 +22,26 @@ FP8 baseline probes:
 - `docs/results/fp8-hopper-probe.json`
 - `docs/results/fp8-triton-matmul-probe-h100.json`
 - `docs/results/fp8-triton-matmul-probe-h100.md`
+- `docs/results/fp8-triton-matmul-autotune-h100.json`
+- `docs/results/fp8-triton-matmul-autotune-h100.md`
+- `docs/results/fp8-triton-matmul-autotune-h100-v2.json`
+- `docs/results/fp8-triton-matmul-autotune-h100-v2.md`
+- `docs/results/fp8-triton-matmul-autotune-h100-v3.json`
+- `docs/results/fp8-triton-matmul-autotune-h100-v3.md`
+- `docs/results/fp8-triton-matmul-autotune-h100-v4-splitk.json`
+- `docs/results/fp8-triton-matmul-autotune-h100-v4-splitk.md`
+- `docs/results/fp8-prepack-amortization-h100.json`
+- `docs/results/fp8-prepack-amortization-h100.md`
+- `docs/results/fp8-layout-reuse-policy-h100.json`
+- `docs/results/fp8-layout-reuse-policy-h100.md`
+- `docs/results/fp8-layout-runtime-integration-h100.json`
+- `docs/results/fp8-layout-runtime-integration-h100.md`
+- `docs/results/fp8-layout-runtime-cache-integration-h100.json`
+- `docs/results/fp8-layout-runtime-cache-integration-h100.md`
+
+Executor integration note:
+
+- Live matmul benchmark payload now includes `fp8-runtime-layout-summary.json` when FP8 fixtures are present.
 
 Speculative decoding verify+accept baseline:
 

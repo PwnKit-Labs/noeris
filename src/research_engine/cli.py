@@ -585,6 +585,8 @@ def main(argv: list[str] | None = None) -> int:
             "history_artifacts_present": {
                 "history_summary_json": (history_dir / "history-summary.json").exists(),
                 "history_brief_md": (history_dir / "history-brief.md").exists(),
+                "history_regressions_json": (history_dir / "history-regressions.json").exists(),
+                "history_regressions_md": (history_dir / "history-regressions.md").exists(),
             },
             "latest_run": latest or {},
             "workflow_summary": _status_workflow_summary(),
@@ -661,6 +663,20 @@ def main(argv: list[str] | None = None) -> int:
             brief,
             encoding="utf-8",
         )
+        regressions_payload = {
+            "benchmark_id": summary.get("benchmark_id", ""),
+            "topic": summary.get("topic", ""),
+            "run_count": summary.get("run_count", 0),
+            "fp8_policy_regressions": summary.get("fp8_policy_regressions", []),
+        }
+        (output_dir / "history-regressions.json").write_text(
+            json.dumps(regressions_payload, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        (output_dir / "history-regressions.md").write_text(
+            _render_history_regressions_md(regressions_payload),
+            encoding="utf-8",
+        )
         print(
             json.dumps(
                 {
@@ -668,6 +684,8 @@ def main(argv: list[str] | None = None) -> int:
                     "files": [
                         str(output_dir / "history-summary.json"),
                         str(output_dir / "history-brief.md"),
+                        str(output_dir / "history-regressions.json"),
+                        str(output_dir / "history-regressions.md"),
                     ],
                 },
                 indent=2,
@@ -1756,6 +1774,26 @@ def _extract_benchmark_metric(record) -> float:
     if record.benchmark_id == "tool-use-reliability":
         return float(payloads.get("tool-selection-summary.json", {}).get("terminal_first_success_rate", 0.0))
     return 0.0
+
+
+def _render_history_regressions_md(payload: dict[str, object]) -> str:
+    lines = [
+        "# History Regressions",
+        "",
+        f"- Benchmark: `{payload.get('benchmark_id', '') or 'none'}`",
+        f"- Topic: `{payload.get('topic', '') or 'none'}`",
+        f"- Runs compared: `{payload.get('run_count', 0)}`",
+        "",
+        "## FP8 Policy Regressions",
+        "",
+    ]
+    regressions = payload.get("fp8_policy_regressions", [])
+    if isinstance(regressions, list) and regressions:
+        lines.extend(f"- {item}" for item in regressions)
+    else:
+        lines.append("- none")
+    lines.append("")
+    return "\n".join(lines)
 
 
 def _extract_frontier_snapshot(
