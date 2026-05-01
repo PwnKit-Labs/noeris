@@ -1,0 +1,339 @@
+{
+  "metadata": {
+    "hardware": "H100",
+    "operators": [
+      "attention"
+    ],
+    "baseline_source": "measure",
+    "timer": "cuda_event"
+  },
+  "fast_p_scores": {
+    "vs_eager": {
+      "1.0": {
+        "level_2": 0.0,
+        "level_3": 0.333,
+        "overall": 0.25
+      },
+      "1.5": {
+        "level_2": 0.0,
+        "level_3": 0.333,
+        "overall": 0.25
+      },
+      "2.0": {
+        "level_2": 0.0,
+        "level_3": 0.222,
+        "overall": 0.167
+      },
+      "3.0": {
+        "level_2": 0.0,
+        "level_3": 0.222,
+        "overall": 0.167
+      }
+    },
+    "vs_compile": {
+      "1.0": {
+        "level_2": 1.0,
+        "level_3": 0.333,
+        "overall": 0.5
+      },
+      "1.5": {
+        "level_2": 0.333,
+        "level_3": 0.333,
+        "overall": 0.333
+      },
+      "2.0": {
+        "level_2": 0.0,
+        "level_3": 0.333,
+        "overall": 0.25
+      },
+      "3.0": {
+        "level_2": 0.0,
+        "level_3": 0.222,
+        "overall": 0.167
+      }
+    }
+  },
+  "results": [
+    {
+      "problem_id": "kb_L2_attn_short_64",
+      "operator": "attention",
+      "level": 2,
+      "shape": {
+        "batch": 4,
+        "heads": 16,
+        "seq_len": 512,
+        "head_dim": 64,
+        "is_causal": false
+      },
+      "our_metric": 169.47,
+      "our_config_id": "m128_n64_w8_s3",
+      "pytorch_baseline": 206.65,
+      "compile_baseline": 93.3,
+      "speedup_vs_eager": 0.820082264698766,
+      "speedup_vs_compile": 1.8163987138263666,
+      "correct": true,
+      "static_check": "fail",
+      "static_check_messages": [
+        "Contains try-except block (potential fallback bypass)"
+      ]
+    },
+    {
+      "problem_id": "kb_L2_attn_short_128",
+      "operator": "attention",
+      "level": 2,
+      "shape": {
+        "batch": 4,
+        "heads": 16,
+        "seq_len": 512,
+        "head_dim": 128,
+        "is_causal": false
+      },
+      "our_metric": 231.81,
+      "our_config_id": "m64_n64_w4_s3",
+      "pytorch_baseline": 314.14,
+      "compile_baseline": 159.83,
+      "speedup_vs_eager": 0.7379193989940791,
+      "speedup_vs_compile": 1.4503535005943815,
+      "correct": true,
+      "static_check": "fail",
+      "static_check_messages": [
+        "Contains try-except block (potential fallback bypass)"
+      ]
+    },
+    {
+      "problem_id": "kb_L2_attn_med_128",
+      "operator": "attention",
+      "level": 2,
+      "shape": {
+        "batch": 2,
+        "heads": 16,
+        "seq_len": 2048,
+        "head_dim": 128,
+        "is_causal": false
+      },
+      "our_metric": 414.09,
+      "our_config_id": "m64_n64_w4_s3",
+      "pytorch_baseline": 583.24,
+      "compile_baseline": 367.37,
+      "speedup_vs_eager": 0.7099821685755434,
+      "speedup_vs_compile": 1.127174238506138,
+      "correct": true,
+      "static_check": "fail",
+      "static_check_messages": [
+        "Contains try-except block (potential fallback bypass)"
+      ]
+    },
+    {
+      "problem_id": "kb_L3_attn_long_64",
+      "operator": "attention",
+      "level": 3,
+      "shape": {
+        "batch": 1,
+        "heads": 16,
+        "seq_len": 4096,
+        "head_dim": 64,
+        "is_causal": false
+      },
+      "our_metric": 352.42,
+      "our_config_id": "m128_n64_w8_s3",
+      "pytorch_baseline": 442.55,
+      "compile_baseline": 375.86,
+      "speedup_vs_eager": 0.7963393966783414,
+      "speedup_vs_compile": 0.9376363539615814,
+      "correct": true,
+      "static_check": "fail",
+      "static_check_messages": [
+        "Contains try-except block (potential fallback bypass)"
+      ]
+    },
+    {
+      "problem_id": "kb_L3_attn_long_128",
+      "operator": "attention",
+      "level": 3,
+      "shape": {
+        "batch": 1,
+        "heads": 16,
+        "seq_len": 4096,
+        "head_dim": 128,
+        "is_causal": false
+      },
+      "our_metric": 455.77,
+      "our_config_id": "m64_n64_w4_s3",
+      "pytorch_baseline": 637.38,
+      "compile_baseline": 503.78,
+      "speedup_vs_eager": 0.7150679343562709,
+      "speedup_vs_compile": 0.9047004644884672,
+      "correct": true,
+      "static_check": "fail",
+      "static_check_messages": [
+        "Contains try-except block (potential fallback bypass)"
+      ]
+    },
+    {
+      "problem_id": "kb_L3_attn_llama7b",
+      "operator": "attention",
+      "level": 3,
+      "shape": {
+        "batch": 1,
+        "heads": 32,
+        "seq_len": 4096,
+        "head_dim": 128,
+        "is_causal": false
+      },
+      "our_metric": 471.68,
+      "our_config_id": "m64_n64_w4_s3",
+      "pytorch_baseline": 655.02,
+      "compile_baseline": 533.25,
+      "speedup_vs_eager": 0.7201001496137522,
+      "speedup_vs_compile": 0.8845382090951711,
+      "correct": true,
+      "static_check": "fail",
+      "static_check_messages": [
+        "Contains try-except block (potential fallback bypass)"
+      ]
+    },
+    {
+      "problem_id": "kb_L3_attn_llama7b_causal",
+      "operator": "attention",
+      "level": 3,
+      "shape": {
+        "batch": 1,
+        "heads": 32,
+        "seq_len": 4096,
+        "head_dim": 128,
+        "is_causal": true
+      },
+      "our_metric": 293.23,
+      "our_config_id": "m64_n64_w4_s2",
+      "pytorch_baseline": 514.68,
+      "compile_baseline": 378.29,
+      "speedup_vs_eager": 0.5697326494132278,
+      "speedup_vs_compile": 0.7751460519707103,
+      "correct": true,
+      "static_check": "fail",
+      "static_check_messages": [
+        "Contains try-except block (potential fallback bypass)"
+      ]
+    },
+    {
+      "problem_id": "kb_L3_attn_mistral_causal",
+      "operator": "attention",
+      "level": 3,
+      "shape": {
+        "batch": 1,
+        "heads": 32,
+        "seq_len": 8192,
+        "head_dim": 128,
+        "is_causal": true
+      },
+      "our_metric": 334.41,
+      "our_config_id": "m64_n64_w4_s2",
+      "pytorch_baseline": 600.32,
+      "compile_baseline": 498.45,
+      "speedup_vs_eager": 0.5570529051172708,
+      "speedup_vs_compile": 0.6708997893469757,
+      "correct": true,
+      "static_check": "fail",
+      "static_check_messages": [
+        "Contains try-except block (potential fallback bypass)"
+      ]
+    },
+    {
+      "problem_id": "kb_L3_attn_gemma_local",
+      "operator": "attention",
+      "level": 3,
+      "shape": {
+        "batch": 1,
+        "heads": 16,
+        "seq_len": 4096,
+        "head_dim": 256,
+        "is_causal": true,
+        "window_size": 1024
+      },
+      "our_metric": 133.89,
+      "our_config_id": "m64_n64_w4_s3",
+      "pytorch_baseline": 30.06,
+      "compile_baseline": 27.85,
+      "speedup_vs_eager": 4.454091816367265,
+      "speedup_vs_compile": 4.807540394973069,
+      "correct": true,
+      "static_check": "fail",
+      "static_check_messages": [
+        "Contains try-except block (potential fallback bypass)"
+      ]
+    },
+    {
+      "problem_id": "kb_L3_attn_gemma_slide_causal",
+      "operator": "attention",
+      "level": 3,
+      "shape": {
+        "batch": 2,
+        "heads": 16,
+        "seq_len": 2048,
+        "head_dim": 128,
+        "is_causal": true,
+        "window_size": 1024
+      },
+      "our_metric": 142.9,
+      "our_config_id": "m64_n64_w4_s2",
+      "pytorch_baseline": 73.72,
+      "compile_baseline": 62.82,
+      "speedup_vs_eager": 1.9384156266956052,
+      "speedup_vs_compile": 2.274753263291945,
+      "correct": true,
+      "static_check": "fail",
+      "static_check_messages": [
+        "Contains try-except block (potential fallback bypass)"
+      ]
+    },
+    {
+      "problem_id": "kb_L3_attn_gemma_qknorm_local",
+      "operator": "attention",
+      "level": 3,
+      "shape": {
+        "batch": 1,
+        "heads": 16,
+        "seq_len": 4096,
+        "head_dim": 256,
+        "is_causal": true,
+        "window_size": 1024,
+        "use_qk_norm": true
+      },
+      "our_metric": 92.91,
+      "our_config_id": "m128_n64_w8_s3",
+      "pytorch_baseline": 23.68,
+      "compile_baseline": 27.17,
+      "speedup_vs_eager": 3.923564189189189,
+      "speedup_vs_compile": 3.419580419580419,
+      "correct": true,
+      "static_check": "fail",
+      "static_check_messages": [
+        "Contains try-except block (potential fallback bypass)"
+      ]
+    },
+    {
+      "problem_id": "kb_L3_attn_gemma_qknorm_global",
+      "operator": "attention",
+      "level": 3,
+      "shape": {
+        "batch": 1,
+        "heads": 16,
+        "seq_len": 4096,
+        "head_dim": 256,
+        "is_causal": true,
+        "use_qk_norm": true
+      },
+      "our_metric": 183.95,
+      "our_config_id": "m128_n64_w8_s3",
+      "pytorch_baseline": 237.97,
+      "compile_baseline": 331.21,
+      "speedup_vs_eager": 0.7729965962096063,
+      "speedup_vs_compile": 0.5553878204160503,
+      "correct": true,
+      "static_check": "fail",
+      "static_check_messages": [
+        "Contains try-except block (potential fallback bypass)"
+      ]
+    }
+  ]
+}

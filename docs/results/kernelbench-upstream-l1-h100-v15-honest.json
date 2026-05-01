@@ -1,0 +1,142 @@
+{
+  "metadata": {
+    "hardware": "NVIDIA H100 80GB HBM3",
+    "timer": "cuda_event",
+    "problem_count": 12,
+    "timer_echoed": "cuda_event"
+  },
+  "results": [
+    {
+      "problem": "1_Square_matrix_multiplication_.py",
+      "operator": "matmul",
+      "upstream_ms": 2.6424,
+      "noeris_ms": 0.36062,
+      "speedup": 7.327,
+      "correct": true,
+      "external_h100_ms": 2.66,
+      "notes": "N=4096 fp32 square matmul; maps straight to Noeris matmul.",
+      "error": ""
+    },
+    {
+      "problem": "6_Matmul_with_large_K_dimension_.py",
+      "operator": "matmul",
+      "upstream_ms": 1.29464,
+      "noeris_ms": null,
+      "speedup": null,
+      "correct": null,
+      "external_h100_ms": 1.3,
+      "notes": "M=N=256, K=524288 fp32 \u2014 pathological large-K shape.",
+      "error": "OutOfResources: out of resource: shared memory, Required: 327680, Hardware limit: 232448. Reducing block sizes or `num_stages` may help."
+    },
+    {
+      "problem": "7_Matmul_with_small_K_dimension_.py",
+      "operator": "matmul",
+      "upstream_ms": 4.0047,
+      "noeris_ms": 4.36032,
+      "speedup": 0.918,
+      "correct": true,
+      "external_h100_ms": 4.06,
+      "notes": "Small K (likely 32) \u2014 tests partition-K strategy.",
+      "error": ""
+    },
+    {
+      "problem": "8_Matmul_with_irregular_shapes_.py",
+      "operator": "matmul",
+      "upstream_ms": 6.37446,
+      "noeris_ms": 3.13765,
+      "speedup": 2.032,
+      "correct": true,
+      "external_h100_ms": 6.38,
+      "notes": "Non-power-of-two shapes; exercises masking.",
+      "error": ""
+    },
+    {
+      "problem": "9_Tall_skinny_matrix_multiplication_.py",
+      "operator": "matmul",
+      "upstream_ms": 2.51626,
+      "noeris_ms": 4.22376,
+      "speedup": 0.596,
+      "correct": true,
+      "external_h100_ms": 2.59,
+      "notes": "M=32768, N=32, K=32768 fp32 \u2014 tall-skinny GEMV-ish.",
+      "error": ""
+    },
+    {
+      "problem": "23_Softmax.py",
+      "operator": "softmax",
+      "upstream_ms": 8.45778,
+      "noeris_ms": null,
+      "speedup": null,
+      "correct": null,
+      "external_h100_ms": 8.52,
+      "notes": "(4096, 393216) fp32 softmax along dim=1.",
+      "error": "CompilationError: at 25:4:\n    d = tl.zeros((1,), dtype=tl.float32)\n    for start in range(0, CHUNK_COLS, BLOCK_SIZE):\n        offs = start + tl.arange(0, BLOCK_SIZE)\n        mask = (chunk_col_start + offs) < n_cols\n  "
+    },
+    {
+      "problem": "26_GELU_.py",
+      "operator": "geglu",
+      "upstream_ms": 4.58098,
+      "noeris_ms": 4.44944,
+      "speedup": 1.03,
+      "correct": true,
+      "external_h100_ms": 4.3,
+      "notes": "(4096, 393216) fp32 exact GELU (erf-based). Uses dedicated noeris_gelu_exact kernel dispatched via _NOERIS_EXACT_GELU_PROBLEMS.",
+      "error": ""
+    },
+    {
+      "problem": "36_RMSNorm_.py",
+      "operator": "rmsnorm",
+      "upstream_ms": 14.09547,
+      "noeris_ms": 44.95344,
+      "speedup": 0.314,
+      "correct": true,
+      "external_h100_ms": 14.2,
+      "notes": "4D (112, 64, 512, 512) fp32 \u2014 NORMALIZED ALONG DIM=1 (features), NOT the last dim. Noeris rmsnorm normalizes along the last dim of a 2D (rows, hidden) tensor. Adapter has to permute dim 1 to the innermost before flattening to (rows, 64).",
+      "error": ""
+    },
+    {
+      "problem": "40_LayerNorm.py",
+      "operator": "layernorm",
+      "upstream_ms": 8.44872,
+      "noeris_ms": 1.39891,
+      "speedup": 6.039,
+      "correct": true,
+      "external_h100_ms": 8.12,
+      "notes": "4D (16, 64, 256, 256) fp32; normalized_shape=(64, 256, 256) i.e. normalize over dim 1,2,3 together. Adapter flattens to (16, 64*256*256).",
+      "error": ""
+    },
+    {
+      "problem": "88_MinGPTNewGelu.py",
+      "operator": "geglu",
+      "upstream_ms": 1.60794,
+      "noeris_ms": 0.18992,
+      "speedup": 8.466,
+      "correct": true,
+      "external_h100_ms": 1.65,
+      "notes": "(8192, 8192) fp32 tanh-approx GELU. Routed through Noeris's standalone tanh-GELU kernel under the historical 'geglu' operator label.",
+      "error": ""
+    },
+    {
+      "problem": "95_CrossEntropyLoss.py",
+      "operator": "cross_entropy",
+      "upstream_ms": 0.47485,
+      "noeris_ms": 0.37304,
+      "speedup": 1.273,
+      "correct": true,
+      "external_h100_ms": 0.477,
+      "notes": "(32768, 4096) fp32 logits + int64 targets.",
+      "error": ""
+    },
+    {
+      "problem": "97_ScaledDotProductAttention.py",
+      "operator": "attention",
+      "upstream_ms": 24.47859,
+      "noeris_ms": 19.26832,
+      "speedup": 1.27,
+      "correct": true,
+      "external_h100_ms": 8.45,
+      "notes": "(32, 32, 512, 1024) fp32 non-causal SDPA. head_dim=1024 is large \u2014 Noeris attention kernel may not have a bucket for it. Runner will report correct/incorrect and skip gracefully on kernel failure.",
+      "error": ""
+    }
+  ]
+}

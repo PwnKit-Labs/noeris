@@ -1,0 +1,35 @@
+{
+  "hardware": {
+    "gpu": "NVIDIA A100-SXM4-40GB",
+    "cuda_version": "13.0",
+    "python": "3.11.12"
+  },
+  "layer_results": [
+    {
+      "name": "gemma4_31b_local",
+      "error": "shape '[1, 2048, 5376]' is invalid for input of size 16777216"
+    },
+    {
+      "name": "gemma4_31b_global",
+      "error": "shape '[1, 2048, 5376]' is invalid for input of size 33554432"
+    },
+    {
+      "name": "gemma4_e2b_local",
+      "error": "shape '[1, 4096, 1536]' is invalid for input of size 8388608"
+    }
+  ],
+  "config_results": [
+    {
+      "name": "gemma4_31b_local",
+      "error": "shape '[1, 2048, 5376]' is invalid for input of size 16777216"
+    },
+    {
+      "name": "gemma4_31b_global",
+      "error": "shape '[1, 2048, 5376]' is invalid for input of size 33554432"
+    },
+    {
+      "name": "gemma4_e2b_local",
+      "error": "shape '[1, 4096, 1536]' is invalid for input of size 8388608"
+    }
+  ]
+}

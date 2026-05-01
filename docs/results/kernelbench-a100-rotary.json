@@ -1,0 +1,94 @@
+{
+  "metadata": {
+    "hardware": "A100",
+    "operators": [
+      "rotary"
+    ],
+    "baseline_source": "measure",
+    "timer": "cuda_event"
+  },
+  "fast_p_scores": {
+    "vs_eager": {
+      "1.0": {
+        "level_2": 1.0,
+        "overall": 1.0
+      },
+      "1.5": {
+        "level_2": 1.0,
+        "overall": 1.0
+      },
+      "2.0": {
+        "level_2": 1.0,
+        "overall": 1.0
+      },
+      "3.0": {
+        "level_2": 0.0,
+        "overall": 0.0
+      }
+    },
+    "vs_compile": {
+      "1.0": {
+        "level_2": 0.0,
+        "overall": 0.0
+      },
+      "1.5": {
+        "level_2": 0.0,
+        "overall": 0.0
+      },
+      "2.0": {
+        "level_2": 0.0,
+        "overall": 0.0
+      },
+      "3.0": {
+        "level_2": 0.0,
+        "overall": 0.0
+      }
+    }
+  },
+  "results": [
+    {
+      "problem_id": "kb_L2_rotary_llama7b",
+      "operator": "rotary",
+      "level": 2,
+      "shape": {
+        "batch": 1,
+        "seq": 4096,
+        "heads": 32,
+        "head_dim": 128
+      },
+      "our_metric": 324.44,
+      "our_config_id": "bs32_w2_s1",
+      "pytorch_baseline": 156.26,
+      "compile_baseline": 549.46,
+      "speedup_vs_eager": 2.0762831178804557,
+      "speedup_vs_compile": 0.5904706439049248,
+      "correct": true,
+      "static_check": "fail",
+      "static_check_messages": [
+        "Contains try-except block (potential fallback bypass)"
+      ]
+    },
+    {
+      "problem_id": "kb_L2_rotary_gemma_26b",
+      "operator": "rotary",
+      "level": 2,
+      "shape": {
+        "batch": 1,
+        "seq": 4096,
+        "heads": 16,
+        "head_dim": 256
+      },
+      "our_metric": 425.56,
+      "our_config_id": "bs32_w2_s1",
+      "pytorch_baseline": 162.31,
+      "compile_baseline": 539.78,
+      "speedup_vs_eager": 2.6218963711416423,
+      "speedup_vs_compile": 0.7883952721479122,
+      "correct": true,
+      "static_check": "fail",
+      "static_check_messages": [
+        "Contains try-except block (potential fallback bypass)"
+      ]
+    }
+  ]
+}

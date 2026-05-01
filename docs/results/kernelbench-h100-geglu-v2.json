@@ -1,0 +1,130 @@
+{
+  "metadata": {
+    "hardware": "H100",
+    "operators": [
+      "geglu"
+    ],
+    "baseline_source": "measure",
+    "timer": "cuda_event"
+  },
+  "fast_p_scores": {
+    "vs_eager": {
+      "1.0": {
+        "level_2": 1.0,
+        "overall": 1.0
+      },
+      "1.5": {
+        "level_2": 1.0,
+        "overall": 1.0
+      },
+      "2.0": {
+        "level_2": 1.0,
+        "overall": 1.0
+      },
+      "3.0": {
+        "level_2": 0.5,
+        "overall": 0.5
+      }
+    },
+    "vs_compile": {
+      "1.0": {
+        "level_2": 1.0,
+        "overall": 1.0
+      },
+      "1.5": {
+        "level_2": 1.0,
+        "overall": 1.0
+      },
+      "2.0": {
+        "level_2": 0.5,
+        "overall": 0.5
+      },
+      "3.0": {
+        "level_2": 0.0,
+        "overall": 0.0
+      }
+    }
+  },
+  "results": [
+    {
+      "problem_id": "kb_L2_geglu_gemma4_e2b",
+      "operator": "geglu",
+      "level": 2,
+      "shape": {
+        "n_rows": 2048,
+        "ffn_dim": 6144
+      },
+      "our_metric": 2092.5,
+      "our_config_id": "bs4096_w16_s1",
+      "pytorch_baseline": 557.23,
+      "compile_baseline": 840.21,
+      "speedup_vs_eager": 3.75518188180823,
+      "speedup_vs_compile": 2.4904488163673366,
+      "correct": true,
+      "static_check": "fail",
+      "static_check_messages": [
+        "Contains try-except block (potential fallback bypass)"
+      ]
+    },
+    {
+      "problem_id": "kb_L2_geglu_gemma4_e4b",
+      "operator": "geglu",
+      "level": 2,
+      "shape": {
+        "n_rows": 2048,
+        "ffn_dim": 10240
+      },
+      "our_metric": 1734.52,
+      "our_config_id": "bs4096_w16_s1",
+      "pytorch_baseline": 576.06,
+      "compile_baseline": 1042.32,
+      "speedup_vs_eager": 3.0110057980071523,
+      "speedup_vs_compile": 1.6640954793153735,
+      "correct": true,
+      "static_check": "fail",
+      "static_check_messages": [
+        "Contains try-except block (potential fallback bypass)"
+      ]
+    },
+    {
+      "problem_id": "kb_L2_geglu_gemma4_26b_a4b_expert",
+      "operator": "geglu",
+      "level": 2,
+      "shape": {
+        "n_rows": 2048,
+        "ffn_dim": 2112
+      },
+      "our_metric": 1558.13,
+      "our_config_id": "bs4096_w16_s1",
+      "pytorch_baseline": 571.33,
+      "compile_baseline": 714.86,
+      "speedup_vs_eager": 2.727197941644934,
+      "speedup_vs_compile": 2.1796295778194335,
+      "correct": true,
+      "static_check": "fail",
+      "static_check_messages": [
+        "Contains try-except block (potential fallback bypass)"
+      ]
+    },
+    {
+      "problem_id": "kb_L2_geglu_gemma4_31b",
+      "operator": "geglu",
+      "level": 2,
+      "shape": {
+        "n_rows": 2048,
+        "ffn_dim": 21504
+      },
+      "our_metric": 1527.48,
+      "our_config_id": "bs4096_w16_s1",
+      "pytorch_baseline": 602.23,
+      "compile_baseline": 1016.0,
+      "speedup_vs_eager": 2.536373146472278,
+      "speedup_vs_compile": 1.5034251968503938,
+      "correct": true,
+      "static_check": "fail",
+      "static_check_messages": [
+        "Contains try-except block (potential fallback bypass)"
+      ]
+    }
+  ]
+}

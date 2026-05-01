@@ -1,0 +1,305 @@
+{
+  "hardware": {
+    "gpu": "NVIDIA A100-SXM4-40GB",
+    "cuda_version": "13.0",
+    "python": "3.11.12"
+  },
+  "layer_results": [
+    {
+      "name": "gemma4_31b_local",
+      "noeris_fused_ms": 32.0389,
+      "pytorch_separated_ms": 13.655,
+      "layer_speedup": 0.4262,
+      "correct": false,
+      "max_err": 10.226562,
+      "step_max_errs": {
+        "1_2_pre_attn_norm_qkv_fused": 0.003906,
+        "3_qk_norm_rope_fused": 0.007812,
+        "4_attention_flash": 0.003906,
+        "5_attn_out_proj": 0.003906,
+        "6_7a_pre_mlp_norm_gateup_fused": 0.003906,
+        "7b_geglu_fused": 34.976562,
+        "7c_down_proj": 10.226562
+      },
+      "noeris_step_times": {
+        "1_2_pre_attn_norm_qkv_fused": 7.8111,
+        "3_qk_norm_rope_fused": 0.1905,
+        "4_attention_flash": 13.3437,
+        "5_attn_out_proj": 0.9871,
+        "6_7a_pre_mlp_norm_gateup_fused": 14.763,
+        "7b_geglu_fused": 1.2585,
+        "7c_down_proj": 2.261
+      },
+      "pytorch_step_times": {
+        "1_pre_attn_rmsnorm": 0.3953,
+        "2_qkv_proj": 1.7244,
+        "3_qk_norm_rope_4ops": 1.9118,
+        "4_attention_sdpa": 2.1064,
+        "5_attn_out_proj": 0.7813,
+        "6_pre_mlp_rmsnorm": 1.2104,
+        "7a_gate_up_proj": 3.6116,
+        "7b_geglu_separated": 0.9677,
+        "7c_down_proj": 1.9364
+      },
+      "config": {
+        "name": "gemma4_31b_local",
+        "batch": 1,
+        "seq_len": 2048,
+        "hidden_dim": 5376,
+        "num_heads": 32,
+        "num_kv_heads": 16,
+        "head_dim": 256,
+        "ffn_dim": 21504,
+        "window_size": 1024,
+        "is_causal": true
+      }
+    },
+    {
+      "name": "gemma4_31b_global",
+      "noeris_fused_ms": 123.5814,
+      "pytorch_separated_ms": 15.8648,
+      "layer_speedup": 0.1284,
+      "correct": false,
+      "max_err": 9.808594,
+      "step_max_errs": {
+        "1_2_pre_attn_norm_qkv_fused": 0.003906,
+        "3_qk_norm_rope_fused": 0.007812,
+        "4_attention_flash": 0.003906,
+        "5_attn_out_proj": 0.003906,
+        "6_7a_pre_mlp_norm_gateup_fused": 0.003906,
+        "7b_geglu_fused": 31.028687,
+        "7c_down_proj": 9.808594
+      },
+      "noeris_step_times": {
+        "1_2_pre_attn_norm_qkv_fused": 7.1086,
+        "3_qk_norm_rope_fused": 0.2161,
+        "4_attention_flash": 102.3877,
+        "5_attn_out_proj": 1.6517,
+        "6_7a_pre_mlp_norm_gateup_fused": 14.8613,
+        "7b_geglu_fused": 1.1479,
+        "7c_down_proj": 1.9589
+      },
+      "pytorch_step_times": {
+        "1_pre_attn_rmsnorm": 0.3973,
+        "2_qkv_proj": 2.0326,
+        "3_qk_norm_rope_4ops": 2.732,
+        "4_attention_sdpa": 2.4812,
+        "5_attn_out_proj": 1.5176,
+        "6_pre_mlp_rmsnorm": 1.9876,
+        "7a_gate_up_proj": 3.6413,
+        "7b_geglu_separated": 0.9708,
+        "7c_down_proj": 1.9528
+      },
+      "config": {
+        "name": "gemma4_31b_global",
+        "batch": 1,
+        "seq_len": 2048,
+        "hidden_dim": 5376,
+        "num_heads": 32,
+        "num_kv_heads": 4,
+        "head_dim": 512,
+        "ffn_dim": 21504,
+        "window_size": -1,
+        "is_causal": true
+      }
+    },
+    {
+      "name": "gemma4_e2b_local",
+      "noeris_fused_ms": 20.5455,
+      "pytorch_separated_ms": 5.3647,
+      "layer_speedup": 0.2611,
+      "correct": false,
+      "max_err": 9.679688,
+      "step_max_errs": {
+        "1_2_pre_attn_norm_qkv_fused": 0.003906,
+        "3_qk_norm_rope_fused": 0.003906,
+        "4_attention_flash": 0.001953,
+        "5_attn_out_proj": 0.001953,
+        "6_7a_pre_mlp_norm_gateup_fused": 0.003906,
+        "7b_geglu_fused": 30.320312,
+        "7c_down_proj": 9.679688
+      },
+      "noeris_step_times": {
+        "1_2_pre_attn_norm_qkv_fused": 1.0537,
+        "3_qk_norm_rope_fused": 0.1219,
+        "4_attention_flash": 15.9437,
+        "5_attn_out_proj": 0.2499,
+        "6_7a_pre_mlp_norm_gateup_fused": 3.2276,
+        "7b_geglu_fused": 0.2365,
+        "7c_down_proj": 0.4157
+      },
+      "pytorch_step_times": {
+        "1_pre_attn_rmsnorm": 0.2509,
+        "2_qkv_proj": 0.2744,
+        "3_qk_norm_rope_4ops": 0.8253,
+        "4_attention_sdpa": 3.0444,
+        "5_attn_out_proj": 0.2109,
+        "6_pre_mlp_rmsnorm": 0.4823,
+        "7a_gate_up_proj": 0.6574,
+        "7b_geglu_separated": 0.5622,
+        "7c_down_proj": 0.3553
+      },
+      "config": {
+        "name": "gemma4_e2b_local",
+        "batch": 1,
+        "seq_len": 4096,
+        "hidden_dim": 1536,
+        "num_heads": 8,
+        "num_kv_heads": 1,
+        "head_dim": 256,
+        "ffn_dim": 6144,
+        "window_size": 512,
+        "is_causal": true
+      }
+    }
+  ],
+  "config_results": [
+    {
+      "name": "gemma4_31b_local",
+      "noeris_fused_ms": 32.0389,
+      "pytorch_separated_ms": 13.655,
+      "layer_speedup": 0.4262,
+      "correct": false,
+      "max_err": 10.226562,
+      "step_max_errs": {
+        "1_2_pre_attn_norm_qkv_fused": 0.003906,
+        "3_qk_norm_rope_fused": 0.007812,
+        "4_attention_flash": 0.003906,
+        "5_attn_out_proj": 0.003906,
+        "6_7a_pre_mlp_norm_gateup_fused": 0.003906,
+        "7b_geglu_fused": 34.976562,
+        "7c_down_proj": 10.226562
+      },
+      "noeris_step_times": {
+        "1_2_pre_attn_norm_qkv_fused": 7.8111,
+        "3_qk_norm_rope_fused": 0.1905,
+        "4_attention_flash": 13.3437,
+        "5_attn_out_proj": 0.9871,
+        "6_7a_pre_mlp_norm_gateup_fused": 14.763,
+        "7b_geglu_fused": 1.2585,
+        "7c_down_proj": 2.261
+      },
+      "pytorch_step_times": {
+        "1_pre_attn_rmsnorm": 0.3953,
+        "2_qkv_proj": 1.7244,
+        "3_qk_norm_rope_4ops": 1.9118,
+        "4_attention_sdpa": 2.1064,
+        "5_attn_out_proj": 0.7813,
+        "6_pre_mlp_rmsnorm": 1.2104,
+        "7a_gate_up_proj": 3.6116,
+        "7b_geglu_separated": 0.9677,
+        "7c_down_proj": 1.9364
+      },
+      "config": {
+        "name": "gemma4_31b_local",
+        "batch": 1,
+        "seq_len": 2048,
+        "hidden_dim": 5376,
+        "num_heads": 32,
+        "num_kv_heads": 16,
+        "head_dim": 256,
+        "ffn_dim": 21504,
+        "window_size": 1024,
+        "is_causal": true
+      }
+    },
+    {
+      "name": "gemma4_31b_global",
+      "noeris_fused_ms": 123.5814,
+      "pytorch_separated_ms": 15.8648,
+      "layer_speedup": 0.1284,
+      "correct": false,
+      "max_err": 9.808594,
+      "step_max_errs": {
+        "1_2_pre_attn_norm_qkv_fused": 0.003906,
+        "3_qk_norm_rope_fused": 0.007812,
+        "4_attention_flash": 0.003906,
+        "5_attn_out_proj": 0.003906,
+        "6_7a_pre_mlp_norm_gateup_fused": 0.003906,
+        "7b_geglu_fused": 31.028687,
+        "7c_down_proj": 9.808594
+      },
+      "noeris_step_times": {
+        "1_2_pre_attn_norm_qkv_fused": 7.1086,
+        "3_qk_norm_rope_fused": 0.2161,
+        "4_attention_flash": 102.3877,
+        "5_attn_out_proj": 1.6517,
+        "6_7a_pre_mlp_norm_gateup_fused": 14.8613,
+        "7b_geglu_fused": 1.1479,
+        "7c_down_proj": 1.9589
+      },
+      "pytorch_step_times": {
+        "1_pre_attn_rmsnorm": 0.3973,
+        "2_qkv_proj": 2.0326,
+        "3_qk_norm_rope_4ops": 2.732,
+        "4_attention_sdpa": 2.4812,
+        "5_attn_out_proj": 1.5176,
+        "6_pre_mlp_rmsnorm": 1.9876,
+        "7a_gate_up_proj": 3.6413,
+        "7b_geglu_separated": 0.9708,
+        "7c_down_proj": 1.9528
+      },
+      "config": {
+        "name": "gemma4_31b_global",
+        "batch": 1,
+        "seq_len": 2048,
+        "hidden_dim": 5376,
+        "num_heads": 32,
+        "num_kv_heads": 4,
+        "head_dim": 512,
+        "ffn_dim": 21504,
+        "window_size": -1,
+        "is_causal": true
+      }
+    },
+    {
+      "name": "gemma4_e2b_local",
+      "noeris_fused_ms": 20.5455,
+      "pytorch_separated_ms": 5.3647,
+      "layer_speedup": 0.2611,
+      "correct": false,
+      "max_err": 9.679688,
+      "step_max_errs": {
+        "1_2_pre_attn_norm_qkv_fused": 0.003906,
+        "3_qk_norm_rope_fused": 0.003906,
+        "4_attention_flash": 0.001953,
+        "5_attn_out_proj": 0.001953,
+        "6_7a_pre_mlp_norm_gateup_fused": 0.003906,
+        "7b_geglu_fused": 30.320312,
+        "7c_down_proj": 9.679688
+      },
+      "noeris_step_times": {
+        "1_2_pre_attn_norm_qkv_fused": 1.0537,
+        "3_qk_norm_rope_fused": 0.1219,
+        "4_attention_flash": 15.9437,
+        "5_attn_out_proj": 0.2499,
+        "6_7a_pre_mlp_norm_gateup_fused": 3.2276,
+        "7b_geglu_fused": 0.2365,
+        "7c_down_proj": 0.4157
+      },
+      "pytorch_step_times": {
+        "1_pre_attn_rmsnorm": 0.2509,
+        "2_qkv_proj": 0.2744,
+        "3_qk_norm_rope_4ops": 0.8253,
+        "4_attention_sdpa": 3.0444,
+        "5_attn_out_proj": 0.2109,
+        "6_pre_mlp_rmsnorm": 0.4823,
+        "7a_gate_up_proj": 0.6574,
+        "7b_geglu_separated": 0.5622,
+        "7c_down_proj": 0.3553
+      },
+      "config": {
+        "name": "gemma4_e2b_local",
+        "batch": 1,
+        "seq_len": 4096,
+        "hidden_dim": 1536,
+        "num_heads": 8,
+        "num_kv_heads": 1,
+        "head_dim": 256,
+        "ffn_dim": 6144,
+        "window_size": 512,
+        "is_causal": true
+      }
+    }
+  ]
+}

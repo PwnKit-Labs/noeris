@@ -1,0 +1,305 @@
+{
+  "hardware": {
+    "gpu": "NVIDIA H100 80GB HBM3",
+    "cuda_version": "13.0",
+    "python": "3.11.12"
+  },
+  "layer_results": [
+    {
+      "name": "gemma4_31b_local",
+      "noeris_fused_ms": 5.7982,
+      "pytorch_separated_ms": 5.5774,
+      "layer_speedup": 0.9619,
+      "correct": true,
+      "max_err": 0.007812,
+      "step_max_errs": {
+        "1_2_pre_attn_norm_qkv_fused": 0.003906,
+        "3_qk_norm_rope_fused": 0.003906,
+        "4_attention_flash": 0.003906,
+        "5_attn_out_proj": 0.001953,
+        "6_7a_pre_mlp_norm_gateup_fused": 0.003906,
+        "7b_geglu_fused": 0.03125,
+        "7c_down_proj": 0.004883
+      },
+      "noeris_step_times": {
+        "1_2_pre_attn_norm_qkv_fused": 1.0682,
+        "3_qk_norm_rope_fused": 0.1167,
+        "4_attention_flash": 0.3169,
+        "5_attn_out_proj": 0.3143,
+        "6_7a_pre_mlp_norm_gateup_fused": 2.4986,
+        "7b_geglu_fused": 0.866,
+        "7c_down_proj": 0.6686
+      },
+      "pytorch_step_times": {
+        "1_pre_attn_rmsnorm": 0.221,
+        "2_qkv_proj": 0.5741,
+        "3_qk_norm_rope_4ops": 1.0049,
+        "4_attention_sdpa": 0.7252,
+        "5_attn_out_proj": 0.3151,
+        "6_pre_mlp_rmsnorm": 0.551,
+        "7a_gate_up_proj": 1.2826,
+        "7b_geglu_separated": 0.5095,
+        "7c_down_proj": 0.6712
+      },
+      "config": {
+        "name": "gemma4_31b_local",
+        "batch": 1,
+        "seq_len": 2048,
+        "hidden_dim": 5376,
+        "num_heads": 32,
+        "num_kv_heads": 16,
+        "head_dim": 256,
+        "ffn_dim": 21504,
+        "window_size": 1024,
+        "is_causal": true
+      }
+    },
+    {
+      "name": "gemma4_31b_global",
+      "noeris_fused_ms": 7.8941,
+      "pytorch_separated_ms": 7.1445,
+      "layer_speedup": 0.905,
+      "correct": true,
+      "max_err": 0.007812,
+      "step_max_errs": {
+        "1_2_pre_attn_norm_qkv_fused": 0.003906,
+        "3_qk_norm_rope_fused": 0.007812,
+        "4_attention_flash": 0.003906,
+        "5_attn_out_proj": 0.003906,
+        "6_7a_pre_mlp_norm_gateup_fused": 0.003906,
+        "7b_geglu_fused": 0.03125,
+        "7c_down_proj": 0.005859
+      },
+      "noeris_step_times": {
+        "1_2_pre_attn_norm_qkv_fused": 1.3072,
+        "3_qk_norm_rope_fused": 0.1323,
+        "4_attention_flash": 1.7654,
+        "5_attn_out_proj": 0.6004,
+        "6_7a_pre_mlp_norm_gateup_fused": 2.5779,
+        "7b_geglu_fused": 0.8641,
+        "7c_down_proj": 0.6644
+      },
+      "pytorch_step_times": {
+        "1_pre_attn_rmsnorm": 0.2193,
+        "2_qkv_proj": 0.7159,
+        "3_qk_norm_rope_4ops": 1.4561,
+        "4_attention_sdpa": 1.4568,
+        "5_attn_out_proj": 0.5177,
+        "6_pre_mlp_rmsnorm": 0.8063,
+        "7a_gate_up_proj": 1.3043,
+        "7b_geglu_separated": 0.5446,
+        "7c_down_proj": 0.8004
+      },
+      "config": {
+        "name": "gemma4_31b_global",
+        "batch": 1,
+        "seq_len": 2048,
+        "hidden_dim": 5376,
+        "num_heads": 32,
+        "num_kv_heads": 4,
+        "head_dim": 512,
+        "ffn_dim": 21504,
+        "window_size": -1,
+        "is_causal": true
+      }
+    },
+    {
+      "name": "gemma4_e2b_local",
+      "noeris_fused_ms": 0.9626,
+      "pytorch_separated_ms": 2.1224,
+      "layer_speedup": 2.2049,
+      "correct": true,
+      "max_err": 0.007812,
+      "step_max_errs": {
+        "1_2_pre_attn_norm_qkv_fused": 0.003906,
+        "3_qk_norm_rope_fused": 0.003906,
+        "4_attention_flash": 0.002441,
+        "5_attn_out_proj": 0.001953,
+        "6_7a_pre_mlp_norm_gateup_fused": 0.003906,
+        "7b_geglu_fused": 0.03125,
+        "7c_down_proj": 0.005859
+      },
+      "noeris_step_times": {
+        "1_2_pre_attn_norm_qkv_fused": 0.1807,
+        "3_qk_norm_rope_fused": 0.0686,
+        "4_attention_flash": 0.1388,
+        "5_attn_out_proj": 0.073,
+        "6_7a_pre_mlp_norm_gateup_fused": 0.3656,
+        "7b_geglu_fused": 0.1236,
+        "7c_down_proj": 0.1146
+      },
+      "pytorch_step_times": {
+        "1_pre_attn_rmsnorm": 0.1274,
+        "2_qkv_proj": 0.0941,
+        "3_qk_norm_rope_4ops": 0.4245,
+        "4_attention_sdpa": 0.7428,
+        "5_attn_out_proj": 0.0748,
+        "6_pre_mlp_rmsnorm": 0.2001,
+        "7a_gate_up_proj": 0.2223,
+        "7b_geglu_separated": 0.2953,
+        "7c_down_proj": 0.114
+      },
+      "config": {
+        "name": "gemma4_e2b_local",
+        "batch": 1,
+        "seq_len": 4096,
+        "hidden_dim": 1536,
+        "num_heads": 8,
+        "num_kv_heads": 1,
+        "head_dim": 256,
+        "ffn_dim": 6144,
+        "window_size": 512,
+        "is_causal": true
+      }
+    }
+  ],
+  "config_results": [
+    {
+      "name": "gemma4_31b_local",
+      "noeris_fused_ms": 5.7982,
+      "pytorch_separated_ms": 5.5774,
+      "layer_speedup": 0.9619,
+      "correct": true,
+      "max_err": 0.007812,
+      "step_max_errs": {
+        "1_2_pre_attn_norm_qkv_fused": 0.003906,
+        "3_qk_norm_rope_fused": 0.003906,
+        "4_attention_flash": 0.003906,
+        "5_attn_out_proj": 0.001953,
+        "6_7a_pre_mlp_norm_gateup_fused": 0.003906,
+        "7b_geglu_fused": 0.03125,
+        "7c_down_proj": 0.004883
+      },
+      "noeris_step_times": {
+        "1_2_pre_attn_norm_qkv_fused": 1.0682,
+        "3_qk_norm_rope_fused": 0.1167,
+        "4_attention_flash": 0.3169,
+        "5_attn_out_proj": 0.3143,
+        "6_7a_pre_mlp_norm_gateup_fused": 2.4986,
+        "7b_geglu_fused": 0.866,
+        "7c_down_proj": 0.6686
+      },
+      "pytorch_step_times": {
+        "1_pre_attn_rmsnorm": 0.221,
+        "2_qkv_proj": 0.5741,
+        "3_qk_norm_rope_4ops": 1.0049,
+        "4_attention_sdpa": 0.7252,
+        "5_attn_out_proj": 0.3151,
+        "6_pre_mlp_rmsnorm": 0.551,
+        "7a_gate_up_proj": 1.2826,
+        "7b_geglu_separated": 0.5095,
+        "7c_down_proj": 0.6712
+      },
+      "config": {
+        "name": "gemma4_31b_local",
+        "batch": 1,
+        "seq_len": 2048,
+        "hidden_dim": 5376,
+        "num_heads": 32,
+        "num_kv_heads": 16,
+        "head_dim": 256,
+        "ffn_dim": 21504,
+        "window_size": 1024,
+        "is_causal": true
+      }
+    },
+    {
+      "name": "gemma4_31b_global",
+      "noeris_fused_ms": 7.8941,
+      "pytorch_separated_ms": 7.1445,
+      "layer_speedup": 0.905,
+      "correct": true,
+      "max_err": 0.007812,
+      "step_max_errs": {
+        "1_2_pre_attn_norm_qkv_fused": 0.003906,
+        "3_qk_norm_rope_fused": 0.007812,
+        "4_attention_flash": 0.003906,
+        "5_attn_out_proj": 0.003906,
+        "6_7a_pre_mlp_norm_gateup_fused": 0.003906,
+        "7b_geglu_fused": 0.03125,
+        "7c_down_proj": 0.005859
+      },
+      "noeris_step_times": {
+        "1_2_pre_attn_norm_qkv_fused": 1.3072,
+        "3_qk_norm_rope_fused": 0.1323,
+        "4_attention_flash": 1.7654,
+        "5_attn_out_proj": 0.6004,
+        "6_7a_pre_mlp_norm_gateup_fused": 2.5779,
+        "7b_geglu_fused": 0.8641,
+        "7c_down_proj": 0.6644
+      },
+      "pytorch_step_times": {
+        "1_pre_attn_rmsnorm": 0.2193,
+        "2_qkv_proj": 0.7159,
+        "3_qk_norm_rope_4ops": 1.4561,
+        "4_attention_sdpa": 1.4568,
+        "5_attn_out_proj": 0.5177,
+        "6_pre_mlp_rmsnorm": 0.8063,
+        "7a_gate_up_proj": 1.3043,
+        "7b_geglu_separated": 0.5446,
+        "7c_down_proj": 0.8004
+      },
+      "config": {
+        "name": "gemma4_31b_global",
+        "batch": 1,
+        "seq_len": 2048,
+        "hidden_dim": 5376,
+        "num_heads": 32,
+        "num_kv_heads": 4,
+        "head_dim": 512,
+        "ffn_dim": 21504,
+        "window_size": -1,
+        "is_causal": true
+      }
+    },
+    {
+      "name": "gemma4_e2b_local",
+      "noeris_fused_ms": 0.9626,
+      "pytorch_separated_ms": 2.1224,
+      "layer_speedup": 2.2049,
+      "correct": true,
+      "max_err": 0.007812,
+      "step_max_errs": {
+        "1_2_pre_attn_norm_qkv_fused": 0.003906,
+        "3_qk_norm_rope_fused": 0.003906,
+        "4_attention_flash": 0.002441,
+        "5_attn_out_proj": 0.001953,
+        "6_7a_pre_mlp_norm_gateup_fused": 0.003906,
+        "7b_geglu_fused": 0.03125,
+        "7c_down_proj": 0.005859
+      },
+      "noeris_step_times": {
+        "1_2_pre_attn_norm_qkv_fused": 0.1807,
+        "3_qk_norm_rope_fused": 0.0686,
+        "4_attention_flash": 0.1388,
+        "5_attn_out_proj": 0.073,
+        "6_7a_pre_mlp_norm_gateup_fused": 0.3656,
+        "7b_geglu_fused": 0.1236,
+        "7c_down_proj": 0.1146
+      },
+      "pytorch_step_times": {
+        "1_pre_attn_rmsnorm": 0.1274,
+        "2_qkv_proj": 0.0941,
+        "3_qk_norm_rope_4ops": 0.4245,
+        "4_attention_sdpa": 0.7428,
+        "5_attn_out_proj": 0.0748,
+        "6_pre_mlp_rmsnorm": 0.2001,
+        "7a_gate_up_proj": 0.2223,
+        "7b_geglu_separated": 0.2953,
+        "7c_down_proj": 0.114
+      },
+      "config": {
+        "name": "gemma4_e2b_local",
+        "batch": 1,
+        "seq_len": 4096,
+        "hidden_dim": 1536,
+        "num_heads": 8,
+        "num_kv_heads": 1,
+        "head_dim": 256,
+        "ffn_dim": 6144,
+        "window_size": 512,
+        "is_causal": true
+      }
+    }
+  ]
+}

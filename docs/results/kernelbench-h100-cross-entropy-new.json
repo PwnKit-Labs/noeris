@@ -1,0 +1,218 @@
+{
+  "metadata": {
+    "hardware": "H100",
+    "operators": [
+      "cross_entropy"
+    ],
+    "baseline_source": "measure",
+    "timer": "cuda_event"
+  },
+  "fast_p_scores": {
+    "vs_eager": {
+      "1.0": {
+        "level_1": 1.0,
+        "level_2": 1.0,
+        "overall": 1.0
+      },
+      "1.5": {
+        "level_1": 1.0,
+        "level_2": 1.0,
+        "overall": 1.0
+      },
+      "2.0": {
+        "level_1": 1.0,
+        "level_2": 0.75,
+        "overall": 0.875
+      },
+      "3.0": {
+        "level_1": 1.0,
+        "level_2": 0.5,
+        "overall": 0.75
+      }
+    },
+    "vs_compile": {
+      "1.0": {
+        "level_1": 1.0,
+        "level_2": 0.5,
+        "overall": 0.75
+      },
+      "1.5": {
+        "level_1": 1.0,
+        "level_2": 0.5,
+        "overall": 0.75
+      },
+      "2.0": {
+        "level_1": 1.0,
+        "level_2": 0.5,
+        "overall": 0.75
+      },
+      "3.0": {
+        "level_1": 0.25,
+        "level_2": 0.0,
+        "overall": 0.125
+      }
+    }
+  },
+  "results": [
+    {
+      "problem_id": "kb_L1_ce_bert",
+      "operator": "cross_entropy",
+      "level": 1,
+      "shape": {
+        "n_rows": 4096,
+        "n_cols": 30522
+      },
+      "our_metric": 1912.14,
+      "our_config_id": "bs4096_w4_s1",
+      "pytorch_baseline": 355.17,
+      "compile_baseline": 799.77,
+      "speedup_vs_eager": 5.383731734099164,
+      "speedup_vs_compile": 2.3908623729322183,
+      "correct": true,
+      "static_check": "fail",
+      "static_check_messages": [
+        "Contains try-except block (potential fallback bypass)"
+      ]
+    },
+    {
+      "problem_id": "kb_L1_ce_gpt2",
+      "operator": "cross_entropy",
+      "level": 1,
+      "shape": {
+        "n_rows": 1024,
+        "n_cols": 50257
+      },
+      "our_metric": 1346.21,
+      "our_config_id": "bs4096_w16_s1",
+      "pytorch_baseline": 292.62,
+      "compile_baseline": 620.22,
+      "speedup_vs_eager": 4.600539949422459,
+      "speedup_vs_compile": 2.170536261326626,
+      "correct": true,
+      "static_check": "fail",
+      "static_check_messages": [
+        "Contains try-except block (potential fallback bypass)"
+      ]
+    },
+    {
+      "problem_id": "kb_L1_ce_gpt2_long",
+      "operator": "cross_entropy",
+      "level": 1,
+      "shape": {
+        "n_rows": 2048,
+        "n_cols": 50257
+      },
+      "our_metric": 1496.0,
+      "our_config_id": "bs32768_w16_s1",
+      "pytorch_baseline": 302.51,
+      "compile_baseline": 743.29,
+      "speedup_vs_eager": 4.94529106475819,
+      "speedup_vs_compile": 2.0126733845470812,
+      "correct": true,
+      "static_check": "fail",
+      "static_check_messages": [
+        "Contains try-except block (potential fallback bypass)"
+      ]
+    },
+    {
+      "problem_id": "kb_L1_ce_llama",
+      "operator": "cross_entropy",
+      "level": 1,
+      "shape": {
+        "n_rows": 2048,
+        "n_cols": 32000
+      },
+      "our_metric": 2172.71,
+      "our_config_id": "bs16384_w16_s1",
+      "pytorch_baseline": 323.07,
+      "compile_baseline": 695.47,
+      "speedup_vs_eager": 6.72519887330919,
+      "speedup_vs_compile": 3.124088745740291,
+      "correct": true,
+      "static_check": "fail",
+      "static_check_messages": [
+        "Contains try-except block (potential fallback bypass)"
+      ]
+    },
+    {
+      "problem_id": "kb_L2_ce_mistral",
+      "operator": "cross_entropy",
+      "level": 2,
+      "shape": {
+        "n_rows": 4096,
+        "n_cols": 32000
+      },
+      "our_metric": 2449.04,
+      "our_config_id": "bs2048_w4_s2",
+      "pytorch_baseline": 332.64,
+      "compile_baseline": 842.93,
+      "speedup_vs_eager": 7.362433862433862,
+      "speedup_vs_compile": 2.9053895341250167,
+      "correct": true,
+      "static_check": "fail",
+      "static_check_messages": [
+        "Contains try-except block (potential fallback bypass)"
+      ]
+    },
+    {
+      "problem_id": "kb_L2_ce_long_llama",
+      "operator": "cross_entropy",
+      "level": 2,
+      "shape": {
+        "n_rows": 8192,
+        "n_cols": 32000
+      },
+      "our_metric": 2615.78,
+      "our_config_id": "bs4096_w4_s1",
+      "pytorch_baseline": 337.23,
+      "compile_baseline": 876.99,
+      "speedup_vs_eager": 7.756664590932005,
+      "speedup_vs_compile": 2.9826793920113115,
+      "correct": true,
+      "static_check": "fail",
+      "static_check_messages": [
+        "Contains try-except block (potential fallback bypass)"
+      ]
+    },
+    {
+      "problem_id": "kb_L2_ce_llama3_128k",
+      "operator": "cross_entropy",
+      "level": 2,
+      "shape": {
+        "n_rows": 2048,
+        "n_cols": 128256
+      },
+      "our_metric": 708.53,
+      "our_config_id": "bs4096_w8_s1",
+      "pytorch_baseline": 300.61,
+      "compile_baseline": 910.01,
+      "speedup_vs_eager": 2.3569741525564685,
+      "speedup_vs_compile": 0.7785958396061582,
+      "correct": true,
+      "static_check": "fail",
+      "static_check_messages": [
+        "Contains try-except block (potential fallback bypass)"
+      ]
+    },
+    {
+      "problem_id": "kb_L2_ce_gemma_256k",
+      "operator": "cross_entropy",
+      "level": 2,
+      "shape": {
+        "n_rows": 2048,
+        "n_cols": 256000
+      },
+      "our_metric": 563.37,
+      "our_config_id": "bs32768_w16_s1",
+      "pytorch_baseline": 303.16,
+      "compile_baseline": 955.13,
+      "speedup_vs_eager": 1.8583256366275234,
+      "speedup_vs_compile": 0.5898359385633369,
+      "correct": true,
+      "static_check": "fail",
+      "static_check_messages": [
+        "Contains try-except block (potential fallback bypass)"
+      ]
+    }
+  ]
+}

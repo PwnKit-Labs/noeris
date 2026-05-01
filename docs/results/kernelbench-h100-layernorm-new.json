@@ -1,0 +1,178 @@
+{
+  "metadata": {
+    "hardware": "H100",
+    "operators": [
+      "layernorm"
+    ],
+    "baseline_source": "measure",
+    "timer": "cuda_event"
+  },
+  "fast_p_scores": {
+    "vs_eager": {
+      "1.0": {
+        "level_1": 1.0,
+        "level_2": 1.0,
+        "overall": 1.0
+      },
+      "1.5": {
+        "level_1": 0.0,
+        "level_2": 0.333,
+        "overall": 0.167
+      },
+      "2.0": {
+        "level_1": 0.0,
+        "level_2": 0.0,
+        "overall": 0.0
+      },
+      "3.0": {
+        "level_1": 0.0,
+        "level_2": 0.0,
+        "overall": 0.0
+      }
+    },
+    "vs_compile": {
+      "1.0": {
+        "level_1": 1.0,
+        "level_2": 1.0,
+        "overall": 1.0
+      },
+      "1.5": {
+        "level_1": 1.0,
+        "level_2": 1.0,
+        "overall": 1.0
+      },
+      "2.0": {
+        "level_1": 1.0,
+        "level_2": 1.0,
+        "overall": 1.0
+      },
+      "3.0": {
+        "level_1": 0.333,
+        "level_2": 0.0,
+        "overall": 0.167
+      }
+    }
+  },
+  "results": [
+    {
+      "problem_id": "kb_L1_layernorm_gpt2",
+      "operator": "layernorm",
+      "level": 1,
+      "shape": {
+        "n_rows": 1024,
+        "hidden_dim": 768
+      },
+      "our_metric": 434.44,
+      "our_config_id": "bs1024_w4_s1",
+      "pytorch_baseline": 353.32,
+      "compile_baseline": 100.36,
+      "speedup_vs_eager": 1.229593569568663,
+      "speedup_vs_compile": 4.328816261458749,
+      "correct": true,
+      "static_check": "fail",
+      "static_check_messages": [
+        "Contains try-except block (potential fallback bypass)"
+      ]
+    },
+    {
+      "problem_id": "kb_L1_layernorm_bert_base",
+      "operator": "layernorm",
+      "level": 1,
+      "shape": {
+        "n_rows": 4096,
+        "hidden_dim": 768
+      },
+      "our_metric": 1145.01,
+      "our_config_id": "bs1024_w4_s1",
+      "pytorch_baseline": 816.0,
+      "compile_baseline": 431.26,
+      "speedup_vs_eager": 1.4031985294117646,
+      "speedup_vs_compile": 2.655034086166118,
+      "correct": true,
+      "static_check": "fail",
+      "static_check_messages": [
+        "Contains try-except block (potential fallback bypass)"
+      ]
+    },
+    {
+      "problem_id": "kb_L1_layernorm_bert_large",
+      "operator": "layernorm",
+      "level": 1,
+      "shape": {
+        "n_rows": 4096,
+        "hidden_dim": 1024
+      },
+      "our_metric": 1385.51,
+      "our_config_id": "bs1024_w4_s1",
+      "pytorch_baseline": 984.82,
+      "compile_baseline": 521.29,
+      "speedup_vs_eager": 1.4068662293617107,
+      "speedup_vs_compile": 2.6578487981737613,
+      "correct": true,
+      "static_check": "fail",
+      "static_check_messages": [
+        "Contains try-except block (potential fallback bypass)"
+      ]
+    },
+    {
+      "problem_id": "kb_L2_layernorm_gpt_xl",
+      "operator": "layernorm",
+      "level": 2,
+      "shape": {
+        "n_rows": 4096,
+        "hidden_dim": 1600
+      },
+      "our_metric": 1642.08,
+      "our_config_id": "bs1024_w4_s1",
+      "pytorch_baseline": 1202.35,
+      "compile_baseline": 564.91,
+      "speedup_vs_eager": 1.3657254543186261,
+      "speedup_vs_compile": 2.906799313164929,
+      "correct": true,
+      "static_check": "fail",
+      "static_check_messages": [
+        "Contains try-except block (potential fallback bypass)"
+      ]
+    },
+    {
+      "problem_id": "kb_L2_layernorm_neox",
+      "operator": "layernorm",
+      "level": 2,
+      "shape": {
+        "n_rows": 4096,
+        "hidden_dim": 4096
+      },
+      "our_metric": 2256.77,
+      "our_config_id": "bs2048_w8_s1",
+      "pytorch_baseline": 1672.78,
+      "compile_baseline": 1005.59,
+      "speedup_vs_eager": 1.3491134518585828,
+      "speedup_vs_compile": 2.244224783460456,
+      "correct": true,
+      "static_check": "fail",
+      "static_check_messages": [
+        "Contains try-except block (potential fallback bypass)"
+      ]
+    },
+    {
+      "problem_id": "kb_L2_layernorm_long_seq",
+      "operator": "layernorm",
+      "level": 2,
+      "shape": {
+        "n_rows": 8192,
+        "hidden_dim": 768
+      },
+      "our_metric": 1620.04,
+      "our_config_id": "bs512_w2_s2",
+      "pytorch_baseline": 1067.2,
+      "compile_baseline": 730.97,
+      "speedup_vs_eager": 1.5180284857571213,
+      "speedup_vs_compile": 2.2162879461537406,
+      "correct": true,
+      "static_check": "fail",
+      "static_check_messages": [
+        "Contains try-except block (potential fallback bypass)"
+      ]
+    }
+  ]
+}

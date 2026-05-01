@@ -1,0 +1,218 @@
+{
+  "metadata": {
+    "hardware": "H100",
+    "operators": [
+      "rmsnorm"
+    ],
+    "baseline_source": "measure",
+    "timer": "cuda_event"
+  },
+  "fast_p_scores": {
+    "vs_eager": {
+      "1.0": {
+        "level_1": 1.0,
+        "level_2": 1.0,
+        "overall": 1.0
+      },
+      "1.5": {
+        "level_1": 1.0,
+        "level_2": 1.0,
+        "overall": 1.0
+      },
+      "2.0": {
+        "level_1": 1.0,
+        "level_2": 1.0,
+        "overall": 1.0
+      },
+      "3.0": {
+        "level_1": 1.0,
+        "level_2": 1.0,
+        "overall": 1.0
+      }
+    },
+    "vs_compile": {
+      "1.0": {
+        "level_1": 1.0,
+        "level_2": 1.0,
+        "overall": 1.0
+      },
+      "1.5": {
+        "level_1": 1.0,
+        "level_2": 1.0,
+        "overall": 1.0
+      },
+      "2.0": {
+        "level_1": 1.0,
+        "level_2": 1.0,
+        "overall": 1.0
+      },
+      "3.0": {
+        "level_1": 0.333,
+        "level_2": 0.0,
+        "overall": 0.125
+      }
+    }
+  },
+  "results": [
+    {
+      "problem_id": "kb_L1_rmsnorm_gpt2",
+      "operator": "rmsnorm",
+      "level": 1,
+      "shape": {
+        "n_rows": 1024,
+        "hidden_dim": 768
+      },
+      "our_metric": 443.03,
+      "our_config_id": "bs1024_w4_s1",
+      "pytorch_baseline": 83.67,
+      "compile_baseline": 122.02,
+      "speedup_vs_eager": 5.294968327955061,
+      "speedup_vs_compile": 3.6307982297983936,
+      "correct": true,
+      "static_check": "fail",
+      "static_check_messages": [
+        "Contains try-except block (potential fallback bypass)"
+      ]
+    },
+    {
+      "problem_id": "kb_L1_rmsnorm_bert",
+      "operator": "rmsnorm",
+      "level": 1,
+      "shape": {
+        "n_rows": 4096,
+        "hidden_dim": 1024
+      },
+      "our_metric": 1479.13,
+      "our_config_id": "bs256_w1_s1",
+      "pytorch_baseline": 194.53,
+      "compile_baseline": 540.29,
+      "speedup_vs_eager": 7.603608697887216,
+      "speedup_vs_compile": 2.73765940513428,
+      "correct": true,
+      "static_check": "fail",
+      "static_check_messages": [
+        "Contains try-except block (potential fallback bypass)"
+      ]
+    },
+    {
+      "problem_id": "kb_L1_rmsnorm_gpt_xl",
+      "operator": "rmsnorm",
+      "level": 1,
+      "shape": {
+        "n_rows": 4096,
+        "hidden_dim": 1600
+      },
+      "our_metric": 1699.79,
+      "our_config_id": "bs2048_w4_s2",
+      "pytorch_baseline": 197.56,
+      "compile_baseline": 755.46,
+      "speedup_vs_eager": 8.603917797124923,
+      "speedup_vs_compile": 2.250006618484102,
+      "correct": true,
+      "static_check": "fail",
+      "static_check_messages": [
+        "Contains try-except block (potential fallback bypass)"
+      ]
+    },
+    {
+      "problem_id": "kb_L2_rmsnorm_llama7b",
+      "operator": "rmsnorm",
+      "level": 2,
+      "shape": {
+        "n_rows": 4096,
+        "hidden_dim": 4096
+      },
+      "our_metric": 2325.29,
+      "our_config_id": "bs2048_w8_s1",
+      "pytorch_baseline": 210.0,
+      "compile_baseline": 1127.94,
+      "speedup_vs_eager": 11.072809523809523,
+      "speedup_vs_compile": 2.0615369611858787,
+      "correct": true,
+      "static_check": "fail",
+      "static_check_messages": [
+        "Contains try-except block (potential fallback bypass)"
+      ]
+    },
+    {
+      "problem_id": "kb_L2_rmsnorm_llama13b",
+      "operator": "rmsnorm",
+      "level": 2,
+      "shape": {
+        "n_rows": 4096,
+        "hidden_dim": 5120
+      },
+      "our_metric": 2420.83,
+      "our_config_id": "bs4096_w16_s1",
+      "pytorch_baseline": 214.82,
+      "compile_baseline": 1145.87,
+      "speedup_vs_eager": 11.269109021506377,
+      "speedup_vs_compile": 2.112656758620088,
+      "correct": true,
+      "static_check": "fail",
+      "static_check_messages": [
+        "Contains try-except block (potential fallback bypass)"
+      ]
+    },
+    {
+      "problem_id": "kb_L2_rmsnorm_llama70b",
+      "operator": "rmsnorm",
+      "level": 2,
+      "shape": {
+        "n_rows": 2048,
+        "hidden_dim": 8192
+      },
+      "our_metric": 2298.81,
+      "our_config_id": "bs4096_w16_s1",
+      "pytorch_baseline": 209.54,
+      "compile_baseline": 1087.72,
+      "speedup_vs_eager": 10.970745442397632,
+      "speedup_vs_compile": 2.1134207332769464,
+      "correct": true,
+      "static_check": "fail",
+      "static_check_messages": [
+        "Contains try-except block (potential fallback bypass)"
+      ]
+    },
+    {
+      "problem_id": "kb_L2_rmsnorm_mixtral",
+      "operator": "rmsnorm",
+      "level": 2,
+      "shape": {
+        "n_rows": 8192,
+        "hidden_dim": 4096
+      },
+      "our_metric": 2624.88,
+      "our_config_id": "bs2048_w8_s1",
+      "pytorch_baseline": 224.31,
+      "compile_baseline": 1167.43,
+      "speedup_vs_eager": 11.702019526548082,
+      "speedup_vs_compile": 2.2484260298261995,
+      "correct": true,
+      "static_check": "fail",
+      "static_check_messages": [
+        "Contains try-except block (potential fallback bypass)"
+      ]
+    },
+    {
+      "problem_id": "kb_L2_rmsnorm_gemma_26b",
+      "operator": "rmsnorm",
+      "level": 2,
+      "shape": {
+        "n_rows": 4096,
+        "hidden_dim": 2816
+      },
+      "our_metric": 2095.88,
+      "our_config_id": "bs4096_w8_s2",
+      "pytorch_baseline": 202.78,
+      "compile_baseline": 1020.5,
+      "speedup_vs_eager": 10.335733307032251,
+      "speedup_vs_compile": 2.0537775600195984,
+      "correct": true,
+      "static_check": "fail",
+      "static_check_messages": [
+        "Contains try-except block (potential fallback bypass)"
+      ]
+    }
+  ]
+}
