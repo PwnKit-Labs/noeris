@@ -34,5 +34,8 @@ jobs:
       - name: Check public artifact references
         run: python scripts/check_public_claim_artifacts.py
 
+      - name: Export matmul history artifacts
+        run: python -m research_engine.cli export-history --benchmark-id matmul-speedup --output-dir .noeris/history
+
       - name: Check exported history regressions
-        run: python scripts/check_history_regressions.py --path .noeris/history/history-regressions.json --benchmark-id matmul-speedup
+        run: python scripts/check_history_regressions.py --path .noeris/history/history-regressions.json --benchmark-id matmul-speedup --fail-on-missing
