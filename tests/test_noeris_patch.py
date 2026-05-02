@@ -13,6 +13,12 @@ Requires: transformers, torch, triton (GPU tests marked with @pytest.mark.gpu)
 import pytest
 
 
+def _require_torch_cuda() -> None:
+    torch = pytest.importorskip("torch")
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is required for GPU noeris tests")
+
+
 # ---- Architecture detection tests (no GPU needed) ----
 
 class TestDetection:
@@ -87,6 +93,10 @@ class TestDetection:
 
 @pytest.mark.gpu
 class TestKernelCorrectness:
+    @pytest.fixture(autouse=True)
+    def _require_gpu_stack(self):
+        _require_torch_cuda()
+
     def test_rmsnorm_forward(self):
         import torch
         from noeris.kernels.rmsnorm import rmsnorm_forward
@@ -161,6 +171,10 @@ class TestKernelCorrectness:
 
 @pytest.mark.gpu
 class TestAutograd:
+    @pytest.fixture(autouse=True)
+    def _require_gpu_stack(self):
+        _require_torch_cuda()
+
     def test_rmsnorm_autograd(self):
         import torch
         from noeris._autograd import TritonRMSNorm
@@ -219,6 +233,10 @@ class TestAutograd:
 
 @pytest.mark.gpu
 class TestPatchIntegration:
+    @pytest.fixture(autouse=True)
+    def _require_gpu_stack(self):
+        _require_torch_cuda()
+
     @pytest.fixture
     def _check_transformers(self):
         pytest.importorskip("transformers")
