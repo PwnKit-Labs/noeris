@@ -79,6 +79,12 @@ Run the same core checks used in GitHub CI from repo root:
 ./scripts/ci_local.sh
 ```
 
+If your default `python3` does not have test dependencies installed, select one:
+
+```bash
+PYTHON_BIN=python3.11 ./scripts/ci_local.sh
+```
+
 This runs unit tests, public artifact reference checks, two `matmul-speedup`
 benchmark runs, history export, and the history regression gate with
 `--fail-on-missing`.

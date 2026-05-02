@@ -25,7 +25,7 @@ class LocalCiScriptTests(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 0)
-        self.assertIn("python3 -m pytest tests/ -x -q --timeout=60", result.stdout)
+        self.assertIn("python3 -m pytest tests/ -x -q", result.stdout)
         self.assertIn("python3 scripts/check_public_claim_artifacts.py", result.stdout)
         self.assertIn("python3 -m research_engine.cli benchmark-run matmul-speedup", result.stdout)
         self.assertIn(

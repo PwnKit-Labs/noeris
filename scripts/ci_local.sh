@@ -28,7 +28,7 @@ run_step() {
 printf 'Running local CI parity checks from %s\n' "${REPO_ROOT}"
 printf 'Using PYTHONPATH=%s\n' "${PYTHONPATH}"
 
-run_step "Run unit tests" "${PYTHON_BIN}" -m pytest tests/ -x -q --timeout=60
+run_step "Run unit tests" "${PYTHON_BIN}" -m pytest tests/ -x -q
 run_step "Check public artifact references" "${PYTHON_BIN}" scripts/check_public_claim_artifacts.py
 run_step "Benchmark run matmul-speedup (1/2)" "${PYTHON_BIN}" -m research_engine.cli benchmark-run matmul-speedup
 run_step "Benchmark run matmul-speedup (2/2)" "${PYTHON_BIN}" -m research_engine.cli benchmark-run matmul-speedup

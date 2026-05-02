@@ -1,0 +1,45 @@
+{
+  "generated_at_utc": "2026-05-02T20:02:10+00:00",
+  "scope": "fp8-runtime-and-history-gate",
+  "commits": [
+    "df76e33",
+    "5eede0d",
+    "76fefaf",
+    "d881bfc",
+    "d4429b4",
+    "eaa231a"
+  ],
+  "checks": {
+    "tests": {
+      "command": "PYTHON_BIN=python3.11 ./scripts/ci_local.sh (Run unit tests step)",
+      "passed": true,
+      "summary": "853 passed, 23 skipped, 23 subtests passed"
+    },
+    "public_artifact_refs": {
+      "command": "python3.11 scripts/check_public_claim_artifacts.py",
+      "passed": true,
+      "summary": "All referenced artifacts exist and JSON files parse"
+    },
+    "history_export": {
+      "command": "python3.11 -m research_engine.cli export-history --benchmark-id matmul-speedup --output-dir .noeris/history",
+      "passed": true,
+      "files": [
+        ".noeris/history/history-summary.json",
+        ".noeris/history/history-brief.md",
+        ".noeris/history/history-regressions.json",
+        ".noeris/history/history-regressions.md"
+      ]
+    },
+    "history_regression_gate": {
+      "command": "python3.11 scripts/check_history_regressions.py --path .noeris/history/history-regressions.json --summary-path .noeris/history/history-summary.json --benchmark-id matmul-speedup --fail-on-missing",
+      "passed": true,
+      "status": "ok",
+      "blocking_regressions": [],
+      "blocking_threshold_regressions": []
+    }
+  },
+  "notes": [
+    "Local parity runner currently requires selecting a Python environment with pytest installed (e.g. PYTHON_BIN=python3.11).",
+    "Regression gate is active and validated on freshly exported history artifacts."
+  ]
+}

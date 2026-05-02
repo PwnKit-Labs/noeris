@@ -255,6 +255,11 @@ Implementation helpers:
 - `src/research_engine/executors.py` (`MatmulPythonExecutor` now annotates FP8 fixture rows with
   policy-resolved runtime layout decisions)
 
+Release confidence snapshot:
+
+- `docs/results/release-confidence-fp8-runtime-ci-local.json`
+- `docs/results/release-confidence-fp8-runtime-ci-local.md`
+
 Current workload findings (H100):
 
 - Unique, no-reuse small-shape workload (`s1024_reuse1_unique`): `auto_policy_cache` is best and effectively matches `force_kn`.
