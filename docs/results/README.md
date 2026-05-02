@@ -38,6 +38,8 @@ FP8 baseline probes:
 - `docs/results/fp8-layout-runtime-integration-h100.md`
 - `docs/results/fp8-layout-runtime-cache-integration-h100.json`
 - `docs/results/fp8-layout-runtime-cache-integration-h100.md`
+- `docs/results/fp8-layout-runtime-integration-token-loop.json`
+- `docs/results/fp8-layout-runtime-integration-token-loop.md`
 
 Executor integration note:
 

@@ -14,6 +14,7 @@ from time import perf_counter
 from ._legacy.components import ExperimentExecutor
 from .llm import ResponsesApiClient, extract_usage
 from .models import ExperimentResult, ExperimentSpec, ExperimentStatus, ResearchTopic
+from .fp8_prepack_cache import Fp8PrepackCache
 from .fp8_runtime import resolve_fp8_layout
 
 
@@ -681,6 +682,9 @@ class MatmulPythonExecutor(ExperimentExecutor):
     history_summary: dict[str, object] | None = None
     proposer: ResponsesApiClient | None = None
     fp8_layout_preference: str = "auto"
+    fp8_prepack_cache_enabled: bool = True
+    fp8_prepack_cache_max_items: int = 64
+    fp8_runtime_token_loop_iterations: int = 48
 
     def run(
         self,
@@ -689,6 +693,11 @@ class MatmulPythonExecutor(ExperimentExecutor):
     ) -> list[ExperimentResult]:
         del topic
         fp8_policy_payload = _load_fp8_layout_policy_payload()
+        fp8_prepack_cache = (
+            Fp8PrepackCache[list[list[float]]](max_items=self.fp8_prepack_cache_max_items)
+            if self.fp8_prepack_cache_enabled
+            else None
+        )
         rows = []
         weighted_improvements = []
         unweighted_improvements = []
@@ -707,6 +716,15 @@ class MatmulPythonExecutor(ExperimentExecutor):
                     policy_payload=fp8_policy_payload,
                 )
                 row["fp8_shape_name"] = shape_name
+                dispatch_runtime = _run_fp8_runtime_dispatch(
+                    shape_name=shape_name,
+                    shape_text=str(row.get("shape", "")),
+                    expected_weight_reuse=expected_reuse,
+                    layout=str(row["fp8_layout"]),
+                    token_loop_iterations=self.fp8_runtime_token_loop_iterations,
+                    cache=fp8_prepack_cache,
+                )
+                row.update(dispatch_runtime)
             rows.append(row)
             uplift = row["uplift_pct"] / 100
             share = float(row["workload_share"])
@@ -753,6 +771,9 @@ class MatmulPythonExecutor(ExperimentExecutor):
                 "fp8_runtime_layout": {
                     "preference": self.fp8_layout_preference,
                     "policy_artifact": "docs/results/fp8-layout-reuse-policy-h100.json",
+                    "prepack_cache_enabled": self.fp8_prepack_cache_enabled,
+                    "prepack_cache_max_items": self.fp8_prepack_cache_max_items,
+                    "token_loop_iterations": self.fp8_runtime_token_loop_iterations,
                 },
             },
             "candidate-catalog.json": {
@@ -2822,6 +2843,109 @@ def _fp8_shape_name_from_shape_text(shape: str) -> str:
     return f"fp8_mm_{normalized.replace('x', 'x')}"
 
 
+def _run_fp8_runtime_dispatch(
+    *,
+    shape_name: str,
+    shape_text: str,
+    expected_weight_reuse: int,
+    layout: str,
+    token_loop_iterations: int,
+    cache: Fp8PrepackCache[list[list[float]]] | None,
+) -> dict[str, object]:
+    parsed_shape = _parse_matmul_shape_text(shape_text)
+    if parsed_shape is None:
+        return {
+            "fp8_runtime_token_iterations": 0,
+            "fp8_runtime_prepack_ops": 0,
+            "fp8_runtime_cache_hits": 0,
+            "fp8_runtime_cache_misses": 0,
+            "fp8_runtime_cache_evictions": 0,
+            "fp8_runtime_dispatch_total_ms": 0.0,
+            "fp8_runtime_cache_enabled": bool(cache is not None),
+        }
+
+    _, n_dim, k_dim = parsed_shape
+    sample_n = max(8, min(n_dim, 64))
+    sample_k = max(8, min(k_dim, 64))
+    iterations = max(1, int(token_loop_iterations))
+    reuse = max(1, int(expected_weight_reuse))
+    hotset_size = max(1, min(iterations, ceil(iterations / reuse)))
+    token_keys = [f"w{i % hotset_size}" for i in range(iterations)]
+
+    seed = sum(ord(ch) for ch in f"{shape_name}:{shape_text}")
+    weights_kn = {
+        key: _generate_matrix(sample_k, sample_n, seed=seed + index + 1)
+        for index, key in enumerate(sorted(set(token_keys)))
+    }
+
+    cache_before = cache.stats() if cache is not None else None
+    total_dispatch_start = perf_counter()
+    prepack_ops = 0
+    for key in token_keys:
+        weight_kn = weights_kn[key]
+        if layout == "nk":
+            prepack_ops += 1
+            if cache is not None:
+                weight_nk, _ = cache.get_or_create(
+                    (shape_name, key, sample_n, sample_k),
+                    lambda source=weight_kn: [list(column) for column in zip(*source)],
+                )
+            else:
+                weight_nk = [list(column) for column in zip(*weight_kn)]
+            _consume_prepacked_weight(weight_nk)
+        else:
+            _consume_kn_weight(weight_kn)
+    total_dispatch_ms = (perf_counter() - total_dispatch_start) * 1000
+
+    cache_hits = 0
+    cache_misses = 0
+    cache_evictions = 0
+    if cache is not None and cache_before is not None:
+        cache_after = cache.stats()
+        cache_hits = max(0, int(cache_after.hits - cache_before.hits))
+        cache_misses = max(0, int(cache_after.misses - cache_before.misses))
+        cache_evictions = max(0, int(cache_after.evictions - cache_before.evictions))
+
+    return {
+        "fp8_runtime_token_iterations": iterations,
+        "fp8_runtime_prepack_ops": prepack_ops,
+        "fp8_runtime_cache_hits": cache_hits,
+        "fp8_runtime_cache_misses": cache_misses,
+        "fp8_runtime_cache_evictions": cache_evictions,
+        "fp8_runtime_dispatch_total_ms": round(total_dispatch_ms, 4),
+        "fp8_runtime_cache_enabled": bool(cache is not None),
+    }
+
+
+def _parse_matmul_shape_text(shape_text: str) -> tuple[int, int, int] | None:
+    parts = [part.strip() for part in str(shape_text).split("x")]
+    if len(parts) != 3:
+        return None
+    try:
+        m_dim, n_dim, k_dim = (int(parts[0]), int(parts[1]), int(parts[2]))
+    except ValueError:
+        return None
+    if m_dim <= 0 or n_dim <= 0 or k_dim <= 0:
+        return None
+    return (m_dim, n_dim, k_dim)
+
+
+def _consume_kn_weight(weight_kn: list[list[float]]) -> float:
+    if not weight_kn or not weight_kn[0]:
+        return 0.0
+    row = weight_kn[0]
+    stride = max(1, len(row) // 8)
+    return sum(row[index] for index in range(0, len(row), stride))
+
+
+def _consume_prepacked_weight(weight_nk: list[list[float]]) -> float:
+    if not weight_nk or not weight_nk[0]:
+        return 0.0
+    row = weight_nk[0]
+    stride = max(1, len(row) // 8)
+    return sum(row[index] for index in range(0, len(row), stride))
+
+
 def _build_fp8_runtime_layout_summary(rows: list[dict[str, object]]) -> dict[str, object]:
     fp8_rows = [
         row
@@ -2831,12 +2955,30 @@ def _build_fp8_runtime_layout_summary(rows: list[dict[str, object]]) -> dict[str
     layout_counts: dict[str, int] = {}
     weighted_share_by_layout: dict[str, float] = {}
     fixture_rows: list[dict[str, object]] = []
+    total_cache_hits = 0
+    total_cache_misses = 0
+    total_cache_evictions = 0
+    total_token_iterations = 0
+    total_prepack_ops = 0
+    total_dispatch_ms = 0.0
 
     for row in fp8_rows:
         layout = str(row.get("fp8_layout", "unknown"))
         layout_counts[layout] = layout_counts.get(layout, 0) + 1
         share = float(row.get("workload_share", 0.0))
         weighted_share_by_layout[layout] = weighted_share_by_layout.get(layout, 0.0) + share
+        cache_hits = int(row.get("fp8_runtime_cache_hits", 0) or 0)
+        cache_misses = int(row.get("fp8_runtime_cache_misses", 0) or 0)
+        cache_evictions = int(row.get("fp8_runtime_cache_evictions", 0) or 0)
+        token_iterations = int(row.get("fp8_runtime_token_iterations", 0) or 0)
+        prepack_ops = int(row.get("fp8_runtime_prepack_ops", 0) or 0)
+        dispatch_total_ms = float(row.get("fp8_runtime_dispatch_total_ms", 0.0) or 0.0)
+        total_cache_hits += cache_hits
+        total_cache_misses += cache_misses
+        total_cache_evictions += cache_evictions
+        total_token_iterations += token_iterations
+        total_prepack_ops += prepack_ops
+        total_dispatch_ms += dispatch_total_ms
         fixture_rows.append(
             {
                 "id": row.get("id", ""),
@@ -2846,8 +2988,16 @@ def _build_fp8_runtime_layout_summary(rows: list[dict[str, object]]) -> dict[str
                 "expected_weight_reuse": int(row.get("expected_weight_reuse", 1)),
                 "workload_share": share,
                 "uplift_pct": float(row.get("uplift_pct", 0.0)),
+                "runtime_token_iterations": token_iterations,
+                "runtime_prepack_ops": prepack_ops,
+                "runtime_cache_hits": cache_hits,
+                "runtime_cache_misses": cache_misses,
+                "runtime_cache_evictions": cache_evictions,
+                "runtime_dispatch_total_ms": round(dispatch_total_ms, 4),
             }
         )
+
+    total_cache_accesses = total_cache_hits + total_cache_misses
 
     return {
         "has_fp8_rows": bool(fp8_rows),
@@ -2857,6 +3007,22 @@ def _build_fp8_runtime_layout_summary(rows: list[dict[str, object]]) -> dict[str
             layout: round(value, 4)
             for layout, value in weighted_share_by_layout.items()
         },
+        "runtime_cache_hits": total_cache_hits,
+        "runtime_cache_misses": total_cache_misses,
+        "runtime_cache_evictions": total_cache_evictions,
+        "runtime_cache_hit_rate": (
+            round(total_cache_hits / total_cache_accesses, 4)
+            if total_cache_accesses > 0
+            else 0.0
+        ),
+        "runtime_token_iterations": total_token_iterations,
+        "runtime_prepack_ops": total_prepack_ops,
+        "runtime_dispatch_total_ms": round(total_dispatch_ms, 4),
+        "runtime_dispatch_avg_ms_per_token": (
+            round(total_dispatch_ms / total_token_iterations, 4)
+            if total_token_iterations > 0
+            else 0.0
+        ),
         "fixtures": fixture_rows,
     }
 

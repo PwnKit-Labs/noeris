@@ -71,6 +71,18 @@ python -m research_engine.cli triton-iterate \
     --operator rmsnorm --gpu A100 --llm --configs-per-run 8
 ```
 
+### Local CI parity runner
+
+Run the same core checks used in GitHub CI from repo root:
+
+```bash
+./scripts/ci_local.sh
+```
+
+This runs unit tests, public artifact reference checks, two `matmul-speedup`
+benchmark runs, history export, and the history regression gate with
+`--fail-on-missing`.
+
 ### Free GPU validation (no paid compute)
 
 ```bash

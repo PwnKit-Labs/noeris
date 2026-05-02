@@ -267,6 +267,32 @@ Interpretation:
   (e.g. forcing `nk` cache on unique weights).
 - Remaining small overhead vs hand-forced best mode on specific hotset workloads is minimal.
 
+## Token-loop runtime integration benchmark
+
+To validate the policy+cache path in a repeated token-loop execution style,
+run:
+
+```bash
+PYTHONPATH=src python3 scripts/fp8_layout_runtime_integration_token_loop_benchmark.py --repetitions 1 --token-loop-iterations 24
+```
+
+Outputs:
+
+- `docs/results/fp8-layout-runtime-integration-token-loop.json`
+- `docs/results/fp8-layout-runtime-integration-token-loop.md`
+
+Current run highlights:
+
+- `auto_no_cache`: `0.4496 ms` dispatch total
+- `auto_with_cache`: `0.0855 ms` dispatch total (`0.1902x` vs `auto_no_cache`), hit rate `0.875`
+- `force_kn_no_cache`: `0.0155 ms` dispatch total
+
+Interpretation:
+
+- For `nk` dispatch, enabling prepack cache materially reduces repeated-dispatch overhead.
+- In this CPU microbenchmark harness, `force_kn_no_cache` remains the absolute fastest mode,
+  while `auto_with_cache` is significantly better than uncached `nk` dispatch.
+
 ## Executor artifact integration
 
 `MatmulPythonExecutor` now emits `fp8-runtime-layout-summary.json` in experiment artifacts

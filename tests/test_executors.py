@@ -315,11 +315,52 @@ class ExecutorTests(unittest.TestCase):
         self.assertIn("fp8_layout", fp8_rows[0])
         self.assertIn(fp8_rows[0]["fp8_layout"], {"kn", "nk"})
         self.assertIn("expected_weight_reuse", fp8_rows[0])
+        self.assertIn("fp8_runtime_token_iterations", fp8_rows[0])
+        self.assertIn("fp8_runtime_cache_hits", fp8_rows[0])
+        self.assertIn("fp8_runtime_cache_misses", fp8_rows[0])
+        self.assertGreaterEqual(fp8_rows[0]["fp8_runtime_token_iterations"], 1)
         fp8_summary = results[0].artifact_payloads["fp8-runtime-layout-summary.json"]
         self.assertTrue(fp8_summary["has_fp8_rows"])
         self.assertGreaterEqual(fp8_summary["fp8_fixture_count"], 1)
         self.assertTrue(fp8_summary["layout_counts"])
         self.assertTrue(fp8_summary["fixtures"])
+        self.assertIn("runtime_cache_hits", fp8_summary)
+        self.assertIn("runtime_cache_misses", fp8_summary)
+        self.assertIn("runtime_dispatch_total_ms", fp8_summary)
+        self.assertGreaterEqual(fp8_summary["runtime_token_iterations"], 1)
+
+    def test_matmul_executor_can_disable_fp8_prepack_cache(self) -> None:
+        executor = MatmulPythonExecutor(
+            repetitions=1,
+            warmup_repetitions=0,
+            max_candidates_per_run=2,
+            fp8_layout_preference="nk",
+            fp8_prepack_cache_enabled=False,
+            fp8_runtime_token_loop_iterations=8,
+        )
+
+        results = executor.run(
+            ResearchTopic(
+                name="matrix multiplication speedup",
+                objective="improve quality",
+                benchmark_id="matmul-speedup",
+            ),
+            [
+                ExperimentSpec(
+                    name="exp-cache-off",
+                    benchmark_id="matmul-speedup",
+                    hypothesis_title="Hypothesis",
+                    success_metric="throughput",
+                    budget="small",
+                    baseline="baseline",
+                    protocol=["run"],
+                )
+            ],
+        )
+
+        fp8_summary = results[0].artifact_payloads["fp8-runtime-layout-summary.json"]
+        self.assertEqual(fp8_summary["runtime_cache_hits"], 0)
+        self.assertEqual(fp8_summary["runtime_cache_misses"], 0)
 
     def test_fp8_shape_name_mapping(self) -> None:
         self.assertEqual(_fp8_shape_name_from_shape_text("1024x1024x1024"), "fp8_mm_1024")

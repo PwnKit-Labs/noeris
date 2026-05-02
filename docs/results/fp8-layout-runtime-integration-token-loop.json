@@ -1,0 +1,66 @@
+{
+  "generated_at_utc": "2026-05-02T19:44:26.327021+00:00",
+  "host": {
+    "machine": "arm64",
+    "processor": "arm",
+    "python": "3.14.3"
+  },
+  "token_loop_iterations": 24,
+  "repetitions": 1,
+  "mode_results": [
+    {
+      "mode": "auto_no_cache",
+      "layout_preference": "auto",
+      "prepack_cache_enabled": false,
+      "fp8_fixture_count": 1,
+      "layout_counts": {
+        "nk": 1
+      },
+      "runtime_dispatch_total_ms": 0.4496,
+      "runtime_dispatch_avg_ms_per_token": 0.0187,
+      "runtime_token_iterations": 24,
+      "runtime_prepack_ops": 24,
+      "runtime_cache_hits": 0,
+      "runtime_cache_misses": 0,
+      "runtime_cache_evictions": 0,
+      "runtime_cache_hit_rate": 0.0,
+      "vs_baseline_dispatch_total": 1.0
+    },
+    {
+      "mode": "auto_with_cache",
+      "layout_preference": "auto",
+      "prepack_cache_enabled": true,
+      "fp8_fixture_count": 1,
+      "layout_counts": {
+        "nk": 1
+      },
+      "runtime_dispatch_total_ms": 0.0855,
+      "runtime_dispatch_avg_ms_per_token": 0.0036,
+      "runtime_token_iterations": 24,
+      "runtime_prepack_ops": 24,
+      "runtime_cache_hits": 21,
+      "runtime_cache_misses": 3,
+      "runtime_cache_evictions": 0,
+      "runtime_cache_hit_rate": 0.875,
+      "vs_baseline_dispatch_total": 0.1902
+    },
+    {
+      "mode": "force_kn_no_cache",
+      "layout_preference": "kn",
+      "prepack_cache_enabled": false,
+      "fp8_fixture_count": 1,
+      "layout_counts": {
+        "kn": 1
+      },
+      "runtime_dispatch_total_ms": 0.0155,
+      "runtime_dispatch_avg_ms_per_token": 0.0006,
+      "runtime_token_iterations": 24,
+      "runtime_prepack_ops": 0,
+      "runtime_cache_hits": 0,
+      "runtime_cache_misses": 0,
+      "runtime_cache_evictions": 0,
+      "runtime_cache_hit_rate": 0.0,
+      "vs_baseline_dispatch_total": 0.0345
+    }
+  ]
+}
