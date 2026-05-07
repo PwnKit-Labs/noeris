@@ -89,6 +89,66 @@ class TestDetection:
         assert detect_architecture(FakeModel()) is None
 
 
+# ---- Public patch API surface tests (CPU-safe) ----
+
+class TestPatchPublicSurface:
+    def test_patch_rejects_lower_level_kernels_as_drop_in_options(self):
+        import noeris
+
+        class FakeModel:
+            pass
+
+        with pytest.raises(ValueError, match="does not support drop-in patch"):
+            noeris.patch(FakeModel(), kernels=["cross_entropy", "qk_norm_rope"])
+
+    def test_default_patch_surface_is_rmsnorm_and_gated_mlp(self, capsys):
+        torch = pytest.importorskip("torch")
+        import noeris
+
+        class LlamaRMSNorm(torch.nn.Module):
+            def __init__(self, dim):
+                super().__init__()
+                self.weight = torch.nn.Parameter(torch.ones(dim))
+                self.variance_epsilon = 1e-6
+
+            def forward(self, x):
+                return x
+
+        class LlamaMLP(torch.nn.Module):
+            def __init__(self, dim):
+                super().__init__()
+                self.gate_proj = torch.nn.Linear(dim, dim, bias=False)
+                self.up_proj = torch.nn.Linear(dim, dim, bias=False)
+                self.down_proj = torch.nn.Linear(dim, dim, bias=False)
+
+            def forward(self, x):
+                return self.down_proj(self.gate_proj(x) * self.up_proj(x))
+
+        class FakeConfig:
+            model_type = "llama"
+
+        class FakeModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.config = FakeConfig()
+                self.norm = LlamaRMSNorm(4)
+                self.mlp = LlamaMLP(4)
+
+        model = FakeModel()
+
+        noeris.patch(model, verbose=True)
+        output = capsys.readouterr().out
+
+        assert type(model.norm).__name__ == "NoerisRMSNorm"
+        assert set(model._noeris_originals) == {"module:norm", "forward:mlp"}
+        assert "patched 1 RMSNorm modules, 1 MLP activations" in output
+        assert "QK" not in output
+        assert "RoPE" not in output
+
+        noeris.unpatch(model)
+        assert type(model.norm).__name__ == "LlamaRMSNorm"
+
+
 # ---- Kernel correctness tests (require GPU) ----
 
 @pytest.mark.gpu

@@ -1,12 +1,17 @@
 """Main patching API: noeris.patch(model) and noeris.unpatch(model).
 
-Monkey-patches HuggingFace transformer models with fast Triton kernels
-for training acceleration.
+The public drop-in patcher currently replaces HuggingFace RMSNorm modules and
+wraps gated MLP activations with Noeris Triton-backed modules. Other kernels in
+the package, such as QK-RMSNorm+RoPE and cross-entropy, are available as lower
+level building blocks but are not wired into a generic HuggingFace model patch.
 """
 
 from __future__ import annotations
 
 from typing import Literal
+
+PatchKernel = Literal["rmsnorm", "geglu"]
+SUPPORTED_PATCH_KERNELS = frozenset({"rmsnorm", "geglu"})
 
 # Marker attribute to track patched state
 _NOERIS_MARKER = "_noeris_patched"
@@ -16,23 +21,26 @@ _NOERIS_ORIGINALS = "_noeris_originals"
 def patch(
     model,
     *,
-    kernels: list[Literal["rmsnorm", "geglu", "cross_entropy"]] | None = None,
+    kernels: list[PatchKernel] | None = None,
     verbose: bool = False,
 ):
     """Monkey-patch a HuggingFace model with fast Triton kernels.
 
     Args:
         model: A PreTrainedModel (e.g., from AutoModelForCausalLM.from_pretrained).
-        kernels: Which kernels to enable. Default: all available for the architecture.
-            Options: "rmsnorm", "geglu" (includes swiglu), "cross_entropy".
+        kernels: Which drop-in patch kernels to enable. Default: all supported
+            patch kernels for the architecture. Options: "rmsnorm", "geglu"
+            (includes SwiGLU-style gated activations). Kernels such as
+            "cross_entropy" and "qk_norm_rope" are not generic model patches yet.
         verbose: Print which modules were patched.
 
     Returns:
         The model (modified in-place). Call noeris.unpatch(model) to restore.
     """
+    kernels = _normalize_patch_kernels(kernels)
+
     import torch.nn as nn
     from ._detect import detect_architecture
-    from ._modules import NoerisRMSNorm, NoerisGatedActivation
 
     if getattr(model, _NOERIS_MARKER, False):
         if verbose:
@@ -47,16 +55,8 @@ def patch(
             f"Supported: gemma, gemma2, gemma3, llama, mistral, qwen2, qwen3, phi3, olmo2, falcon"
         )
 
-    if kernels is None:
-        kernels = ["rmsnorm", "geglu"]
-
     originals: dict[str, nn.Module | object] = {}
     patched_count = {"rmsnorm": 0, "mlp": 0}
-
-    # Collect all (parent, name, module) triples before mutating
-    modules_to_patch = []
-    for name, module in model.named_modules():
-        modules_to_patch.append((name, module))
 
     if "rmsnorm" in kernels:
         _patch_rmsnorm(model, arch, originals, patched_count, verbose)
@@ -75,6 +75,24 @@ def patch(
         )
 
     return model
+
+
+def _normalize_patch_kernels(kernels: list[str] | None) -> list[PatchKernel]:
+    if kernels is None:
+        return ["rmsnorm", "geglu"]
+
+    unsupported = sorted(set(kernels) - SUPPORTED_PATCH_KERNELS)
+    if unsupported:
+        supported = ", ".join(sorted(SUPPORTED_PATCH_KERNELS))
+        requested = ", ".join(unsupported)
+        raise ValueError(
+            f"noeris.patch does not support drop-in patch kernel(s): {requested}. "
+            f"Supported patch kernels: {supported}. Lower-level kernels such as "
+            "cross_entropy and qk_norm_rope are available separately, but are not "
+            "generic HuggingFace model patches yet."
+        )
+
+    return list(kernels)
 
 
 def unpatch(model, *, verbose: bool = False):

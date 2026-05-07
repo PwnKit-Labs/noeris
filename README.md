@@ -18,7 +18,9 @@
 ---
 
 Noeris discovers and optimizes **cross-operation kernel fusions** that `torch.compile` and single-op libraries like Liger Kernel can't find.
-`pip install noeris` &rarr; one line &rarr; **1.3--1.4x faster training**.
+The research engine contains the full operator/search stack; the current public
+`noeris.patch()` API is a conservative drop-in surface for RMSNorm and gated MLP
+activation patches.
 
 ## What makes Noeris different
 
@@ -56,9 +58,24 @@ import noeris
 from transformers import AutoModelForCausalLM
 
 model = AutoModelForCausalLM.from_pretrained("google/gemma-4-2b")
-noeris.patch(model)  # Fused QK-norm+RoPE, autotuned RMSNorm, fused GeGLU
-# Training is now 1.3-1.4x faster. Works with HF Trainer.
+noeris.patch(model)  # Drop-in RMSNorm + gated MLP activation patches.
+# QK-RMSNorm+RoPE kernels are available for custom integrations, but generic
+# HuggingFace attention patching is not wired into noeris.patch() yet.
 ```
+
+### Current public patch coverage
+
+`noeris.patch()` currently wires two module-level optimizations into supported
+HuggingFace-style models:
+
+- RMSNorm module replacement, including Gemma's `(1+w)` affine mode.
+- Gated MLP activation fusion for GeGLU/SwiGLU-style `gate_proj`, `up_proj`,
+  `down_proj` blocks.
+
+The project also includes lower-level Triton kernels for QK-RMSNorm+RoPE,
+cross-entropy, attention, and other operators. Those kernels back the benchmark
+artifacts below, but QK-RMSNorm+RoPE and cross-entropy are not generic
+`noeris.patch()` hooks yet.
 
 ### CLI / search
 
