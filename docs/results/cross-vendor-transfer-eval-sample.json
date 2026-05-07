@@ -1,0 +1,61 @@
+{
+  "generated_at_utc": "2026-05-07T17:44:11.750856+00:00",
+  "prediction_artifact": "docs/results/cross-vendor-zero-shot-scaffold-mi300x-v2.json",
+  "measured_artifact": "docs/results/cross-vendor-measured-mi300x-template.json",
+  "top_k": 5,
+  "by_operator": {
+    "matmul": {},
+    "rmsnorm": {},
+    "softmax": {},
+    "layernorm": {},
+    "cross_entropy": {},
+    "attention": {
+      "short_64": {
+        "shared_count": 5,
+        "spearman": 0.0,
+        "topk_hit_rate": 1.0,
+        "latency_regret": 0.0,
+        "predicted_best_config_id": "m64_n64_w2_s3",
+        "measured_best_config_id": "m64_n64_w2_s3"
+      }
+    }
+  },
+  "operator_summary": {
+    "matmul": {
+      "bucket_count": 0,
+      "mean_spearman": 0.0,
+      "mean_topk_hit_rate": 0.0,
+      "mean_latency_regret": 0.0
+    },
+    "rmsnorm": {
+      "bucket_count": 0,
+      "mean_spearman": 0.0,
+      "mean_topk_hit_rate": 0.0,
+      "mean_latency_regret": 0.0
+    },
+    "softmax": {
+      "bucket_count": 0,
+      "mean_spearman": 0.0,
+      "mean_topk_hit_rate": 0.0,
+      "mean_latency_regret": 0.0
+    },
+    "layernorm": {
+      "bucket_count": 0,
+      "mean_spearman": 0.0,
+      "mean_topk_hit_rate": 0.0,
+      "mean_latency_regret": 0.0
+    },
+    "cross_entropy": {
+      "bucket_count": 0,
+      "mean_spearman": 0.0,
+      "mean_topk_hit_rate": 0.0,
+      "mean_latency_regret": 0.0
+    },
+    "attention": {
+      "bucket_count": 1,
+      "mean_spearman": 0.0,
+      "mean_topk_hit_rate": 1.0,
+      "mean_latency_regret": 0.0
+    }
+  }
+}

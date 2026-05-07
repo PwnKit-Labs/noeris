@@ -1,0 +1,33 @@
+{
+  "measured": {
+    "attention": {
+      "short_64": [
+        {
+          "config_id": "m64_n64_w2_s3",
+          "metric": 120.0,
+          "latency_ms": 1.2
+        },
+        {
+          "config_id": "m64_n64_w4_s3",
+          "metric": 117.5,
+          "latency_ms": 1.22
+        },
+        {
+          "config_id": "m64_n128_w4_s3",
+          "metric": 115.0,
+          "latency_ms": 1.25
+        },
+        {
+          "config_id": "m64_n32_w2_s4",
+          "metric": 112.0,
+          "latency_ms": 1.28
+        },
+        {
+          "config_id": "m64_n64_w4_s2",
+          "metric": 110.0,
+          "latency_ms": 1.3
+        }
+      ]
+    }
+  }
+}
