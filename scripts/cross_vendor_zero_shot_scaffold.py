@@ -13,6 +13,7 @@ import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 REPO = Path(__file__).resolve().parents[1]
 SRC_DIR = REPO / "src"
@@ -47,6 +48,7 @@ def _to_md(report: dict) -> str:
     lines += [
         "",
         "This is a scaffold prediction artifact only; no AMD ground-truth measurements are used.",
+        "Evaluation can be computed later with scripts/cross_vendor_transfer_eval.py.",
         "",
     ]
     return "\n".join(lines)
@@ -97,11 +99,23 @@ def main() -> int:
                 operator=operator,
                 top_k=args.top_k,
             )
+            id_by_config = {
+                json.dumps(row["config"], sort_keys=True): row.get("config_id", "")
+                for row in entry.configs
+            }
+            ranked_rows = [
+                {
+                    "config_id": id_by_config.get(json.dumps(cfg, sort_keys=True), ""),
+                    "config": cfg,
+                    "predicted_metric": float(score),
+                }
+                for cfg, score in ranked
+            ]
             source_top = entry.configs[: args.top_k]
             op_pred[bucket] = {
                 "shape": entry.shape,
                 "source_top": source_top,
-                "target_predicted_top": ranked,
+                "target_predicted_top": ranked_rows,
             }
 
         predictions[operator] = op_pred
