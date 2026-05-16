@@ -151,7 +151,7 @@ Open source, MIT license.
 
 Reproduce the sliding-window result in ~3 min on Modal (~$0.20):
 ```
-git clone https://github.com/PwnKit-Labs/noeris
+git clone https://github.com/0sec-labs/noeris
 pip install -e . modal numpy scikit-learn
 python scripts/smoke_modal.py --full --a100 --write-results
 ```
@@ -160,6 +160,6 @@ Paper draft, full data, kernel source all in the repo. Every number in this thre
 
 Questions welcome. Corrections especially welcome — if the numbers are wrong, the novelty claims are overstated, or the framing is unfair to prior art, I want to know.
 
-github.com/PwnKit-Labs/noeris
+github.com/0sec-labs/noeris
 
 > [SCREENSHOT: repo README header or paper abstract]

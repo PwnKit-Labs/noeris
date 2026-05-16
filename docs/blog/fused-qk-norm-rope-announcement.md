@@ -137,7 +137,7 @@ Full 19-model table and analysis in the [paper draft](../paper/noeris.md), secti
 ## Reproduce it
 
 ```bash
-git clone https://github.com/PwnKit-Labs/noeris
+git clone https://github.com/0sec-labs/noeris
 cd noeris
 pip install -e . modal numpy scikit-learn
 # You'll need a Modal account. Then:
@@ -146,7 +146,7 @@ python scripts/smoke_modal.py --full --h100 --qk-only --write-results
 
 Runtime: ~3 minutes per GPU. Cost: ~$0.20 total (A100 + H100 both). Results land in `docs/results/qk-norm-rope-{a100,h100}-full.json`.
 
-Source of the kernel itself: [`src/research_engine/triton_qk_norm_rope.py`](https://github.com/PwnKit-Labs/noeris/blob/main/src/research_engine/triton_qk_norm_rope.py). It's 426 lines including the generated benchmark script; the actual Triton kernel body is about 40 lines.
+Source of the kernel itself: [`src/research_engine/triton_qk_norm_rope.py`](https://github.com/0sec-labs/noeris/blob/main/src/research_engine/triton_qk_norm_rope.py). It's 426 lines including the generated benchmark script; the actual Triton kernel body is about 40 lines.
 
 ## Credit where due
 
@@ -160,7 +160,7 @@ The kernel itself is mine. But it would not have happened without:
 
 The fused kernel was found through an autonomous kernel optimization system called **Noeris** that I've been building. It has 9 parameterized Triton operators, a shape-indexed cross-run configuration database, a learned cost model (R² = 0.94), a multi-armed bandit for config selection, and an adaptive meta-bandit router that learns which selector to trust per iteration. The cross-hardware transfer Spearman correlation (A100 → H100) is 0.967.
 
-The kernel above is the system's first measured fused-kernel result against a SOTA reference stack — building on prior art (vLLM's `enable_qk_norm_rope_fusion`, SGLang's `fused_qknorm_rope`) but making the fusion practical via parameterized Triton with autotuning. Paper draft: [`docs/paper/noeris.md`](https://github.com/PwnKit-Labs/noeris/blob/main/docs/paper/noeris.md). MIT License. Questions and corrections welcome.
+The kernel above is the system's first measured fused-kernel result against a SOTA reference stack — building on prior art (vLLM's `enable_qk_norm_rope_fusion`, SGLang's `fused_qknorm_rope`) but making the fusion practical via parameterized Triton with autotuning. Paper draft: [`docs/paper/noeris.md`](https://github.com/0sec-labs/noeris/blob/main/docs/paper/noeris.md). MIT License. Questions and corrections welcome.
 
 ---
 
@@ -194,10 +194,10 @@ Reproduction: upload `scripts/colab_validate_all.py` to a Kaggle T4 notebook (pr
 
 5/ Critical Gemma gotcha: `Gemma4RMSNorm` uses `y = x * rstd * (1 + weight)`, NOT the standard `y = x * rstd * weight`. If your fused kernel uses the standard form while trained weights assume (1+w), outputs are silently wrong by ~10×. vLLM handles this via separate `GemmaRMSNorm` CustomOp.
 
-6/ Reproduction: `git clone github.com/PwnKit-Labs/noeris && python scripts/smoke_modal.py --full --h100 --qk-only --write-results`. ~3 min/GPU, ~$0.20 on Modal. Open source, MIT. Part of a larger autonomous kernel search system I've been building.
+6/ Reproduction: `git clone github.com/0sec-labs/noeris && python scripts/smoke_modal.py --full --h100 --qk-only --write-results`. ~3 min/GPU, ~$0.20 on Modal. Open source, MIT. Part of a larger autonomous kernel search system I've been building.
 
 7/ This is NOT an "I beat vLLM end-to-end" claim. vLLM is a brilliant piece of engineering and they recognized this fusion opportunity (enable_qk_norm_rope_fusion). Their torch.compile+CUDA approach hit H100 issues; our parameterized Triton approach with autotuning avoids them. The novelty is the system, not the idea of fusing these ops.
 
 8/ UPDATE: tested on 19 model shapes across 13 families (LLaMA 3/4, Qwen 3, Mistral, Mixtral, Phi-3/4, Falcon 3, DBRX, OLMo 2, InternLM 3). ALL show 6.5-8.9× fusion speedup on T4. Best: Qwen 3 32B at 8.9×. Not Gemma-specific — any model running separated RMSNorm+RoPE leaves this on the table.
 
-9/ Full writeup + data: github.com/PwnKit-Labs/noeris/blob/main/docs/results/qk-norm-rope-fusion-speedup.md. Paper draft: same repo, docs/paper/noeris.md. Questions welcome, corrections especially welcome.
+9/ Full writeup + data: github.com/0sec-labs/noeris/blob/main/docs/results/qk-norm-rope-fusion-speedup.md. Paper draft: same repo, docs/paper/noeris.md. Questions welcome, corrections especially welcome.

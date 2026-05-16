@@ -90,12 +90,12 @@ class CliTests(unittest.TestCase):
     def test_status_command_reports_empty_workspace(self) -> None:
         with _temp_workspace(), patch(
             "research_engine.cli._status_workflow_summary",
-            return_value={"repo": "PwnKit-Labs/noeris", "workflows": {}},
+            return_value={"repo": "0sec-labs/noeris", "workflows": {}},
         ):
             exit_code, payload = _run_cli_json("status")
         self.assertEqual(exit_code, 0)
         self.assertIn("capabilities", payload)
-        self.assertEqual(payload["workflow_summary"]["repo"], "PwnKit-Labs/noeris")
+        self.assertEqual(payload["workflow_summary"]["repo"], "0sec-labs/noeris")
         self.assertEqual(payload["run_count"], 0)
         self.assertEqual(payload["artifact_bundle_count"], 0)
 
@@ -208,7 +208,7 @@ class CliTests(unittest.TestCase):
         with _temp_workspace(), patch(
             "research_engine.cli._status_workflow_summary",
             return_value={
-                "repo": "PwnKit-Labs/noeris",
+                "repo": "0sec-labs/noeris",
                 "workflows": {"CI": {"queued": 1, "completed": 2, "latest_display_title": "Latest"}},
             },
         ):

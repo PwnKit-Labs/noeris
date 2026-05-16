@@ -5,7 +5,7 @@ Backup platform: Google Colab (~4-5 hr/day free T4).
 
 Usage on Kaggle:
   1. New Notebook → Settings → GPU T4 x2, enable Internet
-  2. !git clone https://github.com/PwnKit-Labs/noeris && cd noeris && pip install -e . numpy scikit-learn -q
+  2. !git clone https://github.com/0sec-labs/noeris && cd noeris && pip install -e . numpy scikit-learn -q
   3. !cd noeris && python scripts/colab_validate_all.py
 
 Usage on Colab:

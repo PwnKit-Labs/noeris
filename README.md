@@ -110,7 +110,7 @@ benchmark runs, history export, and the history regression gate with
 
 ```bash
 # Kaggle (30 hr/week free T4) or Google Colab
-!git clone https://github.com/PwnKit-Labs/noeris && cd noeris
+!git clone https://github.com/0sec-labs/noeris && cd noeris
 !pip install -e . numpy scikit-learn -q
 !python scripts/colab_validate_all.py
 ```
@@ -183,7 +183,7 @@ Paper draft: [`docs/paper/noeris.md`](docs/paper/noeris.md). arXiv preprint comi
   title   = {Noeris: Architecture-Agnostic Kernel Fusion and Autotuning},
   author  = {Doruk Tan Ozturk},
   year    = {2026},
-  url     = {https://github.com/PwnKit-Labs/noeris}
+  url     = {https://github.com/0sec-labs/noeris}
 }
 ```
 

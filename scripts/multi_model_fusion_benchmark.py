@@ -7,7 +7,7 @@ to prove the fusion is a universal transformer optimization. Models with
 QK-norm (Gemma, Qwen 3, OLMo 2) benefit most from the fused kernel.
 
 Usage (Kaggle T4 or Colab):
-  !git clone https://github.com/PwnKit-Labs/noeris && cd noeris
+  !git clone https://github.com/0sec-labs/noeris && cd noeris
   !pip install -e . numpy scikit-learn -q
   !python scripts/multi_model_fusion_benchmark.py
 """

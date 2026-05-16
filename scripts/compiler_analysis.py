@@ -7,7 +7,7 @@ mode="max-autotune", Inductor generates 4+ separate Triton kernels for the
 separated ops, while the Noeris hand-written kernel needs only 2 launches.
 
 Usage (Kaggle T4 / Colab T4):
-  !git clone https://github.com/PwnKit-Labs/noeris && cd noeris
+  !git clone https://github.com/0sec-labs/noeris && cd noeris
   !pip install -e . numpy scikit-learn -q
   !python scripts/compiler_analysis.py
 
