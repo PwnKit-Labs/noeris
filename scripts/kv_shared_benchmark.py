@@ -11,7 +11,7 @@ Usage (Kaggle T4 / Colab):
     !pip install torch -q
     !python scripts/kv_shared_benchmark.py
 
-Issue #76: https://github.com/PwnKit-Labs/noeris/issues/76
+Issue #76: https://github.com/0sec-labs/noeris/issues/76
 """
 
 import json
@@ -242,7 +242,7 @@ def main():
     print("K=V Shared Attention Benchmark -- Gemma 4 Global Layers")
     print("=" * 72)
     print(f"\nExploiting K=V identity: halve KV projection + cache.")
-    print(f"Ref: https://github.com/PwnKit-Labs/noeris/issues/76")
+    print(f"Ref: https://github.com/0sec-labs/noeris/issues/76")
 
     all_results = []
     for shape in SHAPES:

@@ -41,7 +41,7 @@ print(f"Active phases: {sorted(ACTIVE_PHASES)}")
 
 # Clone and install noeris
 subprocess.run(["git", "clone", "--depth", "1",
-                "https://github.com/PwnKit-Labs/noeris.git", "/tmp/noeris"],
+                "https://github.com/0sec-labs/noeris.git", "/tmp/noeris"],
                check=True)
 subprocess.check_call([sys.executable, "-m", "pip", "install",
                        "-e", "/tmp/noeris", "numpy", "scikit-learn", "-q"])

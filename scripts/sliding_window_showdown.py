@@ -9,7 +9,7 @@ cannot skip tiles.  Noeris's sliding-window tile-pruning skips ~75-97% of tiles
 depending on (N, W), giving a potential wall-clock win.
 
 Usage (Kaggle T4 / Colab):
-    !git clone https://github.com/PwnKit-Labs/noeris && cd noeris
+    !git clone https://github.com/0sec-labs/noeris && cd noeris
     !pip install -e . numpy scikit-learn -q
     !python scripts/sliding_window_showdown.py
 

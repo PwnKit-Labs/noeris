@@ -13,7 +13,7 @@ Validates ALL headline claims in a single ~20-minute run:
   Phase 5: Bandit search convergence on attention
 
 Usage (Kaggle or Colab):
-  !git clone https://github.com/PwnKit-Labs/noeris && cd noeris
+  !git clone https://github.com/0sec-labs/noeris && cd noeris
   !pip install -e . numpy scikit-learn -q
   !python scripts/colab_bombshell.py
 

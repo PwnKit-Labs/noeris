@@ -16,7 +16,7 @@ The system covers fourteen additional operators beyond the fused forward prologu
 
 Cost-model-filtered search outperforms unfiltered grid search by **+37.35% on cross_entropy** and **+5.26% on softmax**. A three-way selector comparison shows cost model and bandit are complementary (cost model leads on attention +66% and softmax +5%; bandit leads on matmul +134% vs +45%). An adaptive meta-bandit router matches the best fixed selector within 0.5% across 3 independent trials. A100-trained cost model rankings transfer to H100 with Spearman ρ = **0.967**. A learned-feasibility refactor replaces all hand-coded shared-memory filters with runtime reward=0 signal — the bandit learns which configurations are infeasible per shape, with no hardcoded prior.
 
-The system runs at ~$0.01 per iteration. The full fused-prologue A100+H100 table above was produced for approximately $0.20 in Modal credits, reproducible via `scripts/smoke_modal.py --full --h100 --qk-only --write-results`. Code and data are available at https://github.com/PwnKit-Labs/noeris (MIT License).
+The system runs at ~$0.01 per iteration. The full fused-prologue A100+H100 table above was produced for approximately $0.20 in Modal credits, reproducible via `scripts/smoke_modal.py --full --h100 --qk-only --write-results`. Code and data are available at https://github.com/0sec-labs/noeris (MIT License).
 
 ---
 
@@ -28,7 +28,7 @@ A shared limitation of published systems is that **search state does not persist
 
 Noeris investigates an alternative. Rather than rewriting kernel source per invocation, we generate kernels from a compact parameter tuple (e.g., `BLOCK_SIZE_M`, `BLOCK_SIZE_N`, `num_warps`, `num_stages`) and store winning configurations in a **shape-indexed cross-run database** keyed by `(operator, shape_bucket, hardware)`. When an LLM proposer is invoked, it sees the database state as cross-run insights, allowing it to reason about what has worked on similar shapes before. A gradient-boosted cost model trained on accumulated benchmark data then rank-orders grid candidates at prediction time, without incurring additional GPU calls.
 
-All code, benchmark data, and reproduction scripts are available at https://github.com/PwnKit-Labs/noeris under the MIT License. We make thirteen contributions:
+All code, benchmark data, and reproduction scripts are available at https://github.com/0sec-labs/noeris under the MIT License. We make thirteen contributions:
 
 1. **A practical fused kernel that makes QK-norm+RoPE fusion actually work.** The Gemma 3/4 attention prologue (`Q-RMSNorm → K-RMSNorm → Q-RoPE → K-RoPE`) has prior art: vLLM has an experimental `enable_qk_norm_rope_fusion` pass (a `torch.compile` pass with a CUDA kernel), SGLang has `fused_qknorm_rope`, Modular has fused RoPE+RMSNorm kernels, and Liao et al. describe algebraic optimizations in "Flash Normalization" (arXiv:2407.09577). However, vLLM's fusion is **disabled by default** due to H100 performance regression ([issue #34391](https://github.com/vllm-project/vllm/issues/34391)), with a reported 2-3% E2E benefit when enabled. To our knowledge, none of the existing fusions handle Gemma's `(1+w)` affine mode (though vLLM's Gemma 4 support may address this in their `attention_k_eq_v` path). Our parameterized Triton kernel with bandit-tuned configs (`triton_qk_norm_rope.py`, §3.2.1) beats the separated-kernel-launches baseline (4 PyTorch kernel launches vs. 2 fused) by 10.2–12.9× on A100 and 10.4–11.9× on H100 across six Gemma 3/4 shape buckets (60/60 correct, zero failures). Peak 1627.7 GB/s on H100 `gemma4_31b_global`. The novelty is not the fusion idea itself, but the Triton implementation with autonomous autotuning that delivers the fusion benefit reliably across hardware.
 
@@ -1060,16 +1060,16 @@ The initial cross-run learning ablation (§4.5) remains negative: at 5 iteration
 
 **Future work: fused RMSNorm+matmul (`fused_norm_linear`).** We have built a prototype kernel that fuses RMSNorm normalization with the subsequent linear projection (matmul) into a single Triton kernel, eliminating the materialization of the normalized intermediate to HBM. The kernel uses a two-pass approach: pass 1 computes `rstd = rsqrt(mean(x^2) + eps)` across the row, pass 2 normalizes in-register and immediately accumulates the matmul dot product — the normalized activations never touch HBM. **Prior art:** Mirage (Zhu et al., OSDI 2025) demonstrates that RMSNorm+matmul fusion is possible by exploiting the commutativity of normalization and linear projection, achieving 1.5–1.7× speedup. Our prototype is an independent implementation in Triton with parameterized autotuning, complementary to Mirage's algebraic derivation and superoptimizer-based approach. Existing fusions like Liger's `fused_linear_cross_entropy` fuse the *output* side of the linear layer, not the *input* normalization; Mirage and our prototype both target the input side. The prototype has a correctness issue on T4 that requires debugging before performance numbers can be reported. If validated, this fusion would eliminate one of the remaining HBM round-trips in the transformer block — the RMSNorm output write + QKV projection read — and could compound with the QK-norm+RoPE prologue fusion for a deeper end-to-end gain.
 
-All code, raw benchmark data, and reproduction scripts are available at https://github.com/PwnKit-Labs/noeris under the MIT License.
+All code, raw benchmark data, and reproduction scripts are available at https://github.com/0sec-labs/noeris under the MIT License.
 
 ---
 
 ## A. Reproduction
 
-The repository is publicly available at https://github.com/PwnKit-Labs/noeris (MIT License). Everything in this paper can be reproduced with:
+The repository is publicly available at https://github.com/0sec-labs/noeris (MIT License). Everything in this paper can be reproduced with:
 
 ```bash
-git clone https://github.com/PwnKit-Labs/noeris
+git clone https://github.com/0sec-labs/noeris
 cd noeris
 pip install -e ".[dev]"
 pip install modal scikit-learn datasets
